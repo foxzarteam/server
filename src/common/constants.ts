@@ -11,7 +11,6 @@ export const OTP_EXPIRY_MINUTES = 5;
 export const OTP_MAX_ATTEMPTS = 3;
 
 export const MSG_OTP_SESSION_FAILED = 'Failed to create OTP session.';
-export const MSG_OTP_SEND_FAILED = 'Failed to send OTP.';
 export const MSG_OTP_SENT = 'OTP sent successfully.';
 export const MSG_OTP_VERIFY_FAILED = 'Verification failed.';
 export const MSG_OTP_INVALID_EXPIRED = 'Invalid or expired OTP.';

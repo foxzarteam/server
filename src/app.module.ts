@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
-import { SupabaseModule } from './config/supabase.module';
+import { SupabaseModule } from './config/supabase';
+import { HealthModule } from './health.module';
 import { UsersModule } from './users/users.module';
 import { OtpModule } from './otp/otp.module';
 import { LeadsModule } from './leads/leads.module';
@@ -11,7 +12,11 @@ import { WalletModule } from './wallet/wallet.module';
 
 @Module({
   imports: [
-    ConfigModule.forRoot({ isGlobal: true, envFilePath: '.env' }),
+    ConfigModule.forRoot({
+      isGlobal: true,
+      envFilePath: ['.env', '.env.local'],
+    }),
+    HealthModule,
     SupabaseModule,
     UsersModule,
     OtpModule,

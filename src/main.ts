@@ -3,14 +3,20 @@ import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
 import { ConfigService } from '@nestjs/config';
 import { NestExpressApplication } from '@nestjs/platform-express';
+import compression from 'compression';
 
 async function bootstrap() {
-  const app = await NestFactory.create<NestExpressApplication>(AppModule);
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, {
+    bufferLogs: true,
+    logger: process.env.NODE_ENV === 'production' ? ['error', 'warn', 'log'] : undefined,
+  });
   const config = app.get(ConfigService);
   const port = config.get<number>('PORT', 3000);
   const prefix = config.get<string>('API_PREFIX', 'api');
 
   app.setGlobalPrefix(prefix);
+  app.use(compression());
+  app.getHttpAdapter().getInstance().set('trust proxy', 1);
 
   const isProduction = process.env.NODE_ENV === 'production';
   const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(',').map((o) => o.trim()).filter(Boolean);

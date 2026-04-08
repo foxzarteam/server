@@ -1,6 +1,259 @@
-import { Module } from '@nestjs/common';
-import { OtpController } from './otp.controller';
-import { OtpService } from './otp.service';
+import {
+  Body,
+  Controller,
+  Get,
+  HttpCode,
+  HttpStatus,
+  Inject,
+  Injectable,
+  Module,
+  Post,
+  Res,
+} from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { Response } from 'express';
+import { SupabaseClient } from '@supabase/supabase-js';
+import { IsString, Length, Matches } from 'class-validator';
+import { SUPABASE_CLIENT } from '../config/supabase';
+import {
+  MSG_OTP_INVALID_EXPIRED,
+  MSG_OTP_MAX_ATTEMPTS,
+  MSG_OTP_SESSION_FAILED,
+  MSG_OTP_SENT,
+  MSG_OTP_VERIFIED,
+  MSG_OTP_VERIFY_FAILED,
+  OTP_EXPIRY_MINUTES,
+  OTP_LENGTH,
+  OTP_MAX_ATTEMPTS,
+  TABLE_OTP_SESSIONS,
+  getCurrentIsoTime,
+} from '../common/constants';
+
+class SendOtpDto {
+  @IsString()
+  @Length(10, 10, { message: 'mobileNumber must be 10 digits' })
+  @Matches(/^[6-9]\d{9}$/, { message: 'Invalid Indian mobile number' })
+  mobileNumber: string;
+}
+
+class VerifyOtpDto {
+  @IsString()
+  @Length(10, 10, { message: 'mobileNumber must be 10 digits' })
+  @Matches(/^[6-9]\d{9}$/, { message: 'Invalid Indian mobile number' })
+  mobileNumber: string;
+
+  @IsString()
+  @Length(6, 6, { message: 'otp must be 6 digits' })
+  @Matches(/^\d{6}$/, { message: 'otp must be 6 digits' })
+  otp: string;
+}
+
+export type OtpResult = { success: boolean; message: string };
+
+@Injectable()
+export class OtpService {
+  constructor(@Inject(SUPABASE_CLIENT) private readonly supabase: SupabaseClient) {}
+
+  private get otpSessions() {
+    return this.supabase.from(TABLE_OTP_SESSIONS);
+  }
+
+  private generateOtp(): string {
+    let otp = '';
+    for (let i = 0; i < OTP_LENGTH; i++) {
+      otp += Math.floor(Math.random() * 10);
+    }
+    return otp;
+  }
+
+  private getExpiryTime(): string {
+    const d = new Date();
+    d.setMinutes(d.getMinutes() + OTP_EXPIRY_MINUTES);
+    return d.toISOString();
+  }
+
+  private async createOtpSession(
+    mobileNumber: string,
+    otp: string,
+    expiresAt: string,
+  ): Promise<OtpResult | null> {
+    const { error } = await this.otpSessions.insert({
+      mobile_number: mobileNumber,
+      otp_code: otp,
+      expires_at: expiresAt,
+      is_verified: false,
+      attempts: 0,
+      max_attempts: OTP_MAX_ATTEMPTS,
+    });
+    if (error) {
+      if (process.env.NODE_ENV !== 'production') {
+        console.error('OtpService.createOtpSession', error);
+      }
+      return { success: false, message: MSG_OTP_SESSION_FAILED };
+    }
+    return null;
+  }
+
+  async send(dto: SendOtpDto): Promise<OtpResult> {
+    const otp = this.generateOtp();
+    const expiresAt = this.getExpiryTime();
+    const sessionError = await this.createOtpSession(dto.mobileNumber, otp, expiresAt);
+    if (sessionError) return sessionError;
+    return { success: true, message: MSG_OTP_SENT };
+  }
+
+  async getLatestOtpSessions(
+    limit = 10,
+  ): Promise<Array<{ mobile_number: string; otp_code: string; created_at: string }>> {
+    const { data, error } = await this.otpSessions
+      .select('mobile_number, otp_code, created_at')
+      .order('created_at', { ascending: false })
+      .limit(limit);
+
+    if (error || !Array.isArray(data)) return [];
+
+    return data.map((row: Record<string, unknown>) => ({
+      mobile_number: String(row.mobile_number ?? ''),
+      otp_code: String(row.otp_code ?? ''),
+      created_at: String(row.created_at ?? ''),
+    }));
+  }
+
+  async verify(dto: VerifyOtpDto): Promise<OtpResult> {
+    const now = getCurrentIsoTime();
+    const { data: rows, error } = await this.otpSessions
+      .select('id, attempts, max_attempts')
+      .eq('mobile_number', dto.mobileNumber)
+      .eq('otp_code', dto.otp)
+      .eq('is_verified', false)
+      .gt('expires_at', now);
+
+    if (error) {
+      if (process.env.NODE_ENV !== 'production') {
+        console.error('OtpService.verify select', error);
+      }
+      return { success: false, message: MSG_OTP_VERIFY_FAILED };
+    }
+
+    const session = Array.isArray(rows) && rows.length > 0 ? rows[0] : null;
+    if (!session) {
+      return { success: false, message: MSG_OTP_INVALID_EXPIRED };
+    }
+
+    const attempts = (session.attempts as number) ?? 0;
+    const maxAttempts = (session.max_attempts as number) ?? OTP_MAX_ATTEMPTS;
+    if (attempts >= maxAttempts) {
+      return { success: false, message: MSG_OTP_MAX_ATTEMPTS };
+    }
+
+    const { error: updateErr } = await this.otpSessions
+      .update({
+        is_verified: true,
+        verified_at: getCurrentIsoTime(),
+      })
+      .eq('id', session.id);
+
+    if (updateErr) {
+      if (process.env.NODE_ENV !== 'production') {
+        console.error('OtpService.verify update', updateErr);
+      }
+      return { success: false, message: MSG_OTP_VERIFY_FAILED };
+    }
+
+    return { success: true, message: MSG_OTP_VERIFIED };
+  }
+}
+
+@Controller('otp')
+export class OtpController {
+  constructor(
+    private readonly otpService: OtpService,
+    private readonly config: ConfigService,
+  ) {}
+
+  @Post('send')
+  @HttpCode(HttpStatus.OK)
+  async send(@Body() dto: SendOtpDto) {
+    return this.otpService.send(dto);
+  }
+
+  @Post('verify')
+  @HttpCode(HttpStatus.OK)
+  async verify(@Body() dto: VerifyOtpDto) {
+    return this.otpService.verify(dto);
+  }
+
+  @Get('live')
+  live() {
+    const raw = (this.config.get<string>('LIVE') ?? '').toLowerCase().trim();
+    const live = raw === 'true' || raw === '1';
+    return { live };
+  }
+
+  @Get('dev')
+  async dev(@Res() res: Response) {
+    try {
+      const isProduction = this.config.get<string>('NODE_ENV') === 'production';
+      const allowOtpDev = this.config.get<string>('ALLOW_OTP_DEV') === 'true';
+      const rawLive = (this.config.get<string>('LIVE') ?? '').toLowerCase().trim();
+      const live = rawLive === 'true' || rawLive === '1';
+      if (isProduction && !allowOtpDev) {
+        return res.status(404).json({ error: 'Not found' });
+      }
+
+      const entries = await this.otpService.getLatestOtpSessions(10);
+      const rows = live
+        ? ''
+        : entries
+            .map(
+              (e) =>
+                `<tr><td>${this.escapeHtml(e.mobile_number)}</td><td><strong>${e.otp_code}</strong></td><td>${this.escapeHtml(
+                  e.created_at,
+                )}</td></tr>`,
+            )
+            .join('');
+
+      const html = `<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>OTP Dev</title>
+<style>body{font-family:system-ui;max-width:600px;margin:2rem auto;padding:1rem}table{width:100%;border-collapse:collapse}th,td{padding:0.5rem;text-align:left;border-bottom:1px solid #ddd}th{background:#333;color:#fff}</style>
+</head>
+<body>
+<h1>OTP Dev Logs</h1>
+<p><strong>LIVE:</strong> ${live ? 'true' : 'false'}</p>
+<table>
+<thead><tr><th>Mobile</th><th>OTP</th><th>Time</th></tr></thead>
+<tbody>${
+        rows ||
+        (live
+          ? '<tr><td colspan="3">LIVE=true. Firebase Phone Auth is active, so /api/otp/send is not used.</td></tr>'
+          : '<tr><td colspan="3">No OTPs yet. Send one via POST /api/otp/send</td></tr>')
+      }</tbody>
+</table>
+</body>
+</html>`;
+
+      return res.type('text/html').send(html);
+    } catch {
+      return res
+        .type('text/html')
+        .send(
+          `<!DOCTYPE html><html><body><h1>OTP Dev Logs</h1><p>Error fetching OTP logs.</p></body></html>`,
+        );
+    }
+  }
+
+  private escapeHtml(text: string): string {
+    const map: Record<string, string> = {
+      '&': '&amp;',
+      '<': '&lt;',
+      '>': '&gt;',
+      '"': '&quot;',
+      "'": '&#039;',
+    };
+    return text.replace(/[&<>"']/g, (m) => map[m]);
+  }
+}
 
 @Module({
   controllers: [OtpController],

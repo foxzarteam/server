@@ -1,8 +1,0 @@
-# Copy to .env and fill values.
-# Supabase: project Settings > API
-SUPABASE_URL=https://exdhkfrzslhjghvsvfov.supabase.co
-SUPABASE_SERVICE_KEY=sb_publishable_JtgNQg_d64uAWdf-fvzWVQ_IraOU6kH
-LIVE=true
-
-PORT=3000
-API_PREFIX=api

@@ -11,9 +11,9 @@ Backend for **Apni Zaroorat** app. Uses Supabase as database. All app flows use 
    npm install
    ```
 
-2. **Env**
-   - Copy `env.example` to `.env`
-   - Set `SUPABASE_URL` and `SUPABASE_SERVICE_KEY` (Supabase Dashboard → Settings → API)
+2. **Env** (file **`server/.env`** in project root)
+   - Copy `env.example` to `.env` and fill values
+   - `SUPABASE_URL` and `SUPABASE_SERVICE_KEY` (Dashboard → Settings → API → service role)
    - `LIVE=true|false`
      - Controls client OTP flow:
        - `LIVE=true`: Flutter uses Firebase Phone Auth to send OTP to phone.
@@ -41,6 +41,7 @@ Backend for **Apni Zaroorat** app. Uses Supabase as database. All app flows use 
 
 ## Project layout
 
-- `src/config/` – Supabase client
-- `src/users/` – User CRUD + upsert, mpin, login-status, profile
-- `src/otp/` – OTP send + verify (`otp_sessions`)
+- `src/config/supabase.ts` – global Supabase client
+- `src/*/*.module.ts` – one file per domain (controller + service + DTOs)
+
+See `API_INFO.md` for route list.

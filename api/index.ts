@@ -5,6 +5,7 @@ import { AppModule } from '../src/app.module';
 import { ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import express, { Request, Response } from 'express';
+import compression from 'compression';
 
 let cachedApp: express.Express;
 
@@ -14,7 +15,13 @@ async function createApp(): Promise<express.Express> {
   }
 
   const expressApp = express();
-  const app = await NestFactory.create(AppModule, new ExpressAdapter(expressApp));
+  expressApp.use(compression());
+  expressApp.set('trust proxy', 1);
+
+  const app = await NestFactory.create(AppModule, new ExpressAdapter(expressApp), {
+    bufferLogs: true,
+    logger: process.env.NODE_ENV === 'production' ? ['error', 'warn', 'log'] : undefined,
+  });
   const config = app.get(ConfigService);
   const prefix = config.get<string>('API_PREFIX', 'api');
 

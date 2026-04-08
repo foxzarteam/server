@@ -1,5 +1,6 @@
-import { createClient, SupabaseClient } from '@supabase/supabase-js';
+import { Global, Module } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
 export const SUPABASE_CLIENT = 'SUPABASE_CLIENT';
 
@@ -13,3 +14,16 @@ export function createSupabaseClient(config: ConfigService): SupabaseClient {
     auth: { persistSession: false },
   });
 }
+
+@Global()
+@Module({
+  providers: [
+    {
+      provide: SUPABASE_CLIENT,
+      useFactory: (config: ConfigService): SupabaseClient => createSupabaseClient(config),
+      inject: [ConfigService],
+    },
+  ],
+  exports: [SUPABASE_CLIENT],
+})
+export class SupabaseModule {}
