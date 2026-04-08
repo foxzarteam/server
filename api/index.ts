@@ -6,6 +6,14 @@ import { ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import express, { Request, Response } from 'express';
 import compression from 'compression';
+import { ROOT_PAGE_HTML } from '../src/root-landing';
+
+function isRootGet(req: Request): boolean {
+  if (req.method !== 'GET') return false;
+  const raw = req.url ?? '/';
+  const path = (raw.split('?')[0] || '/').replace(/\/+$/, '') || '/';
+  return path === '/' || path === '';
+}
 
 let cachedApp: express.Express;
 
@@ -51,13 +59,16 @@ async function createApp(): Promise<express.Express> {
 
 export default async function handler(req: Request, res: Response) {
   try {
-    // Log request for debugging
+    if (isRootGet(req)) {
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      res.setHeader('Cache-Control', 'public, max-age=300, s-maxage=3600');
+      return res.status(200).send(ROOT_PAGE_HTML);
+    }
+
     if (process.env.NODE_ENV !== 'production') {
       console.log('API Request:', req.method, req.url);
-      console.log('Request path:', req.path);
-      console.log('Request query:', req.query);
     }
-    
+
     const app = await createApp();
     return app(req, res);
   } catch (error) {

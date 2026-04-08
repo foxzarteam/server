@@ -4,6 +4,7 @@ import { AppModule } from './app.module';
 import { ConfigService } from '@nestjs/config';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import compression from 'compression';
+import { ROOT_PAGE_HTML } from './root-landing';
 
 async function bootstrap() {
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
@@ -13,6 +14,11 @@ async function bootstrap() {
   const config = app.get(ConfigService);
   const port = config.get<number>('PORT', 3000);
   const prefix = config.get<string>('API_PREFIX', 'api');
+
+  const http = app.getHttpAdapter().getInstance();
+  http.get('/', (_req, res) => {
+    res.type('html').set('Cache-Control', 'public, max-age=300').send(ROOT_PAGE_HTML);
+  });
 
   app.setGlobalPrefix(prefix);
   app.use(compression());
