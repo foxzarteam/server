@@ -2,6 +2,8 @@
 
 Base URL (local): `http://localhost:3000/api` — prefix `api`, port `PORT` (default 3000).
 
+- **POST** `/auth/login` — Admin/staff: body `{ "email", "password" }` → Supabase `public.auth`; az_web `POST /api/admin/login` isko call karta hai.
+
 - **GET** `/users/mobile/:mobile` — User row fetch by mobile number (not found → `data: null`).
 - **POST** `/users` — New user create (duplicate mobile pe fail).
 - **PUT** `/users/upsert` — User insert ya same mobile par partial update.

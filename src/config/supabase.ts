@@ -6,9 +6,11 @@ export const SUPABASE_CLIENT = 'SUPABASE_CLIENT';
 
 export function createSupabaseClient(config: ConfigService): SupabaseClient {
   const url = config.get<string>('SUPABASE_URL');
-  const key = config.get<string>('SUPABASE_SERVICE_KEY');
+  const key =
+    config.get<string>('SUPABASE_SERVICE_KEY')?.trim() ||
+    config.get<string>('SUPABASE_SERVICE_ROLE_KEY')?.trim();
   if (!url || !key) {
-    throw new Error('SUPABASE_URL and SUPABASE_SERVICE_KEY must be set in .env');
+    throw new Error('SUPABASE_URL and SUPABASE_SERVICE_KEY (or SUPABASE_SERVICE_ROLE_KEY) must be set in .env');
   }
   return createClient(url, key, {
     auth: { persistSession: false },
