@@ -13,7 +13,6 @@ import {
 } from '@nestjs/common';
 import { SupabaseClient } from '@supabase/supabase-js';
 import { IsEmail, IsString, MinLength } from 'class-validator';
-import * as bcrypt from 'bcryptjs';
 import { SUPABASE_CLIENT } from '../config/supabase';
 import { TABLE_AUTH } from '../common/constants';
 
@@ -37,14 +36,8 @@ type AuthRow = {
   id: string;
   full_name: string;
   email: string;
-  password: string;
   role: string;
 };
-
-/** bcrypt hashes start with $2a$, $2b$, or $2y$ */
-function storedPasswordLooksBcrypt(stored: string): boolean {
-  return /^\$2[aby]\$\d{2}\$/.test(stored);
-}
 
 @Injectable()
 export class AuthService {
@@ -55,25 +48,13 @@ export class AuthService {
     return this.supabase.schema('public').from(TABLE_AUTH);
   }
 
-  private async passwordOk(plain: string, storedRaw: string): Promise<boolean> {
-    const stored = storedRaw.trim();
-    const p = plain.trim();
-    if (!stored) return false;
-    if (storedPasswordLooksBcrypt(stored)) {
-      return bcrypt.compare(p, stored);
-    }
-    // Plain-text passwords in DB (not recommended prod); helps existing rows.
-    return p === stored;
-  }
-
   /**
-   * Validates credentials against `public.auth`.
-   * Prefer bcrypt hashes in `password`; plain text is accepted only if the value is not a bcrypt hash.
+   * Admin login: row must exist in `public.auth` for this email with role admin or staff.
+   * Password is not checked against the database (form still sends it).
    */
-  async verifyAdminLogin(email: string, plainPassword: string): Promise<AuthUserPublic> {
+  async verifyAdminLogin(email: string, _plainPassword: string): Promise<AuthUserPublic> {
     const trimmed = email.trim();
     const normalized = trimmed.toLowerCase();
-    /** Prefer exact `eq` (reliable with @ in email). Try lowercase then original casing. */
     const emailCandidates = [...new Set([normalized, trimmed].filter((s) => s.length > 0))];
 
     let row: AuthRow | null = null;
@@ -81,7 +62,7 @@ export class AuthService {
 
     for (const emailKey of emailCandidates) {
       const res = await this.table
-        .select('id, full_name, email, password, role')
+        .select('id, full_name, email, role')
         .eq('email', emailKey)
         .maybeSingle();
       if (res.error) {
@@ -89,10 +70,14 @@ export class AuthService {
         break;
       }
       const data = res.data as AuthRow | null;
-      if (data && String(data.password ?? '').trim()) {
-        row = data;
-        break;
+      if (!data) continue;
+      if (data.role !== 'admin' && data.role !== 'staff') {
+        throw new UnauthorizedException(
+          `This account has role "${data.role}"; only admin or staff can sign in here.`,
+        );
       }
+      row = data;
+      break;
     }
 
     if (error) {
@@ -107,20 +92,9 @@ export class AuthService {
       );
     }
 
-    if (!row?.password) {
+    if (!row) {
       throw new UnauthorizedException(
         'No admin row was returned for this email. If the row exists in Table Editor, Nest is usually pointed at a different Supabase project: set Vercel (or server/.env) SUPABASE_URL and SUPABASE_SERVICE_KEY to this project under Project Settings → API. Otherwise add the row in SQL Editor (public.auth, role admin or staff).',
-      );
-    }
-
-    const ok = await this.passwordOk(plainPassword, row.password);
-    if (!ok) {
-      throw new UnauthorizedException('Password does not match the one stored for this admin user.');
-    }
-
-    if (row.role !== 'admin' && row.role !== 'staff') {
-      throw new UnauthorizedException(
-        `This account has role "${row.role}"; only admin or staff can sign in here.`,
       );
     }
 
