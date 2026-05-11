@@ -49,8 +49,9 @@ function storedPasswordLooksBcrypt(stored: string): boolean {
 export class AuthService {
   constructor(@Inject(SUPABASE_CLIENT) private readonly supabase: SupabaseClient) {}
 
+  /** `public.auth` admin rows — `.schema('public')` avoids clashing with Supabase’s built-in `auth` schema. */
   private get table() {
-    return this.supabase.from(TABLE_AUTH);
+    return this.supabase.schema('public').from(TABLE_AUTH);
   }
 
   private async passwordOk(plain: string, storedRaw: string): Promise<boolean> {

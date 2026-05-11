@@ -1,8 +1,14 @@
 # API list
 
-Base URL (local): `http://localhost:3000/api` — prefix `api`, port `PORT` (default 3000).
+Nest app **`server/`** folder se build hoti hai; global prefix **`api`** (`API_PREFIX`), isliye routes **`/api/...`** pe milte hain.
 
-- **POST** `/auth/login` — Admin/staff: body `{ "email", "password" }` → Supabase `public.auth`; az_web `POST /api/admin/login` isko call karta hai.
+- **Local base:** `http://localhost:3000` → paths jaise `http://localhost:3000/api/auth/login`.
+- **Deployed (az_web env):** `NEXT_PUBLIC_API_URL=https://server-nu-bay-20.vercel.app` (sirf origin, **bina** trailing `/api`) — az_web server-side isi par `fetch` karta hai, e.g.  
+  **`POST https://server-nu-bay-20.vercel.app/api/auth/login`** — yahi **`public.auth`** login (Supabase read Nest ke through).
+
+Base URL (local paths doc): `http://localhost:3000/api` — prefix `api`, port `PORT` (default 3000).
+
+- **POST** `/auth/login` — Admin/staff: body `{ "email", "password" }` → Supabase `public.auth`. Browser pehle **`POST` az_web** `/api/admin/login` karta hai; Next ka route handler andar se upar wali **deployed server** URL pe **`POST /api/auth/login`** call karta hai.
 
 - **GET** `/users/mobile/:mobile` — User row fetch by mobile number (not found → `data: null`).
 - **POST** `/users` — New user create (duplicate mobile pe fail).
