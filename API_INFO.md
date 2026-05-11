@@ -8,7 +8,7 @@ Nest app **`server/`** folder se build hoti hai; global prefix **`api`** (`API_P
 
 Base URL (local paths doc): `http://localhost:3000/api` — prefix `api`, port `PORT` (default 3000).
 
-- **POST** `/auth/login` — Admin/staff: body `{ "email", "password" }` → Supabase `public.auth`. Browser pehle **`POST` az_web** `/api/admin/login` karta hai; Next ka route handler andar se upar wali **deployed server** URL pe **`POST /api/auth/login`** call karta hai.
+- **POST** `/auth/login` — Admin/staff: body `{ "email", "password" }` → Supabase `public.auth`. **Browser** az_web se seedha is URL pe `POST` karta hai (`NEXT_PUBLIC_API_URL` + `/api/auth/login`); pass hone par same site **`POST` az_web** `/api/admin/session` cookie set karta hai (server dubara verify karta hai).
 
 - **GET** `/users/mobile/:mobile` — User row fetch by mobile number (not found → `data: null`).
 - **POST** `/users` — New user create (duplicate mobile pe fail).

@@ -29,7 +29,7 @@ Backend for **Apni Zaroorat** app. Uses Supabase as database. All app flows use 
 
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/api/auth/login` | **Admin panel:** body `{ "email", "password" }` → checks `public.auth` in Supabase, returns `{ ok, user }`. **az_web** calls this from `POST /api/admin/login` (Next sets the session cookie). |
+| POST | `/api/auth/login` | **Admin panel:** body `{ "email", "password" }` → checks `public.auth` in Supabase, returns `{ ok, user }`. **az_web** browser calls this directly on `NEXT_PUBLIC_API_URL`, then `POST /api/admin/session` on the Next site to set the httpOnly session cookie. |
 | GET | `/api/users/mobile/:mobile` | Get user by mobile |
 | POST | `/api/users` | Create user |
 | PUT | `/api/users/upsert` | Upsert user (create or update) |
