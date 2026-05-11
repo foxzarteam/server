@@ -63,6 +63,7 @@ function normalizeStoredCredential(raw: string): string {
 export class AuthService {
   constructor(@Inject(SUPABASE_CLIENT) private readonly supabase: SupabaseClient) {}
 
+  /** `public.auth` — explicit `public` avoids clashing with Supabase’s built-in `auth` schema. */
   private get table() {
     return this.supabase.schema('public').from(TABLE_AUTH);
   }
@@ -80,7 +81,7 @@ export class AuthService {
         return false;
       }
     }
-    return p === stored;
+    return p.normalize('NFKC') === stored.normalize('NFKC');
   }
 
   /** `public.auth`: email row + password (bcrypt or plain) + role admin|staff. */
@@ -93,7 +94,7 @@ export class AuthService {
     let error: { message: string } | null = null;
 
     for (const emailKey of emailCandidates) {
-      const res = await this.table
+      let res = await this.table
         .select('id, full_name, email, password, role')
         .eq('email', emailKey)
         .maybeSingle();
@@ -101,7 +102,18 @@ export class AuthService {
         error = res.error;
         break;
       }
-      const data = res.data as AuthRow | null;
+      let data = res.data as AuthRow | null;
+      if (!data) {
+        res = await this.table
+          .select('id, full_name, email, password, role')
+          .ilike('email', emailKey)
+          .maybeSingle();
+        if (res.error) {
+          error = res.error;
+          break;
+        }
+        data = res.data as AuthRow | null;
+      }
       if (!data) continue;
 
       if (data.role !== 'admin' && data.role !== 'staff') {
