@@ -42,8 +42,21 @@ type AuthRow = {
   role: string;
 };
 
+/** Real bcrypt hashes are ~60 chars and match this prefix; avoids treating odd strings as bcrypt. */
 function storedPasswordLooksBcrypt(stored: string): boolean {
-  return /^\$2[aby]\$\d{2}\$/.test(stored);
+  const s = stored.trim();
+  return s.length >= 59 && /^\$2[aby]\$\d{2}\$/.test(s);
+}
+
+function normalizeStoredCredential(raw: string): string {
+  let v = raw.replace(/^\uFEFF/, "").trim();
+  if (
+    (v.startsWith('"') && v.endsWith('"')) ||
+    (v.startsWith("'") && v.endsWith("'"))
+  ) {
+    v = v.slice(1, -1).trim();
+  }
+  return v;
 }
 
 @Injectable()
@@ -54,12 +67,18 @@ export class AuthService {
     return this.supabase.schema('public').from(TABLE_AUTH);
   }
 
-  private async passwordOk(plain: string, storedRaw: string): Promise<boolean> {
-    const stored = storedRaw.trim();
-    const p = plain.trim();
+  private async passwordOk(plain: string, storedRaw: string | null | undefined): Promise<boolean> {
+    const stored = normalizeStoredCredential(String(storedRaw ?? ""));
+    const p = String(plain ?? "")
+      .replace(/^\uFEFF/, "")
+      .trim();
     if (!stored) return false;
     if (storedPasswordLooksBcrypt(stored)) {
-      return bcrypt.compare(p, stored);
+      try {
+        return await bcrypt.compare(p, stored);
+      } catch {
+        return false;
+      }
     }
     return p === stored;
   }
@@ -88,10 +107,11 @@ export class AuthService {
       if (data.role !== 'admin' && data.role !== 'staff') {
         throw new UnauthorizedException(AUTH_FAIL);
       }
-      if (!String(data.password ?? '').trim()) {
+      const storedPwd = String(data.password ?? "");
+      if (!normalizeStoredCredential(storedPwd)) {
         throw new UnauthorizedException(AUTH_FAIL);
       }
-      if (!(await this.passwordOk(plainPassword, data.password))) {
+      if (!(await this.passwordOk(plainPassword, storedPwd))) {
         throw new UnauthorizedException(AUTH_FAIL);
       }
       row = data;
