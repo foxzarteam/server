@@ -8,6 +8,7 @@ import {
   InternalServerErrorException,
   Module,
   Post,
+  ServiceUnavailableException,
   UnauthorizedException,
 } from '@nestjs/common';
 import { SupabaseClient } from '@supabase/supabase-js';
@@ -84,21 +85,27 @@ export class AuthService {
           `Auth database error: ${error.message}. Use Project Settings → API → service_role in server/.env (not anon / publishable).`,
         );
       }
-      throw new UnauthorizedException('Invalid email or password');
+      throw new ServiceUnavailableException(
+        `Cannot read admin users from the database (${error.message}). Check SUPABASE_URL and service_role key on this API server.`,
+      );
     }
 
     const row = data as AuthRow | null;
     if (!row?.password) {
-      throw new UnauthorizedException('Invalid email or password');
+      throw new UnauthorizedException(
+        'No admin row in public.auth for this email. Add one in Supabase (SQL Editor) with role admin or staff.',
+      );
     }
 
     const ok = await this.passwordOk(plainPassword, row.password);
     if (!ok) {
-      throw new UnauthorizedException('Invalid email or password');
+      throw new UnauthorizedException('Password does not match the one stored for this admin user.');
     }
 
     if (row.role !== 'admin' && row.role !== 'staff') {
-      throw new UnauthorizedException('Invalid email or password');
+      throw new UnauthorizedException(
+        `This account has role "${row.role}"; only admin or staff can sign in here.`,
+      );
     }
 
     return {
