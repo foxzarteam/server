@@ -5,6 +5,7 @@ import {
   HttpStatus,
   Inject,
   Injectable,
+  InternalServerErrorException,
   Module,
   Post,
   UnauthorizedException,
@@ -76,8 +77,11 @@ export class AuthService {
       .maybeSingle();
 
     if (error) {
+      console.error('AuthService.verifyAdminLogin', error);
       if (process.env.NODE_ENV !== 'production') {
-        console.error('AuthService.verifyAdminLogin', error);
+        throw new InternalServerErrorException(
+          `Auth database error: ${error.message}. Use Project Settings → API → service_role in server/.env (not anon / publishable).`,
+        );
       }
       throw new UnauthorizedException('Invalid email or password');
     }
