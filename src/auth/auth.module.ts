@@ -71,12 +71,29 @@ export class AuthService {
    * Prefer bcrypt hashes in `password`; plain text is accepted only if the value is not a bcrypt hash.
    */
   async verifyAdminLogin(email: string, plainPassword: string): Promise<AuthUserPublic> {
-    const normalized = email.trim().toLowerCase();
-    // Case-insensitive email match (DB may store Info@... while we compare info@...).
-    const { data, error } = await this.table
-      .select('id, full_name, email, password, role')
-      .ilike('email', normalized)
-      .maybeSingle();
+    const trimmed = email.trim();
+    const normalized = trimmed.toLowerCase();
+    /** Prefer exact `eq` (reliable with @ in email). Try lowercase then original casing. */
+    const emailCandidates = [...new Set([normalized, trimmed].filter((s) => s.length > 0))];
+
+    let row: AuthRow | null = null;
+    let error: { message: string } | null = null;
+
+    for (const emailKey of emailCandidates) {
+      const res = await this.table
+        .select('id, full_name, email, password, role')
+        .eq('email', emailKey)
+        .maybeSingle();
+      if (res.error) {
+        error = res.error;
+        break;
+      }
+      const data = res.data as AuthRow | null;
+      if (data && String(data.password ?? '').trim()) {
+        row = data;
+        break;
+      }
+    }
 
     if (error) {
       console.error('AuthService.verifyAdminLogin', error);
@@ -90,10 +107,9 @@ export class AuthService {
       );
     }
 
-    const row = data as AuthRow | null;
     if (!row?.password) {
       throw new UnauthorizedException(
-        'No admin row in public.auth for this email. Add one in Supabase (SQL Editor) with role admin or staff.',
+        'No admin row was returned for this email. If the row exists in Table Editor, Nest is usually pointed at a different Supabase project: set Vercel (or server/.env) SUPABASE_URL and SUPABASE_SERVICE_KEY to this project under Project Settings → API. Otherwise add the row in SQL Editor (public.auth, role admin or staff).',
       );
     }
 
