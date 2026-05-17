@@ -3,6 +3,7 @@ export const TABLE_USERS = 'users';
 export const TABLE_LEADS = 'leads';
 export const TABLE_BANNERS = 'banners';
 export const TABLE_SERVICES = 'services';
+export const TABLE_PARTNER = 'partner';
 export const TABLE_PAYMENT_ACCOUNTS = 'payment_accounts';
 export const TABLE_WALLET = 'wallet';
 /** Admin/staff panel users (`public.auth`). */

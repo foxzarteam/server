@@ -2,13 +2,18 @@ import {
   Body,
   Controller,
   Get,
+  Headers,
   HttpCode,
   HttpStatus,
   Inject,
   Injectable,
   Module,
   Param,
+  Patch,
   Post,
+  Delete,
+  UnauthorizedException,
+  NotFoundException,
 } from '@nestjs/common';
 import { SupabaseClient } from '@supabase/supabase-js';
 import {
@@ -22,6 +27,7 @@ import {
   ValidateIf,
 } from 'class-validator';
 import { SUPABASE_CLIENT } from '../config/supabase';
+import { adminInternalKeyOk } from '../common/admin-internal';
 import { TABLE_LEADS } from '../common/constants';
 
 class CreateLeadDto {
@@ -73,6 +79,68 @@ class CreateLeadDto {
     },
   )
   category: string;
+}
+
+class UpdateLeadDto {
+  @IsOptional()
+  @IsString()
+  fullName?: string;
+
+  @IsOptional()
+  @IsString()
+  email?: string;
+
+  @IsOptional()
+  @IsString()
+  @Length(10, 10, { message: 'mobileNumber must be 10 digits' })
+  @Matches(/^[6-9]\d{9}$/, { message: 'Invalid Indian mobile number' })
+  mobileNumber?: string;
+
+  @IsOptional()
+  @IsString()
+  @Length(10, 10, { message: 'PAN must be 10 characters' })
+  pan?: string;
+
+  @IsOptional()
+  @IsString()
+  @ValidateIf((o) => o.pincode != null && o.pincode !== '')
+  @Length(6, 6, { message: 'Pincode must be 6 digits' })
+  pincode?: string;
+
+  @IsOptional()
+  @IsNumber()
+  @ValidateIf((o) => o.requiredAmount != null)
+  @Min(0, { message: 'Required amount must be positive' })
+  requiredAmount?: number;
+
+  @IsOptional()
+  @IsString()
+  @IsIn(
+    [
+      'personal_loan',
+      'home_loan',
+      'business_loan',
+      'credit_card',
+      'insurance',
+      'vehicle_loan',
+    ],
+    {
+      message:
+        'Category must be one of: personal_loan, home_loan, business_loan, credit_card, insurance, vehicle_loan',
+    },
+  )
+  category?: string;
+
+  @IsOptional()
+  @IsString()
+  @IsIn(['pending', 'approved', 'rejected'], {
+    message: 'Status must be one of: pending, approved, rejected',
+  })
+  status?: string;
+
+  @IsOptional()
+  @IsString()
+  notes?: string;
 }
 
 @Injectable()
@@ -154,6 +222,64 @@ export class LeadsService {
 
     return (data as Record<string, unknown>[]) || [];
   }
+
+  async getAll(): Promise<Record<string, unknown>[]> {
+    const { data, error } = await this.leads.select().order('created_at', { ascending: false });
+
+    if (error) {
+      if (process.env.NODE_ENV !== 'production') {
+        console.error('LeadsService.getAll', error);
+      }
+      return [];
+    }
+
+    return (data as Record<string, unknown>[]) || [];
+  }
+
+  async updateById(id: string, dto: UpdateLeadDto): Promise<Record<string, unknown> | null> {
+    const payload: Record<string, unknown> = { updated_at: new Date().toISOString() };
+
+    if (dto.fullName != null) payload.full_name = dto.fullName.trim();
+    if (dto.email !== undefined) payload.email = dto.email?.trim() || null;
+    if (dto.mobileNumber != null) payload.mobile_number = dto.mobileNumber.trim();
+    if (dto.pincode !== undefined) payload.pincode = dto.pincode?.trim() || null;
+    if (dto.requiredAmount !== undefined) payload.required_amount = dto.requiredAmount ?? null;
+    if (dto.category != null) payload.category = dto.category;
+    if (dto.status != null) payload.status = dto.status;
+    if (dto.notes !== undefined) payload.notes = dto.notes?.trim() || null;
+
+    if (dto.pan != null) {
+      const panUpper = dto.pan.trim().toUpperCase();
+      if (!/^[A-Z]{5}[0-9]{4}[A-Z]{1}$/.test(panUpper)) return null;
+      payload.pan = panUpper;
+    }
+
+    if (Object.keys(payload).length === 1) return null;
+
+    const { data, error } = await this.leads.update(payload).eq('id', id).select().single();
+
+    if (error) {
+      if (process.env.NODE_ENV !== 'production') {
+        console.error('LeadsService.updateById', error);
+      }
+      return null;
+    }
+
+    return data as Record<string, unknown>;
+  }
+
+  async deleteById(id: string): Promise<boolean> {
+    const { error } = await this.leads.delete().eq('id', id);
+
+    if (error) {
+      if (process.env.NODE_ENV !== 'production') {
+        console.error('LeadsService.deleteById', error);
+      }
+      return false;
+    }
+
+    return true;
+  }
 }
 
 @Controller('leads')
@@ -224,6 +350,49 @@ export class LeadsController {
   ) {
     const leads = await this.leadsService.getByCategory(userId, category);
     return { success: true, data: leads };
+  }
+
+  @Get('admin/all')
+  @HttpCode(HttpStatus.OK)
+  async getAllForAdmin(@Headers('x-admin-internal-key') adminKey: string | undefined) {
+    if (!adminInternalKeyOk(adminKey)) {
+      throw new UnauthorizedException('Unauthorized');
+    }
+    const leads = await this.leadsService.getAll();
+    return { success: true, data: leads };
+  }
+
+  @Patch('admin/:id')
+  @HttpCode(HttpStatus.OK)
+  async updateForAdmin(
+    @Headers('x-admin-internal-key') adminKey: string | undefined,
+    @Param('id') id: string,
+    @Body() dto: UpdateLeadDto,
+  ) {
+    if (!adminInternalKeyOk(adminKey)) {
+      throw new UnauthorizedException('Unauthorized');
+    }
+    const lead = await this.leadsService.updateById(id, dto);
+    if (!lead) {
+      throw new NotFoundException('Lead not found or update failed');
+    }
+    return { success: true, data: lead };
+  }
+
+  @Delete('admin/:id')
+  @HttpCode(HttpStatus.OK)
+  async deleteForAdmin(
+    @Headers('x-admin-internal-key') adminKey: string | undefined,
+    @Param('id') id: string,
+  ) {
+    if (!adminInternalKeyOk(adminKey)) {
+      throw new UnauthorizedException('Unauthorized');
+    }
+    const ok = await this.leadsService.deleteById(id);
+    if (!ok) {
+      throw new NotFoundException('Lead not found or delete failed');
+    }
+    return { success: true };
   }
 }
 

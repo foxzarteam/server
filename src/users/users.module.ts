@@ -1,17 +1,22 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
+  Headers,
   HttpCode,
   HttpStatus,
   Inject,
   Injectable,
   Module,
+  NotFoundException,
   Param,
   Patch,
   Post,
   Put,
+  UnauthorizedException,
 } from '@nestjs/common';
+import { adminInternalKeyOk } from '../common/admin-internal';
 import { SupabaseClient } from '@supabase/supabase-js';
 import { IsBoolean, IsOptional, IsString, Length, Matches } from 'class-validator';
 import { SUPABASE_CLIENT } from '../config/supabase';
@@ -77,6 +82,30 @@ class UpdateMpinDto {
 class UpdateLoginStatusDto {
   @IsBoolean()
   isLoggedIn: boolean;
+}
+
+class AdminUpdateUserDto {
+  @IsOptional()
+  @IsString()
+  userName?: string;
+
+  @IsOptional()
+  @IsString()
+  email?: string;
+
+  @IsOptional()
+  @IsString()
+  @Length(10, 10, { message: 'mobileNumber must be 10 digits' })
+  @Matches(/^[6-9]\d{9}$/, { message: 'Invalid Indian mobile number' })
+  mobileNumber?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  isActive?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  isLoggedIn?: boolean;
 }
 
 const MPIN_LENGTH = 4;
@@ -252,11 +281,107 @@ export class UsersService {
 
     return this.insertUser(dto);
   }
+
+  async getAll(): Promise<Record<string, unknown>[]> {
+    const { data, error } = await this.users.select().order('created_at', { ascending: false });
+
+    if (error) {
+      if (process.env.NODE_ENV !== 'production') {
+        console.error('UsersService.getAll', error);
+      }
+      return [];
+    }
+
+    return (data as Record<string, unknown>[]) || [];
+  }
+
+  async updateById(id: string, dto: AdminUpdateUserDto): Promise<Record<string, unknown> | null> {
+    const now = getCurrentIsoTime();
+    const payload: Record<string, unknown> = { updated_at: now };
+
+    if (dto.userName != null) payload.user_name = dto.userName.trim();
+    if (dto.email !== undefined) payload.email = dto.email?.trim() || null;
+    if (dto.mobileNumber != null) payload.mobile_number = dto.mobileNumber.trim();
+    if (dto.isActive != null) payload.is_active = dto.isActive;
+    if (dto.isLoggedIn != null) {
+      payload.is_logged_in = dto.isLoggedIn;
+      if (dto.isLoggedIn) payload.last_login_at = now;
+    }
+
+    if (Object.keys(payload).length === 1) return null;
+
+    const { data, error } = await this.users.update(payload).eq('id', id).select().single();
+
+    if (error) {
+      if (process.env.NODE_ENV !== 'production') {
+        console.error('UsersService.updateById', error);
+      }
+      return null;
+    }
+
+    return data as Record<string, unknown>;
+  }
+
+  async deleteById(id: string): Promise<boolean> {
+    const { error } = await this.users.delete().eq('id', id);
+
+    if (error) {
+      if (process.env.NODE_ENV !== 'production') {
+        console.error('UsersService.deleteById', error);
+      }
+      return false;
+    }
+
+    return true;
+  }
 }
 
 @Controller('users')
 export class UsersController {
   constructor(private readonly usersService: UsersService) {}
+
+  @Get('admin/all')
+  @HttpCode(HttpStatus.OK)
+  async getAllForAdmin(@Headers('x-admin-internal-key') adminKey: string | undefined) {
+    if (!adminInternalKeyOk(adminKey)) {
+      throw new UnauthorizedException('Unauthorized');
+    }
+    const users = await this.usersService.getAll();
+    return { success: true, data: users };
+  }
+
+  @Patch('admin/:id')
+  @HttpCode(HttpStatus.OK)
+  async updateForAdmin(
+    @Headers('x-admin-internal-key') adminKey: string | undefined,
+    @Param('id') id: string,
+    @Body() dto: AdminUpdateUserDto,
+  ) {
+    if (!adminInternalKeyOk(adminKey)) {
+      throw new UnauthorizedException('Unauthorized');
+    }
+    const user = await this.usersService.updateById(id, dto);
+    if (!user) {
+      throw new NotFoundException('User not found or update failed');
+    }
+    return { success: true, data: user };
+  }
+
+  @Delete('admin/:id')
+  @HttpCode(HttpStatus.OK)
+  async deleteForAdmin(
+    @Headers('x-admin-internal-key') adminKey: string | undefined,
+    @Param('id') id: string,
+  ) {
+    if (!adminInternalKeyOk(adminKey)) {
+      throw new UnauthorizedException('Unauthorized');
+    }
+    const ok = await this.usersService.deleteById(id);
+    if (!ok) {
+      throw new NotFoundException('User not found or delete failed');
+    }
+    return { success: true };
+  }
 
   @Get('mobile/:mobile')
   @HttpCode(HttpStatus.OK)
