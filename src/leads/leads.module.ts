@@ -30,6 +30,49 @@ import { SUPABASE_CLIENT } from '../config/supabase';
 import { adminInternalKeyOk } from '../common/admin-internal';
 import { TABLE_LEADS } from '../common/constants';
 
+/** Placeholder until user completes the second-step form */
+export const LEAD_DRAFT_FULL_NAME = 'Unknown';
+export const LEAD_DRAFT_PAN = 'XXXXX0000X';
+
+const LEAD_CATEGORIES = [
+  'personal_loan',
+  'home_loan',
+  'business_loan',
+  'credit_card',
+  'insurance',
+  'vehicle_loan',
+] as const;
+
+class StartLeadDto {
+  @IsString()
+  @Length(10, 10, { message: 'mobileNumber must be 10 digits' })
+  @Matches(/^[6-9]\d{9}$/, { message: 'Invalid Indian mobile number' })
+  mobileNumber: string;
+
+  @IsOptional()
+  @IsString()
+  @IsIn([...LEAD_CATEGORIES], {
+    message: 'Invalid category',
+  })
+  category?: string;
+}
+
+class CompleteLeadDto {
+  @IsString()
+  @Length(10, 10, { message: 'PAN must be 10 characters' })
+  pan: string;
+
+  @IsString()
+  fullName: string;
+
+  @IsOptional()
+  @IsString()
+  @IsIn([...LEAD_CATEGORIES], {
+    message: 'Invalid category',
+  })
+  category?: string;
+}
+
 class CreateLeadDto {
   @IsOptional()
   @IsString()
@@ -149,6 +192,113 @@ export class LeadsService {
 
   private get leads() {
     return this.supabase.from(TABLE_LEADS);
+  }
+
+  isDraftLead(lead: Record<string, unknown>): boolean {
+    const name = String(lead['full_name'] ?? '')
+      .trim()
+      .toLowerCase();
+    const pan = String(lead['pan'] ?? '')
+      .trim()
+      .toUpperCase();
+    return name === LEAD_DRAFT_FULL_NAME.toLowerCase() || pan === LEAD_DRAFT_PAN;
+  }
+
+  async getByMobile(mobileNumber: string): Promise<Record<string, unknown> | null> {
+    const mobile = mobileNumber.trim();
+    const { data, error } = await this.leads
+      .select()
+      .eq('mobile_number', mobile)
+      .eq('is_active', true)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (error) {
+      if (process.env.NODE_ENV !== 'production') {
+        console.error('LeadsService.getByMobile', error);
+      }
+      return null;
+    }
+
+    return (data as Record<string, unknown>) ?? null;
+  }
+
+  async createDraft(mobileNumber: string, category: string): Promise<Record<string, unknown> | null> {
+    const payload: Record<string, unknown> = {
+      pan: LEAD_DRAFT_PAN,
+      mobile_number: mobileNumber.trim(),
+      full_name: LEAD_DRAFT_FULL_NAME,
+      email: null,
+      pincode: null,
+      required_amount: null,
+      category: category || 'personal_loan',
+      status: 'pending',
+      is_active: true,
+    };
+
+    const { data, error } = await this.leads.insert(payload).select().single();
+
+    if (error) {
+      if (process.env.NODE_ENV !== 'production') {
+        console.error('LeadsService.createDraft error:', error, payload);
+      }
+      return null;
+    }
+
+    return data as Record<string, unknown>;
+  }
+
+  async startLead(mobileNumber: string, category?: string): Promise<{
+    ok: boolean;
+    lead?: Record<string, unknown>;
+    duplicate?: boolean;
+  }> {
+    const cat = category?.trim() || 'personal_loan';
+    const existing = await this.getByMobile(mobileNumber);
+
+    if (existing) {
+      if (this.isDraftLead(existing)) {
+        return { ok: true, lead: existing };
+      }
+      return { ok: false, duplicate: true };
+    }
+
+    const created = await this.createDraft(mobileNumber, cat);
+    if (!created) return { ok: false };
+    return { ok: true, lead: created };
+  }
+
+  async completeLead(
+    id: string,
+    dto: CompleteLeadDto,
+  ): Promise<Record<string, unknown> | null> {
+    const panUpper = dto.pan.trim().toUpperCase();
+    if (!/^[A-Z]{5}[0-9]{4}[A-Z]{1}$/.test(panUpper)) {
+      return null;
+    }
+
+    const existing = await this.leads.select().eq('id', id).maybeSingle();
+    if (existing.error || !existing.data) {
+      return null;
+    }
+
+    const row = existing.data as Record<string, unknown>;
+    const mobile = String(row['mobile_number'] ?? '').trim();
+    const other = await this.getByMobile(mobile);
+    if (
+      other &&
+      String(other['id']) !== id &&
+      !this.isDraftLead(other)
+    ) {
+      return null;
+    }
+
+    return this.updateById(id, {
+      pan: panUpper,
+      fullName: dto.fullName.trim(),
+      category: dto.category,
+    });
   }
 
   async create(dto: CreateLeadDto): Promise<Record<string, unknown> | null> {
@@ -300,23 +450,63 @@ export class LeadsController {
     };
   }
 
+  @Post('start')
+  @HttpCode(HttpStatus.OK)
+  async start(@Body() dto: StartLeadDto) {
+    const result = await this.leadsService.startLead(
+      dto.mobileNumber,
+      dto.category,
+    );
+
+    if (result.duplicate) {
+      return {
+        success: false,
+        message: 'This number already exists.',
+      };
+    }
+
+    if (!result.ok || !result.lead) {
+      return { success: false, message: 'Failed to save mobile number. Please try again.' };
+    }
+
+    return { success: true, data: result.lead };
+  }
+
+  @Patch(':id/complete')
+  @HttpCode(HttpStatus.OK)
+  async complete(@Param('id') id: string, @Body() dto: CompleteLeadDto) {
+    const lead = await this.leadsService.completeLead(id, dto);
+    if (!lead) {
+      return {
+        success: false,
+        message: 'Failed to update details. Please check PAN and try again.',
+      };
+    }
+    return { success: true, data: lead };
+  }
+
   @Post()
   @HttpCode(HttpStatus.CREATED)
   async create(@Body() dto: CreateLeadDto) {
     try {
-      const duplicateCheck = await this.leadsService.getByUserId(dto.userId ?? '').catch(
-        () => [] as Record<string, unknown>[],
-      );
-
-      if (
-        duplicateCheck.some(
-          (l) => (l['mobile_number'] as string | undefined)?.trim() === dto.mobileNumber.trim(),
-        )
-      ) {
+      const existing = await this.leadsService.getByMobile(dto.mobileNumber);
+      if (existing && !this.leadsService.isDraftLead(existing)) {
         return {
           success: false,
-          message: 'This lead already exists in our system.',
+          message: 'This number already exists.',
         };
+      }
+
+      if (existing && this.leadsService.isDraftLead(existing)) {
+        const completed = await this.leadsService.completeLead(String(existing['id']), {
+          pan: dto.pan,
+          fullName: dto.fullName,
+          category: dto.category,
+        });
+        if (!completed) {
+          return { success: false, message: 'Failed to update lead' };
+        }
+        return { success: true, data: completed };
       }
 
       const lead = await this.leadsService.create(dto);
