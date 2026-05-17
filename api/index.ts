@@ -40,7 +40,7 @@ async function createApp(): Promise<express.Express> {
   app.enableCors({
     origin: isProduction && allowedOrigins?.length ? allowedOrigins : '*',
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
-    allowedHeaders: ['Content-Type', 'Accept', 'Authorization'],
+    allowedHeaders: ['Content-Type', 'Accept', 'Authorization', 'x-admin-internal-key'],
   });
   app.useGlobalPipes(
     new ValidationPipe({
