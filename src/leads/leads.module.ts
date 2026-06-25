@@ -17,6 +17,7 @@ import {
 } from '@nestjs/common';
 import { SupabaseClient } from '@supabase/supabase-js';
 import {
+  IsIn,
   IsNumber,
   IsOptional,
   IsString,
