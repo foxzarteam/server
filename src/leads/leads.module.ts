@@ -17,7 +17,6 @@ import {
 } from '@nestjs/common';
 import { SupabaseClient } from '@supabase/supabase-js';
 import {
-  IsIn,
   IsNumber,
   IsOptional,
   IsString,
@@ -34,14 +33,8 @@ import { TABLE_LEADS } from '../common/constants';
 export const LEAD_DRAFT_FULL_NAME = 'Unknown';
 export const LEAD_DRAFT_PAN = 'XXXXX0000X';
 
-const LEAD_CATEGORIES = [
-  'personal_loan',
-  'home_loan',
-  'business_loan',
-  'credit_card',
-  'insurance',
-  'vehicle_loan',
-] as const;
+/** Matches active service slugs stored as lead category (e.g. personal-loan → personal_loan). */
+const LEAD_CATEGORY_PATTERN = /^[a-z][a-z0-9_]{0,63}$/;
 
 class StartLeadDto {
   @IsString()
@@ -51,9 +44,7 @@ class StartLeadDto {
 
   @IsOptional()
   @IsString()
-  @IsIn([...LEAD_CATEGORIES], {
-    message: 'Invalid category',
-  })
+  @Matches(LEAD_CATEGORY_PATTERN, { message: 'Invalid category' })
   category?: string;
 }
 
@@ -67,9 +58,7 @@ class CompleteLeadDto {
 
   @IsOptional()
   @IsString()
-  @IsIn([...LEAD_CATEGORIES], {
-    message: 'Invalid category',
-  })
+  @Matches(LEAD_CATEGORY_PATTERN, { message: 'Invalid category' })
   category?: string;
 }
 
@@ -107,20 +96,9 @@ class CreateLeadDto {
   requiredAmount?: number;
 
   @IsString()
-  @IsIn(
-    [
-      'personal_loan',
-      'home_loan',
-      'business_loan',
-      'credit_card',
-      'insurance',
-      'vehicle_loan',
-    ],
-    {
-      message:
-        'Category must be one of: personal_loan, home_loan, business_loan, credit_card, insurance, vehicle_loan',
-    },
-  )
+  @Matches(LEAD_CATEGORY_PATTERN, {
+    message: 'Invalid category (use service slug with underscores, e.g. personal_loan)',
+  })
   category: string;
 }
 
@@ -158,20 +136,7 @@ class UpdateLeadDto {
 
   @IsOptional()
   @IsString()
-  @IsIn(
-    [
-      'personal_loan',
-      'home_loan',
-      'business_loan',
-      'credit_card',
-      'insurance',
-      'vehicle_loan',
-    ],
-    {
-      message:
-        'Category must be one of: personal_loan, home_loan, business_loan, credit_card, insurance, vehicle_loan',
-    },
-  )
+  @Matches(LEAD_CATEGORY_PATTERN, { message: 'Invalid category' })
   category?: string;
 
   @IsOptional()
