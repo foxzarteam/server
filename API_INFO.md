@@ -19,6 +19,7 @@ Base URL (local paths doc): `http://localhost:3000/api` — prefix `api`, port `
 
 - **POST** `/otp/send` — Dev flow: DB me OTP session banata hai (SMS yahan nahi).
 - **POST** `/otp/verify` — OTP verify karke session marked verified.
+- **POST** `/otp/verify-firebase` — Firebase ID token verify (az_web). Body: `{ mobileNumber, idToken }`.
 - **GET** `/otp/live` — Env `LIVE` se `{ live: boolean }`.
 - **GET** `/otp/dev` — Recent OTP rows ki HTML debug page (prod me usually 404, `ALLOW_OTP_DEV=true` se allow).
 

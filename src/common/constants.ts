@@ -19,6 +19,11 @@ export const MSG_OTP_VERIFY_FAILED = 'Verification failed.';
 export const MSG_OTP_INVALID_EXPIRED = 'Invalid or expired OTP.';
 export const MSG_OTP_MAX_ATTEMPTS = 'Max attempts exceeded.';
 export const MSG_OTP_VERIFIED = 'OTP verified successfully.';
+export const MSG_OTP_FIREBASE_NOT_CONFIGURED =
+  'Firebase verification is not configured on the server.';
+export const MSG_OTP_FIREBASE_MISMATCH = 'Mobile number does not match Firebase token.';
+export const MSG_OTP_PHONE_NOT_VERIFIED = 'Please verify your mobile number with OTP first.';
+export const PHONE_VERIFICATION_WINDOW_MINUTES = 30;
 
 export const MSG_USER_CREATE_FAILED = 'Failed to create user';
 

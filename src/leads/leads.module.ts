@@ -28,7 +28,8 @@ import {
 } from 'class-validator';
 import { SUPABASE_CLIENT } from '../config/supabase';
 import { adminInternalKeyOk } from '../common/admin-internal';
-import { TABLE_LEADS } from '../common/constants';
+import { TABLE_LEADS, MSG_OTP_PHONE_NOT_VERIFIED } from '../common/constants';
+import { OtpModule, OtpService } from '../otp/otp.module';
 
 /** Placeholder until user completes the second-step form */
 export const LEAD_DRAFT_FULL_NAME = 'Unknown';
@@ -61,6 +62,12 @@ class CompleteLeadDto {
   @IsString()
   @Matches(LEAD_CATEGORY_PATTERN, { message: 'Invalid category' })
   category?: string;
+
+  @IsOptional()
+  @IsString()
+  @Length(12, 12, { message: 'Aadhaar must be 12 digits' })
+  @Matches(/^\d{12}$/, { message: 'Aadhaar must be 12 digits' })
+  aadhaar?: string;
 }
 
 class CreateLeadDto {
@@ -264,6 +271,9 @@ export class LeadsService {
       pan: panUpper,
       fullName: dto.fullName.trim(),
       category: dto.category,
+      notes: dto.aadhaar?.trim()
+        ? `Aadhaar: ${dto.aadhaar.trim()}`
+        : undefined,
     });
   }
 
@@ -400,7 +410,10 @@ export class LeadsService {
 
 @Controller('leads')
 export class LeadsController {
-  constructor(private readonly leadsService: LeadsService) {}
+  constructor(
+    private readonly leadsService: LeadsService,
+    private readonly otpService: OtpService,
+  ) {}
 
   @Get()
   @HttpCode(HttpStatus.OK)
@@ -419,6 +432,16 @@ export class LeadsController {
   @Post('start')
   @HttpCode(HttpStatus.OK)
   async start(@Body() dto: StartLeadDto) {
+    const verified = await this.otpService.hasRecentPhoneVerification(
+      dto.mobileNumber,
+    );
+    if (!verified) {
+      return {
+        success: false,
+        message: MSG_OTP_PHONE_NOT_VERIFIED,
+      };
+    }
+
     const result = await this.leadsService.startLead(
       dto.mobileNumber,
       dto.category,
@@ -553,6 +576,7 @@ export class LeadsController {
 }
 
 @Module({
+  imports: [OtpModule],
   controllers: [LeadsController],
   providers: [LeadsService],
 })

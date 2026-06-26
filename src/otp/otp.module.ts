@@ -13,9 +13,12 @@ import {
 import { ConfigService } from '@nestjs/config';
 import { Response } from 'express';
 import { SupabaseClient } from '@supabase/supabase-js';
-import { IsString, Length, Matches } from 'class-validator';
+import { IsString, Length, Matches, MinLength } from 'class-validator';
 import { SUPABASE_CLIENT } from '../config/supabase';
+import { getFirebaseAdmin, normalizeIndianMobile } from '../firebase/firebase-admin';
 import {
+  MSG_OTP_FIREBASE_MISMATCH,
+  MSG_OTP_FIREBASE_NOT_CONFIGURED,
   MSG_OTP_INVALID_EXPIRED,
   MSG_OTP_MAX_ATTEMPTS,
   MSG_OTP_SESSION_FAILED,
@@ -25,6 +28,7 @@ import {
   OTP_EXPIRY_MINUTES,
   OTP_LENGTH,
   OTP_MAX_ATTEMPTS,
+  PHONE_VERIFICATION_WINDOW_MINUTES,
   TABLE_OTP_SESSIONS,
   getCurrentIsoTime,
 } from '../common/constants';
@@ -46,6 +50,17 @@ class VerifyOtpDto {
   @Length(6, 6, { message: 'otp must be 6 digits' })
   @Matches(/^\d{6}$/, { message: 'otp must be 6 digits' })
   otp: string;
+}
+
+class VerifyFirebaseOtpDto {
+  @IsString()
+  @Length(10, 10, { message: 'mobileNumber must be 10 digits' })
+  @Matches(/^[6-9]\d{9}$/, { message: 'Invalid Indian mobile number' })
+  mobileNumber: string;
+
+  @IsString()
+  @MinLength(20, { message: 'idToken is required' })
+  idToken: string;
 }
 
 export type OtpResult = { success: boolean; message: string };
@@ -162,6 +177,70 @@ export class OtpService {
 
     return { success: true, message: MSG_OTP_VERIFIED };
   }
+
+  /** Record Firebase phone verification (used by az_web after client sign-in). */
+  async markPhoneVerified(mobileNumber: string): Promise<OtpResult> {
+    const expiresAt = this.getExpiryTime();
+    const { error } = await this.otpSessions.insert({
+      mobile_number: mobileNumber,
+      otp_code: '000000',
+      expires_at: expiresAt,
+      is_verified: true,
+      verified_at: getCurrentIsoTime(),
+      attempts: 0,
+      max_attempts: OTP_MAX_ATTEMPTS,
+    });
+    if (error) {
+      if (process.env.NODE_ENV !== 'production') {
+        console.error('OtpService.markPhoneVerified', error);
+      }
+      return { success: false, message: MSG_OTP_SESSION_FAILED };
+    }
+    return { success: true, message: MSG_OTP_VERIFIED };
+  }
+
+  async verifyFirebaseToken(dto: VerifyFirebaseOtpDto): Promise<OtpResult> {
+    const app = getFirebaseAdmin();
+    if (!app) {
+      return { success: false, message: MSG_OTP_FIREBASE_NOT_CONFIGURED };
+    }
+
+    try {
+      const decoded = await app.auth().verifyIdToken(dto.idToken);
+      const tokenMobile = normalizeIndianMobile(decoded.phone_number);
+      if (!tokenMobile || tokenMobile !== dto.mobileNumber.trim()) {
+        return { success: false, message: MSG_OTP_FIREBASE_MISMATCH };
+      }
+      return this.markPhoneVerified(dto.mobileNumber.trim());
+    } catch (e) {
+      if (process.env.NODE_ENV !== 'production') {
+        console.error('OtpService.verifyFirebaseToken', e);
+      }
+      return { success: false, message: MSG_OTP_VERIFY_FAILED };
+    }
+  }
+
+  async hasRecentPhoneVerification(
+    mobileNumber: string,
+    withinMinutes = PHONE_VERIFICATION_WINDOW_MINUTES,
+  ): Promise<boolean> {
+    const since = new Date(Date.now() - withinMinutes * 60 * 1000).toISOString();
+    const { data, error } = await this.otpSessions
+      .select('id')
+      .eq('mobile_number', mobileNumber.trim())
+      .eq('is_verified', true)
+      .gte('verified_at', since)
+      .limit(1);
+
+    if (error) {
+      if (process.env.NODE_ENV !== 'production') {
+        console.error('OtpService.hasRecentPhoneVerification', error);
+      }
+      return false;
+    }
+
+    return Array.isArray(data) && data.length > 0;
+  }
 }
 
 @Controller('otp')
@@ -181,6 +260,12 @@ export class OtpController {
   @HttpCode(HttpStatus.OK)
   async verify(@Body() dto: VerifyOtpDto) {
     return this.otpService.verify(dto);
+  }
+
+  @Post('verify-firebase')
+  @HttpCode(HttpStatus.OK)
+  async verifyFirebase(@Body() dto: VerifyFirebaseOtpDto) {
+    return this.otpService.verifyFirebaseToken(dto);
   }
 
   @Get('live')
