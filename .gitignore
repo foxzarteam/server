@@ -3,5 +3,6 @@ dist
 *.tsbuildinfo
 .env
 .env.local
+firebase-service-account.json
 *.log
 .DS_Store
