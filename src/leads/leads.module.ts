@@ -225,16 +225,12 @@ export class LeadsService {
   async startLead(mobileNumber: string, category?: string): Promise<{
     ok: boolean;
     lead?: Record<string, unknown>;
-    duplicate?: boolean;
   }> {
     const cat = category?.trim() || 'personal_loan';
     const existing = await this.getByMobile(mobileNumber);
 
     if (existing) {
-      if (this.isDraftLead(existing)) {
-        return { ok: true, lead: existing };
-      }
-      return { ok: false, duplicate: true };
+      return { ok: true, lead: existing };
     }
 
     const created = await this.createDraft(mobileNumber, cat);
@@ -447,13 +443,6 @@ export class LeadsController {
       dto.category,
     );
 
-    if (result.duplicate) {
-      return {
-        success: false,
-        message: 'This number already exists.',
-      };
-    }
-
     if (!result.ok || !result.lead) {
       return { success: false, message: 'Failed to save mobile number. Please try again.' };
     }
@@ -479,23 +468,19 @@ export class LeadsController {
   async create(@Body() dto: CreateLeadDto) {
     try {
       const existing = await this.leadsService.getByMobile(dto.mobileNumber);
-      if (existing && !this.leadsService.isDraftLead(existing)) {
-        return {
-          success: false,
-          message: 'This number already exists.',
-        };
-      }
-
-      if (existing && this.leadsService.isDraftLead(existing)) {
-        const completed = await this.leadsService.completeLead(String(existing['id']), {
+      if (existing) {
+        const updated = await this.leadsService.updateById(String(existing['id']), {
           pan: dto.pan,
           fullName: dto.fullName,
           category: dto.category,
+          email: dto.email,
+          pincode: dto.pincode,
+          requiredAmount: dto.requiredAmount,
         });
-        if (!completed) {
+        if (!updated) {
           return { success: false, message: 'Failed to update lead' };
         }
-        return { success: true, data: completed };
+        return { success: true, data: updated };
       }
 
       const lead = await this.leadsService.create(dto);
