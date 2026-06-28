@@ -38,6 +38,20 @@ export const LEAD_DRAFT_PAN = 'XXXXX0000X';
 /** Matches active service slugs stored as lead category (e.g. personal-loan → personal_loan). */
 const LEAD_CATEGORY_PATTERN = /^[a-z][a-z0-9_]{0,63}$/;
 
+const LOAN_AMT_VALUES = [
+  '25000_100000',
+  '100000_200000',
+  '200000_300000',
+  '300000_400000',
+  '400000_500000',
+] as const;
+
+const INS_TYPE_VALUES = [
+  'life_insurance',
+  'health_insurance',
+  'motor_insurance',
+] as const;
+
 class StartLeadDto {
   @IsString()
   @Length(10, 10, { message: 'mobileNumber must be 10 digits' })
@@ -68,6 +82,16 @@ class CompleteLeadDto {
   @Length(12, 12, { message: 'Aadhaar must be 12 digits' })
   @Matches(/^\d{12}$/, { message: 'Aadhaar must be 12 digits' })
   aadhaar?: string;
+
+  @IsOptional()
+  @IsString()
+  @IsIn([...LOAN_AMT_VALUES], { message: 'Invalid loan amount range' })
+  loanAmt?: string;
+
+  @IsOptional()
+  @IsString()
+  @IsIn([...INS_TYPE_VALUES], { message: 'Invalid insurance type' })
+  insType?: string;
 }
 
 class CreateLeadDto {
@@ -108,6 +132,16 @@ class CreateLeadDto {
     message: 'Invalid category (use service slug with underscores, e.g. personal_loan)',
   })
   category: string;
+
+  @IsOptional()
+  @IsString()
+  @IsIn([...LOAN_AMT_VALUES], { message: 'Invalid loan amount range' })
+  loanAmt?: string;
+
+  @IsOptional()
+  @IsString()
+  @IsIn([...INS_TYPE_VALUES], { message: 'Invalid insurance type' })
+  insType?: string;
 }
 
 class UpdateLeadDto {
@@ -157,6 +191,16 @@ class UpdateLeadDto {
   @IsOptional()
   @IsString()
   notes?: string;
+
+  @IsOptional()
+  @IsString()
+  @IsIn([...LOAN_AMT_VALUES], { message: 'Invalid loan amount range' })
+  loanAmt?: string | null;
+
+  @IsOptional()
+  @IsString()
+  @IsIn([...INS_TYPE_VALUES], { message: 'Invalid insurance type' })
+  insType?: string | null;
 }
 
 @Injectable()
@@ -263,14 +307,25 @@ export class LeadsService {
       return null;
     }
 
-    return this.updateById(id, {
+    const category = (dto.category?.trim() || String(row['category'] ?? '')).trim();
+    const update: UpdateLeadDto = {
       pan: panUpper,
       fullName: dto.fullName.trim(),
       category: dto.category,
       notes: dto.aadhaar?.trim()
         ? `Aadhaar: ${dto.aadhaar.trim()}`
         : undefined,
-    });
+    };
+
+    if (category === 'personal_loan') {
+      update.loanAmt = dto.loanAmt ?? null;
+      update.insType = null;
+    } else if (category === 'insurance') {
+      update.insType = dto.insType ?? null;
+      update.loanAmt = null;
+    }
+
+    return this.updateById(id, update);
   }
 
   async create(dto: CreateLeadDto): Promise<Record<string, unknown> | null> {
@@ -296,6 +351,13 @@ export class LeadsService {
 
     if (dto.userId && dto.userId.trim()) {
       payload.user_id = dto.userId.trim();
+    }
+
+    if (dto.category === 'personal_loan' && dto.loanAmt) {
+      payload.loan_amt = dto.loanAmt;
+    }
+    if (dto.category === 'insurance' && dto.insType) {
+      payload.ins_type = dto.insType;
     }
 
     const { data, error } = await this.leads.insert(payload).select().single();
@@ -369,6 +431,8 @@ export class LeadsService {
     if (dto.category != null) payload.category = dto.category;
     if (dto.status != null) payload.status = dto.status;
     if (dto.notes !== undefined) payload.notes = dto.notes?.trim() || null;
+    if (dto.loanAmt !== undefined) payload.loan_amt = dto.loanAmt ?? null;
+    if (dto.insType !== undefined) payload.ins_type = dto.insType ?? null;
 
     if (dto.pan != null) {
       const panUpper = dto.pan.trim().toUpperCase();
@@ -476,6 +540,8 @@ export class LeadsController {
           email: dto.email,
           pincode: dto.pincode,
           requiredAmount: dto.requiredAmount,
+          loanAmt: dto.category === 'personal_loan' ? dto.loanAmt ?? null : null,
+          insType: dto.category === 'insurance' ? dto.insType ?? null : null,
         });
         if (!updated) {
           return { success: false, message: 'Failed to update lead' };
