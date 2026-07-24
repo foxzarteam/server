@@ -20,17 +20,11 @@ import {
   MSG_OTP_DAILY_LIMIT,
   MSG_OTP_FIREBASE_MISMATCH,
   MSG_OTP_FIREBASE_NOT_CONFIGURED,
-  MSG_OTP_INVALID_EXPIRED,
-  MSG_OTP_MAX_ATTEMPTS,
   MSG_OTP_SESSION_FAILED,
   MSG_OTP_SENT,
   MSG_OTP_VERIFIED,
   MSG_OTP_VERIFY_FAILED,
-  OTP_EXPIRY_MINUTES,
-  OTP_LENGTH,
-  OTP_MAX_ATTEMPTS,
   OTP_MAX_SENDS_PER_WINDOW,
-  OTP_SEND_ATTEMPT_CODE,
   OTP_SEND_WINDOW_HOURS,
   PHONE_VERIFICATION_WINDOW_MINUTES,
   TABLE_OTP_SESSIONS,
@@ -42,18 +36,6 @@ class SendOtpDto {
   @Length(10, 10, { message: 'mobileNumber must be 10 digits' })
   @Matches(/^[6-9]\d{9}$/, { message: 'Invalid Indian mobile number' })
   mobileNumber: string;
-}
-
-class VerifyOtpDto {
-  @IsString()
-  @Length(10, 10, { message: 'mobileNumber must be 10 digits' })
-  @Matches(/^[6-9]\d{9}$/, { message: 'Invalid Indian mobile number' })
-  mobileNumber: string;
-
-  @IsString()
-  @Length(6, 6, { message: 'otp must be 6 digits' })
-  @Matches(/^\d{6}$/, { message: 'otp must be 6 digits' })
-  otp: string;
 }
 
 class VerifyFirebaseOtpDto {
@@ -74,6 +56,12 @@ export type OtpResult = {
   retryAfterHours?: number;
 };
 
+/**
+ * Simple otp_sessions usage:
+ * - 1 send → 1 row (is_verified=false, created_at=now)
+ * - verify → UPDATE that row (is_verified=true) — no second insert
+ * - rate limit = count rows for mobile in last 24h
+ */
 @Injectable()
 export class OtpService {
   constructor(@Inject(SUPABASE_CLIENT) private readonly supabase: SupabaseClient) {}
@@ -82,35 +70,19 @@ export class OtpService {
     return this.supabase.from(TABLE_OTP_SESSIONS);
   }
 
-  private generateOtp(): string {
-    let otp = '';
-    for (let i = 0; i < OTP_LENGTH; i++) {
-      otp += Math.floor(Math.random() * 10);
-    }
-    return otp;
-  }
-
-  private getExpiryTime(): string {
-    const d = new Date();
-    d.setMinutes(d.getMinutes() + OTP_EXPIRY_MINUTES);
-    return d.toISOString();
-  }
-
   private sendWindowSinceIso(): string {
     return new Date(Date.now() - OTP_SEND_WINDOW_HOURS * 60 * 60 * 1000).toISOString();
   }
 
-  /** Count Firebase/SMS send attempts for this mobile in the rolling window. */
-  private async countSendAttempts(mobileNumber: string): Promise<number> {
+  private async countSends(mobileNumber: string): Promise<number> {
     const { count, error } = await this.otpSessions
       .select('id', { count: 'exact', head: true })
       .eq('mobile_number', mobileNumber.trim())
-      .eq('otp_code', OTP_SEND_ATTEMPT_CODE)
       .gte('created_at', this.sendWindowSinceIso());
 
     if (error) {
       if (process.env.NODE_ENV !== 'production') {
-        console.error('OtpService.countSendAttempts', error);
+        console.error('OtpService.countSends', error);
       }
       return 0;
     }
@@ -118,12 +90,11 @@ export class OtpService {
   }
 
   /**
-   * Gate OTP sends: max OTP_MAX_SENDS_PER_WINDOW per mobile per OTP_SEND_WINDOW_HOURS.
-   * Call this before Firebase (or custom) SMS is triggered from the client.
+   * Before Firebase SMS: check 24h limit, then insert ONE send row.
    */
   async requestSend(dto: SendOtpDto): Promise<OtpResult> {
     const mobile = dto.mobileNumber.trim();
-    const used = await this.countSendAttempts(mobile);
+    const used = await this.countSends(mobile);
 
     if (used >= OTP_MAX_SENDS_PER_WINDOW) {
       return {
@@ -134,24 +105,16 @@ export class OtpService {
       };
     }
 
-    const expiresAt = new Date(
-      Date.now() + OTP_SEND_WINDOW_HOURS * 60 * 60 * 1000,
-    ).toISOString();
-
     const { error } = await this.otpSessions.insert({
       mobile_number: mobile,
-      otp_code: OTP_SEND_ATTEMPT_CODE,
-      expires_at: expiresAt,
       is_verified: false,
-      attempts: 0,
-      max_attempts: 1,
     });
 
     if (error) {
       if (process.env.NODE_ENV !== 'production') {
         console.error('OtpService.requestSend', error);
       }
-      // Don't block the customer if rate-limit logging fails — allow send.
+      // Fail open — don't block SMS if logging fails
       return {
         success: true,
         message: MSG_OTP_SENT,
@@ -162,52 +125,27 @@ export class OtpService {
     return {
       success: true,
       message: MSG_OTP_SENT,
-      remainingSends: OTP_MAX_SENDS_PER_WINDOW - used - 1,
+      remainingSends: Math.max(0, OTP_MAX_SENDS_PER_WINDOW - used - 1),
     };
   }
 
-  private async createOtpSession(
-    mobileNumber: string,
-    otp: string,
-    expiresAt: string,
-  ): Promise<OtpResult | null> {
-    const { error } = await this.otpSessions.insert({
-      mobile_number: mobileNumber,
-      otp_code: otp,
-      expires_at: expiresAt,
-      is_verified: false,
-      attempts: 0,
-      max_attempts: OTP_MAX_ATTEMPTS,
-    });
-    if (error) {
-      if (process.env.NODE_ENV !== 'production') {
-        console.error('OtpService.createOtpSession', error);
-      }
-      return { success: false, message: MSG_OTP_SESSION_FAILED };
-    }
-    return null;
-  }
-
+  /** Same as requestSend (legacy /api/otp/send). */
   async send(dto: SendOtpDto): Promise<OtpResult> {
-    const gate = await this.requestSend(dto);
-    if (!gate.success) return gate;
-
-    const otp = this.generateOtp();
-    const expiresAt = this.getExpiryTime();
-    const sessionError = await this.createOtpSession(dto.mobileNumber, otp, expiresAt);
-    if (sessionError) return sessionError;
-    return {
-      success: true,
-      message: MSG_OTP_SENT,
-      remainingSends: gate.remainingSends,
-    };
+    return this.requestSend(dto);
   }
 
   async getLatestOtpSessions(
     limit = 10,
-  ): Promise<Array<{ mobile_number: string; otp_code: string; created_at: string }>> {
+  ): Promise<
+    Array<{
+      mobile_number: string;
+      is_verified: boolean;
+      created_at: string;
+      verified_at: string | null;
+    }>
+  > {
     const { data, error } = await this.otpSessions
-      .select('mobile_number, otp_code, created_at')
+      .select('mobile_number, is_verified, created_at, verified_at')
       .order('created_at', { ascending: false })
       .limit(limit);
 
@@ -215,73 +153,68 @@ export class OtpService {
 
     return data.map((row: Record<string, unknown>) => ({
       mobile_number: String(row.mobile_number ?? ''),
-      otp_code: String(row.otp_code ?? ''),
+      is_verified: Boolean(row.is_verified),
       created_at: String(row.created_at ?? ''),
+      verified_at: row.verified_at != null ? String(row.verified_at) : null,
     }));
   }
 
-  async verify(dto: VerifyOtpDto): Promise<OtpResult> {
-    const now = getCurrentIsoTime();
-    const { data: rows, error } = await this.otpSessions
-      .select('id, attempts, max_attempts')
-      .eq('mobile_number', dto.mobileNumber)
-      .eq('otp_code', dto.otp)
-      .eq('is_verified', false)
-      .gt('expires_at', now);
-
-    if (error) {
-      if (process.env.NODE_ENV !== 'production') {
-        console.error('OtpService.verify select', error);
-      }
-      return { success: false, message: MSG_OTP_VERIFY_FAILED };
-    }
-
-    const session = Array.isArray(rows) && rows.length > 0 ? rows[0] : null;
-    if (!session) {
-      return { success: false, message: MSG_OTP_INVALID_EXPIRED };
-    }
-
-    const attempts = (session.attempts as number) ?? 0;
-    const maxAttempts = (session.max_attempts as number) ?? OTP_MAX_ATTEMPTS;
-    if (attempts >= maxAttempts) {
-      return { success: false, message: MSG_OTP_MAX_ATTEMPTS };
-    }
-
-    const { error: updateErr } = await this.otpSessions
-      .update({
-        is_verified: true,
-        verified_at: getCurrentIsoTime(),
-      })
-      .eq('id', session.id);
-
-    if (updateErr) {
-      if (process.env.NODE_ENV !== 'production') {
-        console.error('OtpService.verify update', updateErr);
-      }
-      return { success: false, message: MSG_OTP_VERIFY_FAILED };
-    }
-
-    return { success: true, message: MSG_OTP_VERIFIED };
-  }
-
-  /** Record Firebase phone verification (used by az_web after client sign-in). */
+  /**
+   * Mark latest unverified send for this mobile as verified.
+   * Does NOT insert a second row.
+   */
   async markPhoneVerified(mobileNumber: string): Promise<OtpResult> {
-    const expiresAt = this.getExpiryTime();
-    const { error } = await this.otpSessions.insert({
-      mobile_number: mobileNumber,
-      otp_code: '000000',
-      expires_at: expiresAt,
-      is_verified: true,
-      verified_at: getCurrentIsoTime(),
-      attempts: 0,
-      max_attempts: OTP_MAX_ATTEMPTS,
-    });
-    if (error) {
+    const mobile = mobileNumber.trim();
+    const now = getCurrentIsoTime();
+
+    const { data: rows, error: selectErr } = await this.otpSessions
+      .select('id')
+      .eq('mobile_number', mobile)
+      .eq('is_verified', false)
+      .order('created_at', { ascending: false })
+      .limit(1);
+
+    if (selectErr) {
       if (process.env.NODE_ENV !== 'production') {
-        console.error('OtpService.markPhoneVerified', error);
+        console.error('OtpService.markPhoneVerified select', selectErr);
+      }
+      return { success: false, message: MSG_OTP_VERIFY_FAILED };
+    }
+
+    const latest = Array.isArray(rows) && rows.length > 0 ? rows[0] : null;
+
+    if (latest?.id) {
+      const { error: updateErr } = await this.otpSessions
+        .update({
+          is_verified: true,
+          verified_at: now,
+        })
+        .eq('id', latest.id);
+
+      if (updateErr) {
+        if (process.env.NODE_ENV !== 'production') {
+          console.error('OtpService.markPhoneVerified update', updateErr);
+        }
+        return { success: false, message: MSG_OTP_VERIFY_FAILED };
+      }
+
+      return { success: true, message: MSG_OTP_VERIFIED };
+    }
+
+    // No pending send row (e.g. rate-limit insert was skipped) — one verified row only
+    const { error: insertErr } = await this.otpSessions.insert({
+      mobile_number: mobile,
+      is_verified: true,
+      verified_at: now,
+    });
+
+    if (insertErr) {
+      if (process.env.NODE_ENV !== 'production') {
+        console.error('OtpService.markPhoneVerified insert', insertErr);
       }
       return { success: false, message: MSG_OTP_SESSION_FAILED };
     }
+
     return { success: true, message: MSG_OTP_VERIFIED };
   }
 
@@ -342,17 +275,11 @@ export class OtpController {
     return this.otpService.send(dto);
   }
 
-  /** Check + consume one send slot before Firebase SMS (az_web). */
+  /** Check limit + log one send row before Firebase SMS. */
   @Post('request-send')
   @HttpCode(HttpStatus.OK)
   async requestSend(@Body() dto: SendOtpDto) {
     return this.otpService.requestSend(dto);
-  }
-
-  @Post('verify')
-  @HttpCode(HttpStatus.OK)
-  async verify(@Body() dto: VerifyOtpDto) {
-    return this.otpService.verify(dto);
   }
 
   @Post('verify-firebase')
@@ -379,33 +306,29 @@ export class OtpController {
         return res.status(404).json({ error: 'Not found' });
       }
 
-      const entries = await this.otpService.getLatestOtpSessions(10);
-      const rows = live
-        ? ''
-        : entries
-            .map(
-              (e) =>
-                `<tr><td>${this.escapeHtml(e.mobile_number)}</td><td><strong>${e.otp_code}</strong></td><td>${this.escapeHtml(
-                  e.created_at,
-                )}</td></tr>`,
-            )
-            .join('');
+      const entries = await this.otpService.getLatestOtpSessions(20);
+      const rows = entries
+        .map(
+          (e) =>
+            `<tr><td>${this.escapeHtml(e.mobile_number)}</td><td>${e.is_verified ? 'Yes' : 'No'}</td><td>${this.escapeHtml(
+              e.created_at,
+            )}</td><td>${this.escapeHtml(e.verified_at ?? '—')}</td></tr>`,
+        )
+        .join('');
 
       const html = `<!DOCTYPE html>
 <html>
 <head><meta charset="utf-8"><title>OTP Dev</title>
-<style>body{font-family:system-ui;max-width:600px;margin:2rem auto;padding:1rem}table{width:100%;border-collapse:collapse}th,td{padding:0.5rem;text-align:left;border-bottom:1px solid #ddd}th{background:#333;color:#fff}</style>
+<style>body{font-family:system-ui;max-width:720px;margin:2rem auto;padding:1rem}table{width:100%;border-collapse:collapse}th,td{padding:0.5rem;text-align:left;border-bottom:1px solid #ddd}th{background:#333;color:#fff}</style>
 </head>
 <body>
-<h1>OTP Dev Logs</h1>
-<p><strong>LIVE:</strong> ${live ? 'true' : 'false'}</p>
+<h1>OTP Sessions</h1>
+<p><strong>LIVE:</strong> ${live ? 'true' : 'false'} · 1 send = 1 row · verify updates same row</p>
 <table>
-<thead><tr><th>Mobile</th><th>OTP</th><th>Time</th></tr></thead>
+<thead><tr><th>Mobile</th><th>Verified</th><th>Sent at</th><th>Verified at</th></tr></thead>
 <tbody>${
         rows ||
-        (live
-          ? '<tr><td colspan="3">LIVE=true. Firebase Phone Auth is active, so /api/otp/send is not used.</td></tr>'
-          : '<tr><td colspan="3">No OTPs yet. Send one via POST /api/otp/send</td></tr>')
+        '<tr><td colspan="4">No OTP sessions yet.</td></tr>'
       }</tbody>
 </table>
 </body>
@@ -416,7 +339,7 @@ export class OtpController {
       return res
         .type('text/html')
         .send(
-          `<!DOCTYPE html><html><body><h1>OTP Dev Logs</h1><p>Error fetching OTP logs.</p></body></html>`,
+          `<!DOCTYPE html><html><body><h1>OTP Sessions</h1><p>Error fetching logs.</p></body></html>`,
         );
     }
   }

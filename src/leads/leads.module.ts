@@ -14,6 +14,8 @@ import {
   Delete,
   UnauthorizedException,
   NotFoundException,
+  ConflictException,
+  BadRequestException,
 } from '@nestjs/common';
 import { SupabaseClient } from '@supabase/supabase-js';
 import {
@@ -246,6 +248,105 @@ export class LeadsService {
     return (data as Record<string, unknown>) ?? null;
   }
 
+  async getByPan(pan: string): Promise<Record<string, unknown> | null> {
+    const panUpper = pan.trim().toUpperCase();
+    const { data, error } = await this.leads
+      .select()
+      .eq('pan', panUpper)
+      .eq('is_active', true)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (error) {
+      if (process.env.NODE_ENV !== 'production') {
+        console.error('LeadsService.getByPan', error);
+      }
+      return null;
+    }
+
+    return (data as Record<string, unknown>) ?? null;
+  }
+
+  /**
+   * Create lead BEFORE OTP (otp_verify = 0).
+   * Rejects if mobile or PAN already exists.
+   */
+  async applyLead(dto: CreateLeadDto): Promise<{
+    ok: boolean;
+    lead?: Record<string, unknown>;
+    message?: string;
+  }> {
+    const panUpper = dto.pan.trim().toUpperCase();
+    if (!/^[A-Z]{5}[0-9]{4}[A-Z]{1}$/.test(panUpper)) {
+      return { ok: false, message: 'Invalid PAN format.' };
+    }
+
+    const mobile = dto.mobileNumber.trim();
+    const byMobile = await this.getByMobile(mobile);
+    if (byMobile) {
+      return {
+        ok: false,
+        message: 'This mobile number already exists. Please use a different number.',
+      };
+    }
+
+    const byPan = await this.getByPan(panUpper);
+    if (byPan) {
+      return {
+        ok: false,
+        message: 'This PAN already exists. Please use a different PAN.',
+      };
+    }
+
+    const payload: Record<string, unknown> = {
+      pan: panUpper,
+      mobile_number: mobile,
+      full_name: dto.fullName.trim(),
+      email: dto.email?.trim() || null,
+      pincode: dto.pincode?.trim() || null,
+      required_amount: dto.requiredAmount || null,
+      category: dto.category || 'personal_loan',
+      status: 'pending',
+      is_active: true,
+      otp_verify: 0,
+    };
+
+    if (dto.userId?.trim()) payload.user_id = dto.userId.trim();
+    if (dto.category === 'personal_loan' && dto.loanAmt) payload.loan_amt = dto.loanAmt;
+    if (dto.category === 'insurance' && dto.insType) payload.ins_type = dto.insType;
+
+    const { data, error } = await this.leads.insert(payload).select().single();
+    if (error) {
+      if (process.env.NODE_ENV !== 'production') {
+        console.error('LeadsService.applyLead', error, payload);
+      }
+      return { ok: false, message: 'Failed to create lead. Please try again.' };
+    }
+
+    return { ok: true, lead: data as Record<string, unknown> };
+  }
+
+  async markOtpVerified(leadId: string): Promise<Record<string, unknown> | null> {
+    const { data, error } = await this.leads
+      .update({
+        otp_verify: 1,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', leadId)
+      .select()
+      .single();
+
+    if (error) {
+      if (process.env.NODE_ENV !== 'production') {
+        console.error('LeadsService.markOtpVerified', error);
+      }
+      return null;
+    }
+
+    return data as Record<string, unknown>;
+  }
+
   async createDraft(mobileNumber: string, category: string): Promise<Record<string, unknown> | null> {
     const payload: Record<string, unknown> = {
       pan: LEAD_DRAFT_PAN,
@@ -352,6 +453,7 @@ export class LeadsService {
       category: dto.category || 'personal_loan',
       status: 'pending',
       is_active: true,
+      otp_verify: 0,
     };
 
     if (dto.userId && dto.userId.trim()) {
@@ -517,6 +619,35 @@ export class LeadsController {
     }
 
     return { success: true, data: result.lead };
+  }
+
+  /**
+   * Public apply: save lead with otp_verify=0 BEFORE OTP.
+   * Blocks duplicate mobile / PAN.
+   */
+  @Post('apply')
+  @HttpCode(HttpStatus.CREATED)
+  async apply(@Body() dto: CreateLeadDto) {
+    const result = await this.leadsService.applyLead(dto);
+    if (!result.ok || !result.lead) {
+      const message = result.message || 'Failed to create lead';
+      if (message.toLowerCase().includes('already exists')) {
+        throw new ConflictException(message);
+      }
+      throw new BadRequestException(message);
+    }
+    return { success: true, data: result.lead };
+  }
+
+  /** After Firebase OTP success — set otp_verify = 1 */
+  @Patch(':id/otp-verify')
+  @HttpCode(HttpStatus.OK)
+  async markOtpVerified(@Param('id') id: string) {
+    const lead = await this.leadsService.markOtpVerified(id);
+    if (!lead) {
+      throw new BadRequestException('Failed to update OTP verification status.');
+    }
+    return { success: true, data: lead };
   }
 
   @Patch(':id/complete')
