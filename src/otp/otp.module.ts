@@ -81,20 +81,29 @@ export class OtpService {
       .gte('created_at', this.sendWindowSinceIso());
 
     if (error) {
-      if (process.env.NODE_ENV !== 'production') {
-        console.error('OtpService.countSends', error);
-      }
-      return 0;
+      console.error('OtpService.countSends', error);
+      // Fail closed: treat as unknown — caller should not allow send
+      throw new Error('OTP_COUNT_FAILED');
     }
     return count ?? 0;
   }
 
   /**
    * Before Firebase SMS: check 24h limit, then insert ONE send row.
+   * Limit = COUNT(otp_sessions rows for this mobile in last 24h). Max 5.
    */
   async requestSend(dto: SendOtpDto): Promise<OtpResult> {
     const mobile = dto.mobileNumber.trim();
-    const used = await this.countSends(mobile);
+
+    let used = 0;
+    try {
+      used = await this.countSends(mobile);
+    } catch {
+      return {
+        success: false,
+        message: 'Could not check OTP limit. Please try again.',
+      };
+    }
 
     if (used >= OTP_MAX_SENDS_PER_WINDOW) {
       return {
@@ -105,27 +114,27 @@ export class OtpService {
       };
     }
 
-    const { error } = await this.otpSessions.insert({
-      mobile_number: mobile,
-      is_verified: false,
-    });
+    const { data, error } = await this.otpSessions
+      .insert({
+        mobile_number: mobile,
+        is_verified: false,
+      })
+      .select('id')
+      .single();
 
-    if (error) {
-      if (process.env.NODE_ENV !== 'production') {
-        console.error('OtpService.requestSend', error);
-      }
-      // Fail open — don't block SMS if logging fails
+    if (error || !data) {
+      console.error('OtpService.requestSend insert', error);
       return {
-        success: true,
-        message: MSG_OTP_SENT,
-        remainingSends: Math.max(0, OTP_MAX_SENDS_PER_WINDOW - used - 1),
+        success: false,
+        message: MSG_OTP_SESSION_FAILED,
       };
     }
 
+    const remaining = Math.max(0, OTP_MAX_SENDS_PER_WINDOW - used - 1);
     return {
       success: true,
       message: MSG_OTP_SENT,
-      remainingSends: Math.max(0, OTP_MAX_SENDS_PER_WINDOW - used - 1),
+      remainingSends: remaining,
     };
   }
 

@@ -326,7 +326,11 @@ export class LeadsService {
     };
 
     if (dto.userId?.trim()) payload.user_id = dto.userId.trim();
-    if (dto.category === 'personal_loan' && dto.loanAmt) payload.loan_amt = dto.loanAmt;
+    // Exact slider amount → required_amount; do not store range in loan_amt
+    if (dto.category === 'personal_loan') {
+      payload.loan_amt = null;
+      if (dto.requiredAmount != null) payload.required_amount = dto.requiredAmount;
+    }
     if (dto.category === 'insurance' && dto.insType) payload.ins_type = dto.insType;
 
     const { data, error } = await this.leads.insert(payload).select().single();
@@ -452,8 +456,9 @@ export class LeadsService {
       payload.user_id = dto.userId.trim();
     }
 
-    if (dto.category === 'personal_loan' && dto.loanAmt) {
-      payload.loan_amt = dto.loanAmt;
+    if (dto.category === 'personal_loan') {
+      payload.loan_amt = null;
+      if (dto.requiredAmount != null) payload.required_amount = dto.requiredAmount;
     }
     if (dto.category === 'insurance' && dto.insType) {
       payload.ins_type = dto.insType;
