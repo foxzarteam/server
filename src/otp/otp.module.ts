@@ -24,11 +24,11 @@ import {
   MSG_OTP_SENT,
   MSG_OTP_VERIFIED,
   MSG_OTP_VERIFY_FAILED,
-  OTP_MAX_SENDS_PER_WINDOW,
-  OTP_SEND_WINDOW_HOURS,
+  OTP_MAX_SENDS_PER_DAY,
   PHONE_VERIFICATION_WINDOW_MINUTES,
   TABLE_OTP_SESSIONS,
   getCurrentIsoTime,
+  startOfTodayIstIso,
 } from '../common/constants';
 
 class SendOtpDto {
@@ -53,14 +53,15 @@ export type OtpResult = {
   success: boolean;
   message: string;
   remainingSends?: number;
-  retryAfterHours?: number;
+  /** True when daily limit hit — allow again next calendar day (IST). */
+  retryNextDay?: boolean;
 };
 
 /**
  * Simple otp_sessions usage:
  * - 1 send → 1 row (is_verified=false, created_at=now)
  * - verify → UPDATE that row (is_verified=true) — no second insert
- * - rate limit = count rows for mobile in last 24h
+ * - rate limit = count rows for mobile since start of today (IST). Max 5/day.
  */
 @Injectable()
 export class OtpService {
@@ -70,34 +71,29 @@ export class OtpService {
     return this.supabase.from(TABLE_OTP_SESSIONS);
   }
 
-  private sendWindowSinceIso(): string {
-    return new Date(Date.now() - OTP_SEND_WINDOW_HOURS * 60 * 60 * 1000).toISOString();
-  }
-
-  private async countSends(mobileNumber: string): Promise<number> {
+  private async countSendsToday(mobileNumber: string): Promise<number> {
     const { count, error } = await this.otpSessions
       .select('id', { count: 'exact', head: true })
       .eq('mobile_number', mobileNumber.trim())
-      .gte('created_at', this.sendWindowSinceIso());
+      .gte('created_at', startOfTodayIstIso());
 
     if (error) {
-      console.error('OtpService.countSends', error);
-      // Fail closed: treat as unknown — caller should not allow send
+      console.error('OtpService.countSendsToday', error);
       throw new Error('OTP_COUNT_FAILED');
     }
     return count ?? 0;
   }
 
   /**
-   * Before Firebase SMS: check 24h limit, then insert ONE send row.
-   * Limit = COUNT(otp_sessions rows for this mobile in last 24h). Max 5.
+   * Before Firebase SMS: check today's IST limit, then insert ONE send row.
+   * Max 5 OTPs per mobile per day. Resets next calendar day (IST midnight).
    */
   async requestSend(dto: SendOtpDto): Promise<OtpResult> {
     const mobile = dto.mobileNumber.trim();
 
     let used = 0;
     try {
-      used = await this.countSends(mobile);
+      used = await this.countSendsToday(mobile);
     } catch {
       return {
         success: false,
@@ -105,12 +101,12 @@ export class OtpService {
       };
     }
 
-    if (used >= OTP_MAX_SENDS_PER_WINDOW) {
+    if (used >= OTP_MAX_SENDS_PER_DAY) {
       return {
         success: false,
         message: MSG_OTP_DAILY_LIMIT,
         remainingSends: 0,
-        retryAfterHours: OTP_SEND_WINDOW_HOURS,
+        retryNextDay: true,
       };
     }
 
@@ -130,11 +126,10 @@ export class OtpService {
       };
     }
 
-    const remaining = Math.max(0, OTP_MAX_SENDS_PER_WINDOW - used - 1);
     return {
       success: true,
       message: MSG_OTP_SENT,
-      remainingSends: remaining,
+      remainingSends: Math.max(0, OTP_MAX_SENDS_PER_DAY - used - 1),
     };
   }
 
