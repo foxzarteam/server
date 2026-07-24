@@ -212,10 +212,24 @@ class UpdateLeadDto {
 
 @Injectable()
 export class LeadsService {
-  constructor(@Inject(SUPABASE_CLIENT) private readonly supabase: SupabaseClient) {}
+  constructor(
+    @Inject(SUPABASE_CLIENT) private readonly supabase: SupabaseClient,
+    private readonly otpService: OtpService,
+  ) {}
 
   private get leads() {
     return this.supabase.from(TABLE_LEADS);
+  }
+
+  private async withOtpVerified(
+    leads: Record<string, unknown>[],
+  ): Promise<Record<string, unknown>[]> {
+    const mobiles = leads.map((l) => String(l.mobile_number ?? ''));
+    const verified = await this.otpService.getVerifiedMobiles(mobiles);
+    return leads.map((lead) => ({
+      ...lead,
+      otp_verified: verified.has(String(lead.mobile_number ?? '').trim()),
+    }));
   }
 
   isDraftLead(lead: Record<string, unknown>): boolean {
@@ -269,7 +283,7 @@ export class LeadsService {
   }
 
   /**
-   * Create lead BEFORE OTP (otp_verify = 0).
+   * Create lead BEFORE OTP.
    * Rejects if mobile or PAN already exists.
    */
   async applyLead(dto: CreateLeadDto): Promise<{
@@ -309,7 +323,6 @@ export class LeadsService {
       category: dto.category || 'personal_loan',
       status: 'pending',
       is_active: true,
-      otp_verify: 0,
     };
 
     if (dto.userId?.trim()) payload.user_id = dto.userId.trim();
@@ -325,26 +338,6 @@ export class LeadsService {
     }
 
     return { ok: true, lead: data as Record<string, unknown> };
-  }
-
-  async markOtpVerified(leadId: string): Promise<Record<string, unknown> | null> {
-    const { data, error } = await this.leads
-      .update({
-        otp_verify: 1,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', leadId)
-      .select()
-      .single();
-
-    if (error) {
-      if (process.env.NODE_ENV !== 'production') {
-        console.error('LeadsService.markOtpVerified', error);
-      }
-      return null;
-    }
-
-    return data as Record<string, unknown>;
   }
 
   async createDraft(mobileNumber: string, category: string): Promise<Record<string, unknown> | null> {
@@ -453,7 +446,6 @@ export class LeadsService {
       category: dto.category || 'personal_loan',
       status: 'pending',
       is_active: true,
-      otp_verify: 0,
     };
 
     if (dto.userId && dto.userId.trim()) {
@@ -524,7 +516,8 @@ export class LeadsService {
       return [];
     }
 
-    return (data as Record<string, unknown>[]) || [];
+    const leads = (data as Record<string, unknown>[]) || [];
+    return this.withOtpVerified(leads);
   }
 
   async updateById(id: string, dto: UpdateLeadDto): Promise<Record<string, unknown> | null> {
@@ -622,7 +615,7 @@ export class LeadsController {
   }
 
   /**
-   * Public apply: save lead with otp_verify=0 BEFORE OTP.
+   * Public apply: save lead BEFORE OTP.
    * Blocks duplicate mobile / PAN.
    */
   @Post('apply')
@@ -637,17 +630,6 @@ export class LeadsController {
       throw new BadRequestException(message);
     }
     return { success: true, data: result.lead };
-  }
-
-  /** After Firebase OTP success — set otp_verify = 1 */
-  @Patch(':id/otp-verify')
-  @HttpCode(HttpStatus.OK)
-  async markOtpVerified(@Param('id') id: string) {
-    const lead = await this.leadsService.markOtpVerified(id);
-    if (!lead) {
-      throw new BadRequestException('Failed to update OTP verification status.');
-    }
-    return { success: true, data: lead };
   }
 
   @Patch(':id/complete')

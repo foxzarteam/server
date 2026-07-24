@@ -260,6 +260,32 @@ export class OtpService {
 
     return Array.isArray(data) && data.length > 0;
   }
+
+  /** Mobiles that have at least one verified OTP session. */
+  async getVerifiedMobiles(mobiles: string[]): Promise<Set<string>> {
+    const unique = [
+      ...new Set(mobiles.map((m) => m.trim()).filter((m) => m.length === 10)),
+    ];
+    if (!unique.length) return new Set();
+
+    const { data, error } = await this.otpSessions
+      .select('mobile_number')
+      .in('mobile_number', unique)
+      .eq('is_verified', true);
+
+    if (error) {
+      if (process.env.NODE_ENV !== 'production') {
+        console.error('OtpService.getVerifiedMobiles', error);
+      }
+      return new Set();
+    }
+
+    return new Set(
+      (data ?? []).map((row: { mobile_number?: string }) =>
+        String(row.mobile_number ?? '').trim(),
+      ),
+    );
+  }
 }
 
 @Controller('otp')
