@@ -17,6 +17,7 @@ import { IsString, Length, Matches, MinLength } from 'class-validator';
 import { SUPABASE_CLIENT } from '../config/supabase';
 import { getFirebaseAdmin, normalizeIndianMobile } from '../firebase/firebase-admin';
 import {
+  MSG_OTP_DAILY_LIMIT,
   MSG_OTP_FIREBASE_MISMATCH,
   MSG_OTP_FIREBASE_NOT_CONFIGURED,
   MSG_OTP_INVALID_EXPIRED,
@@ -28,6 +29,9 @@ import {
   OTP_EXPIRY_MINUTES,
   OTP_LENGTH,
   OTP_MAX_ATTEMPTS,
+  OTP_MAX_SENDS_PER_WINDOW,
+  OTP_SEND_ATTEMPT_CODE,
+  OTP_SEND_WINDOW_HOURS,
   PHONE_VERIFICATION_WINDOW_MINUTES,
   TABLE_OTP_SESSIONS,
   getCurrentIsoTime,
@@ -63,7 +67,12 @@ class VerifyFirebaseOtpDto {
   idToken: string;
 }
 
-export type OtpResult = { success: boolean; message: string };
+export type OtpResult = {
+  success: boolean;
+  message: string;
+  remainingSends?: number;
+  retryAfterHours?: number;
+};
 
 @Injectable()
 export class OtpService {
@@ -85,6 +94,71 @@ export class OtpService {
     const d = new Date();
     d.setMinutes(d.getMinutes() + OTP_EXPIRY_MINUTES);
     return d.toISOString();
+  }
+
+  private sendWindowSinceIso(): string {
+    return new Date(Date.now() - OTP_SEND_WINDOW_HOURS * 60 * 60 * 1000).toISOString();
+  }
+
+  /** Count Firebase/SMS send attempts for this mobile in the rolling window. */
+  private async countSendAttempts(mobileNumber: string): Promise<number> {
+    const { count, error } = await this.otpSessions
+      .select('id', { count: 'exact', head: true })
+      .eq('mobile_number', mobileNumber.trim())
+      .eq('otp_code', OTP_SEND_ATTEMPT_CODE)
+      .gte('created_at', this.sendWindowSinceIso());
+
+    if (error) {
+      if (process.env.NODE_ENV !== 'production') {
+        console.error('OtpService.countSendAttempts', error);
+      }
+      return 0;
+    }
+    return count ?? 0;
+  }
+
+  /**
+   * Gate OTP sends: max OTP_MAX_SENDS_PER_WINDOW per mobile per OTP_SEND_WINDOW_HOURS.
+   * Call this before Firebase (or custom) SMS is triggered from the client.
+   */
+  async requestSend(dto: SendOtpDto): Promise<OtpResult> {
+    const mobile = dto.mobileNumber.trim();
+    const used = await this.countSendAttempts(mobile);
+
+    if (used >= OTP_MAX_SENDS_PER_WINDOW) {
+      return {
+        success: false,
+        message: MSG_OTP_DAILY_LIMIT,
+        remainingSends: 0,
+        retryAfterHours: OTP_SEND_WINDOW_HOURS,
+      };
+    }
+
+    const expiresAt = new Date(
+      Date.now() + OTP_SEND_WINDOW_HOURS * 60 * 60 * 1000,
+    ).toISOString();
+
+    const { error } = await this.otpSessions.insert({
+      mobile_number: mobile,
+      otp_code: OTP_SEND_ATTEMPT_CODE,
+      expires_at: expiresAt,
+      is_verified: false,
+      attempts: 0,
+      max_attempts: 1,
+    });
+
+    if (error) {
+      if (process.env.NODE_ENV !== 'production') {
+        console.error('OtpService.requestSend', error);
+      }
+      return { success: false, message: MSG_OTP_SESSION_FAILED };
+    }
+
+    return {
+      success: true,
+      message: MSG_OTP_SENT,
+      remainingSends: OTP_MAX_SENDS_PER_WINDOW - used - 1,
+    };
   }
 
   private async createOtpSession(
@@ -110,11 +184,18 @@ export class OtpService {
   }
 
   async send(dto: SendOtpDto): Promise<OtpResult> {
+    const gate = await this.requestSend(dto);
+    if (!gate.success) return gate;
+
     const otp = this.generateOtp();
     const expiresAt = this.getExpiryTime();
     const sessionError = await this.createOtpSession(dto.mobileNumber, otp, expiresAt);
     if (sessionError) return sessionError;
-    return { success: true, message: MSG_OTP_SENT };
+    return {
+      success: true,
+      message: MSG_OTP_SENT,
+      remainingSends: gate.remainingSends,
+    };
   }
 
   async getLatestOtpSessions(
@@ -254,6 +335,13 @@ export class OtpController {
   @HttpCode(HttpStatus.OK)
   async send(@Body() dto: SendOtpDto) {
     return this.otpService.send(dto);
+  }
+
+  /** Check + consume one send slot before Firebase SMS (az_web). */
+  @Post('request-send')
+  @HttpCode(HttpStatus.OK)
+  async requestSend(@Body() dto: SendOtpDto) {
+    return this.otpService.requestSend(dto);
   }
 
   @Post('verify')

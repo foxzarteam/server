@@ -12,6 +12,11 @@ export const TABLE_AUTH = 'auth';
 export const OTP_LENGTH = 6;
 export const OTP_EXPIRY_MINUTES = 5;
 export const OTP_MAX_ATTEMPTS = 3;
+/** Max OTP SMS / Firebase send attempts per mobile number in a rolling window. */
+export const OTP_MAX_SENDS_PER_WINDOW = 5;
+export const OTP_SEND_WINDOW_HOURS = 24;
+/** Marker stored in otp_sessions.otp_code for send-rate accounting (Firebase flow). */
+export const OTP_SEND_ATTEMPT_CODE = 'SEND_ATTEMPT';
 
 export const MSG_OTP_SESSION_FAILED = 'Failed to create OTP session.';
 export const MSG_OTP_SENT = 'OTP sent successfully.';
@@ -23,6 +28,8 @@ export const MSG_OTP_FIREBASE_NOT_CONFIGURED =
   'Firebase verification is not configured on the server.';
 export const MSG_OTP_FIREBASE_MISMATCH = 'Mobile number does not match Firebase token.';
 export const MSG_OTP_PHONE_NOT_VERIFIED = 'Please verify your mobile number with OTP first.';
+export const MSG_OTP_DAILY_LIMIT =
+  'Is mobile number par OTP ki limit (5) puri ho chuki hai. Kripya 24 hours baad dobara try karein.';
 export const PHONE_VERIFICATION_WINDOW_MINUTES = 30;
 
 export const MSG_USER_CREATE_FAILED = 'Failed to create user';
