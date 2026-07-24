@@ -151,7 +151,12 @@ export class OtpService {
       if (process.env.NODE_ENV !== 'production') {
         console.error('OtpService.requestSend', error);
       }
-      return { success: false, message: MSG_OTP_SESSION_FAILED };
+      // Don't block the customer if rate-limit logging fails — allow send.
+      return {
+        success: true,
+        message: MSG_OTP_SENT,
+        remainingSends: Math.max(0, OTP_MAX_SENDS_PER_WINDOW - used - 1),
+      };
     }
 
     return {

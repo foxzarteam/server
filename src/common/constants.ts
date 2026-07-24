@@ -15,8 +15,8 @@ export const OTP_MAX_ATTEMPTS = 3;
 /** Max OTP SMS / Firebase send attempts per mobile number in a rolling window. */
 export const OTP_MAX_SENDS_PER_WINDOW = 5;
 export const OTP_SEND_WINDOW_HOURS = 24;
-/** Marker stored in otp_sessions.otp_code for send-rate accounting (Firebase flow). */
-export const OTP_SEND_ATTEMPT_CODE = 'SEND_ATTEMPT';
+/** Marker stored in otp_sessions.otp_code for send-rate accounting (must be 6 digits — DB constraint). */
+export const OTP_SEND_ATTEMPT_CODE = "999991";
 
 export const MSG_OTP_SESSION_FAILED = 'Failed to create OTP session.';
 export const MSG_OTP_SENT = 'OTP sent successfully.';
