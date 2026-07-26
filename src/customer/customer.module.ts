@@ -130,7 +130,10 @@ export class CustomerService {
   ) {}
 
   async getApplications(mobileNumber: string): Promise<CustomerApplication[]> {
-    const rows = await this.leadsService.listByMobile(mobileNumber.trim());
+    // Skip per-row OTP lookup — dashboard only needs lead fields (faster login/load).
+    const rows = await this.leadsService.listByMobile(mobileNumber.trim(), {
+      includeOtpVerified: false,
+    });
     return rows
       .filter((row) => !this.leadsService.isDraftLead(row))
       .map(sanitizeApplication)
@@ -138,8 +141,10 @@ export class CustomerService {
   }
 
   async mobileHasApplication(mobileNumber: string): Promise<boolean> {
-    const apps = await this.getApplications(mobileNumber);
-    return apps.length > 0;
+    const rows = await this.leadsService.listByMobile(mobileNumber.trim(), {
+      includeOtpVerified: false,
+    });
+    return rows.some((row) => !this.leadsService.isDraftLead(row));
   }
 
   /** Profile is derived from the customer's leads (newest lead wins). */
@@ -147,9 +152,9 @@ export class CustomerService {
     const mobile = mobileNumber.trim();
     if (!mobile) return null;
 
-    const rows = (await this.leadsService.listByMobile(mobile)).filter(
-      (row) => !this.leadsService.isDraftLead(row),
-    );
+    const rows = (
+      await this.leadsService.listByMobile(mobile, { includeOtpVerified: false })
+    ).filter((row) => !this.leadsService.isDraftLead(row));
 
     if (rows.length === 0) {
       // Session can still be valid after soft-deleting all apps.
@@ -187,9 +192,9 @@ export class CustomerService {
     dto: { fullName: string; email?: string },
   ): Promise<{ ok: boolean; message?: string; profile?: CustomerProfile }> {
     const mobile = mobileNumber.trim();
-    const apps = (await this.leadsService.listByMobile(mobile)).filter(
-      (row) => !this.leadsService.isDraftLead(row),
-    );
+    const apps = (
+      await this.leadsService.listByMobile(mobile, { includeOtpVerified: false })
+    ).filter((row) => !this.leadsService.isDraftLead(row));
     if (apps.length === 0) {
       // No active applications — keep session name only (cannot persist to leads).
       return {
@@ -247,18 +252,21 @@ export class CustomerService {
     applications?: CustomerApplication[];
   }> {
     const mobile = mobileNumber.trim();
-    const verified = await this.otpService.verifyFirebaseToken({
-      mobileNumber: mobile,
-      idToken,
-    });
-    if (!verified.success) {
+
+    // Verify Firebase token once, then mark OTP session + load apps in parallel.
+    const tokenOk = await this.otpService.assertFirebaseIdToken(mobile, idToken);
+    if (!tokenOk.success) {
       return {
         ok: false,
-        message: verified.message || 'OTP verification expired. Please verify again.',
+        message: tokenOk.message || 'OTP verification expired. Please verify again.',
       };
     }
 
-    const applications = await this.getApplications(mobile);
+    const [, applications] = await Promise.all([
+      this.otpService.markPhoneVerified(mobile),
+      this.getApplications(mobile),
+    ]);
+
     if (applications.length === 0) {
       return {
         ok: false,

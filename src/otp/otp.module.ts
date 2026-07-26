@@ -223,21 +223,34 @@ export class OtpService {
   }
 
   async verifyFirebaseToken(dto: VerifyFirebaseOtpDto): Promise<OtpResult> {
+    const checked = await this.assertFirebaseIdToken(
+      dto.mobileNumber.trim(),
+      dto.idToken,
+    );
+    if (!checked.success) return checked;
+    return this.markPhoneVerified(dto.mobileNumber.trim());
+  }
+
+  /** Verify Firebase idToken matches mobile — no DB write (fast path for login). */
+  async assertFirebaseIdToken(
+    mobileNumber: string,
+    idToken: string,
+  ): Promise<OtpResult> {
     const app = getFirebaseAdmin();
     if (!app) {
       return { success: false, message: MSG_OTP_FIREBASE_NOT_CONFIGURED };
     }
 
     try {
-      const decoded = await app.auth().verifyIdToken(dto.idToken);
+      const decoded = await app.auth().verifyIdToken(idToken);
       const tokenMobile = normalizeIndianMobile(decoded.phone_number);
-      if (!tokenMobile || tokenMobile !== dto.mobileNumber.trim()) {
+      if (!tokenMobile || tokenMobile !== mobileNumber.trim()) {
         return { success: false, message: MSG_OTP_FIREBASE_MISMATCH };
       }
-      return this.markPhoneVerified(dto.mobileNumber.trim());
+      return { success: true, message: MSG_OTP_VERIFIED };
     } catch (e) {
       if (process.env.NODE_ENV !== 'production') {
-        console.error('OtpService.verifyFirebaseToken', e);
+        console.error('OtpService.assertFirebaseIdToken', e);
       }
       return { success: false, message: MSG_OTP_VERIFY_FAILED };
     }

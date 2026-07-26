@@ -130,7 +130,10 @@ export class LeadsService {
   }
 
   /** All active leads for a mobile (newest first). Used by customer track status. */
-  async listByMobile(mobileNumber: string): Promise<Record<string, unknown>[]> {
+  async listByMobile(
+    mobileNumber: string,
+    opts: { includeOtpVerified?: boolean } = {},
+  ): Promise<Record<string, unknown>[]> {
     const mobile = mobileNumber.trim();
     const { data, error } = await this.leads
       .select()
@@ -146,6 +149,9 @@ export class LeadsService {
     }
 
     const leads = (data as Record<string, unknown>[]) || [];
+    if (opts.includeOtpVerified === false) {
+      return this.safeLeads(leads);
+    }
     const withOtp = await this.withOtpVerified(leads);
     return this.safeLeads(withOtp);
   }
