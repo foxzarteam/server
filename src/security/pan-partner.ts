@@ -47,7 +47,7 @@ export async function withDecryptedPanForPartner(
   }
 
   try {
-    await audit.record({
+    const audited = await audit.record({
       leadId: ctx.leadId,
       action: 'partner_send',
       adminId: ctx.adminId,
@@ -60,10 +60,12 @@ export async function withDecryptedPanForPartner(
       reason: ctx.reason ?? 'Outbound lending partner transmission',
       metadata: { pan_masked: maskPan(plain) },
     });
+    if (!audited) {
+      return { ok: false, message: 'Audit logging failed; PAN not sent' };
+    }
     await handler(plain);
     return { ok: true };
   } finally {
-    // Best-effort scrub of local binding (GC will reclaim).
     plain = '';
   }
 }

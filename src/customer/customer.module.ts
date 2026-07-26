@@ -145,10 +145,23 @@ export class CustomerService {
   /** Profile is derived from the customer's leads (newest lead wins). */
   async getProfile(mobileNumber: string): Promise<CustomerProfile | null> {
     const mobile = mobileNumber.trim();
+    if (!mobile) return null;
+
     const rows = (await this.leadsService.listByMobile(mobile)).filter(
       (row) => !this.leadsService.isDraftLead(row),
     );
-    if (rows.length === 0) return null;
+
+    if (rows.length === 0) {
+      // Session can still be valid after soft-deleting all apps.
+      return {
+        name: 'Customer',
+        mobile,
+        email: null,
+        pan: null,
+        totalApplications: 0,
+        memberSince: null,
+      };
+    }
 
     const latest = rows[0];
     const oldest = rows[rows.length - 1];
@@ -174,9 +187,22 @@ export class CustomerService {
     dto: { fullName: string; email?: string },
   ): Promise<{ ok: boolean; message?: string; profile?: CustomerProfile }> {
     const mobile = mobileNumber.trim();
-    const existing = await this.getProfile(mobile);
-    if (!existing) {
-      return { ok: false, message: 'Profile not found' };
+    const apps = (await this.leadsService.listByMobile(mobile)).filter(
+      (row) => !this.leadsService.isDraftLead(row),
+    );
+    if (apps.length === 0) {
+      // No active applications — keep session name only (cannot persist to leads).
+      return {
+        ok: true,
+        profile: {
+          name: dto.fullName.trim() || 'Customer',
+          mobile,
+          email: dto.email?.trim() || null,
+          pan: null,
+          totalApplications: 0,
+          memberSince: null,
+        },
+      };
     }
 
     const updated = await this.leadsService.updateProfileByMobile(mobile, {

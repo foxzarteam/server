@@ -161,6 +161,22 @@ export function toSafeLeadRow(row: Record<string, unknown>): Record<string, unkn
   return { ...rest, pan: masked };
 }
 
+/**
+ * Public / applicant-facing lead payload.
+ * Never includes plaintext PAN, ciphertext, hash, or free-text notes.
+ */
+export function sanitizePublicLead(row: Record<string, unknown>): Record<string, unknown> {
+  const safe = toSafeLeadRow(row);
+  const {
+    pan: _pan,
+    notes: _notes,
+    pan_encrypted: _enc,
+    pan_hash: _hash,
+    ...rest
+  } = safe;
+  return rest;
+}
+
 export function timingSafeEqualHex(a: string, b: string): boolean {
   try {
     const ba = Buffer.from(a, 'hex');

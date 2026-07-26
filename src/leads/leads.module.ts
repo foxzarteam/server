@@ -18,16 +18,6 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { SupabaseClient } from '@supabase/supabase-js';
-import {
-  IsIn,
-  IsNumber,
-  IsOptional,
-  IsString,
-  Length,
-  Matches,
-  Min,
-  ValidateIf,
-} from 'class-validator';
 import { SUPABASE_CLIENT } from '../config/supabase';
 import { adminInternalKeyOk } from '../common/admin-internal';
 import { assertMobileAccess, extractIdToken } from '../common/phone-access';
@@ -44,250 +34,23 @@ import {
   toSafeLeadRow,
   decryptPan,
   maskPan,
-  PAN_FORMAT_REGEX,
+  sanitizePublicLead,
 } from '../security/pan-crypto';
 import { PanAuditService } from '../security/pan-audit.service';
 import { withDecryptedPanForPartner } from '../security/pan-partner';
+import { allowRateLimitedAction } from '../security/rate-limit';
+import {
+  AdminCreateLeadDto,
+  CompleteLeadDto,
+  CreateLeadDto,
+  RevealPanDto,
+  StartLeadDto,
+  UpdateLeadDto,
+} from './leads.dto';
 
 /** Placeholder until user completes the second-step form */
 export const LEAD_DRAFT_FULL_NAME = 'Unknown';
 export const LEAD_DRAFT_PAN = 'XXXXX0000X';
-
-/** Matches active service slugs stored as lead category (e.g. personal-loan → personal_loan). */
-const LEAD_CATEGORY_PATTERN = /^[a-z][a-z0-9_]{0,63}$/;
-
-const LOAN_AMT_VALUES = [
-  '25000_100000',
-  '100000_200000',
-  '200000_300000',
-  '300000_400000',
-  '400000_500000',
-  '500000_600000',
-  '600000_700000',
-  '700000_800000',
-  '800000_900000',
-  '900000_1000000',
-] as const;
-
-const INS_TYPE_VALUES = [
-  'life_insurance',
-  'health_insurance',
-  'motor_insurance',
-] as const;
-
-class StartLeadDto {
-  @IsString()
-  @Length(10, 10, { message: 'mobileNumber must be 10 digits' })
-  @Matches(/^[6-9]\d{9}$/, { message: 'Invalid Indian mobile number' })
-  mobileNumber: string;
-
-  @IsOptional()
-  @IsString()
-  @Matches(LEAD_CATEGORY_PATTERN, { message: 'Invalid category' })
-  category?: string;
-}
-
-class CompleteLeadDto {
-  @IsString()
-  @Length(10, 10, { message: 'PAN must be 10 characters' })
-  @Matches(PAN_FORMAT_REGEX, { message: 'Invalid PAN format (e.g. ABCDE1234F)' })
-  pan: string;
-
-  @IsString()
-  fullName: string;
-
-  @IsOptional()
-  @IsString()
-  @Matches(LEAD_CATEGORY_PATTERN, { message: 'Invalid category' })
-  category?: string;
-
-  @IsOptional()
-  @IsString()
-  @Length(12, 12, { message: 'Aadhaar must be 12 digits' })
-  @Matches(/^\d{12}$/, { message: 'Aadhaar must be 12 digits' })
-  aadhaar?: string;
-
-  @IsOptional()
-  @IsString()
-  @IsIn([...LOAN_AMT_VALUES], { message: 'Invalid loan amount range' })
-  loanAmt?: string;
-
-  @IsOptional()
-  @IsString()
-  @IsIn([...INS_TYPE_VALUES], { message: 'Invalid insurance type' })
-  insType?: string;
-}
-
-class CreateLeadDto {
-  @IsOptional()
-  @IsString()
-  userId?: string;
-
-  @IsString()
-  @Length(10, 10, { message: 'PAN must be 10 characters' })
-  @Matches(PAN_FORMAT_REGEX, { message: 'Invalid PAN format (e.g. ABCDE1234F)' })
-  pan: string;
-
-  @IsString()
-  @Length(10, 10, { message: 'mobileNumber must be 10 digits' })
-  @Matches(/^[6-9]\d{9}$/, { message: 'Invalid Indian mobile number' })
-  mobileNumber: string;
-
-  @IsString()
-  fullName: string;
-
-  @IsOptional()
-  @IsString()
-  email?: string;
-
-  @IsOptional()
-  @IsString()
-  @ValidateIf((o) => o.pincode != null && o.pincode !== '')
-  @Length(6, 6, { message: 'Pincode must be 6 digits' })
-  pincode?: string;
-
-  @IsOptional()
-  @IsNumber()
-  @ValidateIf((o) => o.requiredAmount != null)
-  @Min(0, { message: 'Required amount must be positive' })
-  requiredAmount?: number;
-
-  @IsString()
-  @Matches(LEAD_CATEGORY_PATTERN, {
-    message: 'Invalid category (use service slug with underscores, e.g. personal_loan)',
-  })
-  category: string;
-
-  @IsOptional()
-  @IsString()
-  @IsIn([...LOAN_AMT_VALUES], { message: 'Invalid loan amount range' })
-  loanAmt?: string;
-
-  @IsOptional()
-  @IsString()
-  @IsIn([...INS_TYPE_VALUES], { message: 'Invalid insurance type' })
-  insType?: string;
-}
-
-class UpdateLeadDto {
-  @IsOptional()
-  @IsString()
-  fullName?: string;
-
-  @IsOptional()
-  @IsString()
-  email?: string;
-
-  @IsOptional()
-  @IsString()
-  @Length(10, 10, { message: 'mobileNumber must be 10 digits' })
-  @Matches(/^[6-9]\d{9}$/, { message: 'Invalid Indian mobile number' })
-  mobileNumber?: string;
-
-  @IsOptional()
-  @IsString()
-  @ValidateIf((o) => o.pan != null && o.pan !== '' && !isMaskedPan(String(o.pan)))
-  @Length(10, 10, { message: 'PAN must be 10 characters' })
-  @Matches(PAN_FORMAT_REGEX, { message: 'Invalid PAN format (e.g. ABCDE1234F)' })
-  pan?: string;
-
-  @IsOptional()
-  @IsString()
-  @ValidateIf((o) => o.pincode != null && o.pincode !== '')
-  @Length(6, 6, { message: 'Pincode must be 6 digits' })
-  pincode?: string;
-
-  @IsOptional()
-  @IsNumber()
-  @ValidateIf((o) => o.requiredAmount != null)
-  @Min(0, { message: 'Required amount must be positive' })
-  requiredAmount?: number;
-
-  @IsOptional()
-  @IsString()
-  @Matches(LEAD_CATEGORY_PATTERN, { message: 'Invalid category' })
-  category?: string;
-
-  @IsOptional()
-  @IsString()
-  @IsIn(['pending', 'approved', 'rejected'], {
-    message: 'Status must be one of: pending, approved, rejected',
-  })
-  status?: string;
-
-  @IsOptional()
-  @IsString()
-  notes?: string;
-
-  @IsOptional()
-  @IsString()
-  @IsIn([...LOAN_AMT_VALUES], { message: 'Invalid loan amount range' })
-  loanAmt?: string | null;
-
-  @IsOptional()
-  @IsString()
-  @IsIn([...INS_TYPE_VALUES], { message: 'Invalid insurance type' })
-  insType?: string | null;
-}
-
-/** Admin CRM — create lead with optional status/notes. */
-class AdminCreateLeadDto {
-  @IsString()
-  @Length(10, 10, { message: 'PAN must be 10 characters' })
-  @Matches(PAN_FORMAT_REGEX, { message: 'Invalid PAN format (e.g. ABCDE1234F)' })
-  pan: string;
-
-  @IsString()
-  @Length(10, 10, { message: 'mobileNumber must be 10 digits' })
-  @Matches(/^[6-9]\d{9}$/, { message: 'Invalid Indian mobile number' })
-  mobileNumber: string;
-
-  @IsString()
-  fullName: string;
-
-  @IsOptional()
-  @IsString()
-  email?: string;
-
-  @IsOptional()
-  @IsString()
-  @ValidateIf((o) => o.pincode != null && o.pincode !== '')
-  @Length(6, 6, { message: 'Pincode must be 6 digits' })
-  pincode?: string;
-
-  @IsOptional()
-  @IsNumber()
-  @ValidateIf((o) => o.requiredAmount != null)
-  @Min(0, { message: 'Required amount must be positive' })
-  requiredAmount?: number;
-
-  @IsString()
-  @Matches(LEAD_CATEGORY_PATTERN, {
-    message: 'Invalid category (use service slug with underscores, e.g. personal_loan)',
-  })
-  category: string;
-
-  @IsOptional()
-  @IsString()
-  @IsIn(['pending', 'approved', 'rejected'], {
-    message: 'Status must be one of: pending, approved, rejected',
-  })
-  status?: string;
-
-  @IsOptional()
-  @IsString()
-  notes?: string;
-
-  @IsOptional()
-  @IsString()
-  @IsIn([...LOAN_AMT_VALUES], { message: 'Invalid loan amount range' })
-  loanAmt?: string;
-
-  @IsOptional()
-  @IsString()
-  @IsIn([...INS_TYPE_VALUES], { message: 'Invalid insurance type' })
-  insType?: string;
-}
 
 @Injectable()
 export class LeadsService {
@@ -352,7 +115,11 @@ export class LeadsService {
   }
 
   async getById(id: string): Promise<Record<string, unknown> | null> {
-    const { data, error } = await this.leads.select().eq('id', id.trim()).maybeSingle();
+    const { data, error } = await this.leads
+      .select()
+      .eq('id', id.trim())
+      .eq('is_active', true)
+      .maybeSingle();
     if (error) {
       if (process.env.NODE_ENV !== 'production') {
         console.error('LeadsService.getById', error);
@@ -379,7 +146,8 @@ export class LeadsService {
     }
 
     const leads = (data as Record<string, unknown>[]) || [];
-    return this.withOtpVerified(leads);
+    const withOtp = await this.withOtpVerified(leads);
+    return this.safeLeads(withOtp);
   }
 
   async getByPan(pan: string): Promise<Record<string, unknown> | null> {
@@ -434,7 +202,7 @@ export class LeadsService {
 
     const mobile = dto.mobileNumber.trim();
     const byMobile = await this.getByMobile(mobile);
-    if (byMobile) {
+    if (byMobile && !this.isDraftLead(byMobile)) {
       return {
         ok: false,
         message: 'This mobile number already exists. Please use a different number.',
@@ -442,7 +210,7 @@ export class LeadsService {
     }
 
     const byPan = await this.getByPan(panUpper);
-    if (byPan) {
+    if (byPan && !this.isDraftLead(byPan) && String(byPan.id) !== String(byMobile?.id ?? '')) {
       return {
         ok: false,
         message: 'This PAN already exists. Please use a different PAN.',
@@ -473,7 +241,35 @@ export class LeadsService {
       payload.loan_amt = null;
       if (dto.requiredAmount != null) payload.required_amount = dto.requiredAmount;
     }
-    if (dto.category === 'insurance' && dto.insType) payload.ins_type = dto.insType;
+    if (dto.category === 'insurance') {
+      payload.required_amount = null;
+      payload.loan_amt = null;
+      if (dto.insType) payload.ins_type = dto.insType;
+    }
+
+    // Upgrade an existing OTP/start draft into a real application instead of rejecting.
+    if (byMobile && this.isDraftLead(byMobile) && byMobile.id) {
+      const updated = await this.updateById(String(byMobile.id), {
+        pan: panUpper,
+        fullName: dto.fullName.trim(),
+        email: dto.email,
+        pincode: dto.pincode,
+        requiredAmount: dto.category === 'insurance' ? null : dto.requiredAmount,
+        category: dto.category,
+        loanAmt: dto.category === 'personal_loan' ? null : undefined,
+        insType: dto.category === 'insurance' ? dto.insType ?? null : null,
+      });
+      if (!updated) {
+        return { ok: false, message: 'Failed to create lead. Please try again.' };
+      }
+      await this.panAudit.record({
+        leadId: String(byMobile.id),
+        action: 'update',
+        reason: 'public_apply_upgrade_draft',
+        metadata: { pan_masked: panFields.pan },
+      });
+      return { ok: true, lead: updated };
+    }
 
     const { data, error } = await this.leads.insert(payload).select().single();
     if (error) {
@@ -531,7 +327,7 @@ export class LeadsService {
     const existing = await this.getByMobile(mobileNumber);
 
     if (existing) {
-      return { ok: true, lead: existing };
+      return { ok: true, lead: this.safeLead(existing)! };
     }
 
     const created = await this.createDraft(mobileNumber, cat);
@@ -574,9 +370,6 @@ export class LeadsService {
       pan: panUpper,
       fullName: dto.fullName.trim(),
       category: dto.category,
-      notes: dto.aadhaar?.trim()
-        ? `Aadhaar: ${dto.aadhaar.trim()}`
-        : undefined,
     };
 
     if (category === 'personal_loan') {
@@ -685,7 +478,10 @@ export class LeadsService {
   }
 
   async getAll(): Promise<Record<string, unknown>[]> {
-    const { data, error } = await this.leads.select().order('created_at', { ascending: false });
+    const { data, error } = await this.leads
+      .select()
+      .eq('is_active', true)
+      .order('created_at', { ascending: false });
 
     if (error) {
       if (process.env.NODE_ENV !== 'production') {
@@ -700,11 +496,21 @@ export class LeadsService {
   }
 
   async updateById(id: string, dto: UpdateLeadDto): Promise<Record<string, unknown> | null> {
+    const existing = await this.getById(id);
+    if (!existing) return null;
+
     const payload: Record<string, unknown> = { updated_at: new Date().toISOString() };
 
     if (dto.fullName != null) payload.full_name = dto.fullName.trim();
     if (dto.email !== undefined) payload.email = dto.email?.trim() || null;
-    if (dto.mobileNumber != null) payload.mobile_number = dto.mobileNumber.trim();
+    if (dto.mobileNumber != null) {
+      const mobile = dto.mobileNumber.trim();
+      const otherMobile = await this.getByMobile(mobile);
+      if (otherMobile && String(otherMobile.id) !== id && !this.isDraftLead(otherMobile)) {
+        return null;
+      }
+      payload.mobile_number = mobile;
+    }
     if (dto.pincode !== undefined) payload.pincode = dto.pincode?.trim() || null;
     if (dto.requiredAmount !== undefined) payload.required_amount = dto.requiredAmount ?? null;
     if (dto.category != null) payload.category = dto.category;
@@ -737,7 +543,12 @@ export class LeadsService {
 
     if (Object.keys(payload).length === 1) return null;
 
-    const { data, error } = await this.leads.update(payload).eq('id', id).select().single();
+    const { data, error } = await this.leads
+      .update(payload)
+      .eq('id', id)
+      .eq('is_active', true)
+      .select()
+      .single();
 
     if (error) {
       if (process.env.NODE_ENV !== 'production') {
@@ -776,6 +587,9 @@ export class LeadsService {
   ): Promise<{ ok: true; pan: string; masked: string } | { ok: false; message: string }> {
     const row = await this.getById(id);
     if (!row) return { ok: false, message: 'Lead not found' };
+    if (this.isDraftLead(row)) {
+      return { ok: false, message: 'PAN not available for incomplete applications' };
+    }
 
     const encrypted = row.pan_encrypted != null ? String(row.pan_encrypted) : '';
     let plain: string | null = null;
@@ -799,19 +613,19 @@ export class LeadsService {
     } else {
       // Legacy plaintext migration path — encrypt in place after reveal.
       const legacy = normalizePan(String(row.pan ?? ''));
-      if (!isValidPanFormat(legacy)) {
+      if (!isValidPanFormat(legacy) || legacy === LEAD_DRAFT_PAN) {
         return { ok: false, message: 'PAN not available' };
       }
       plain = legacy;
       try {
         const fields = panStorageFields(legacy);
-        await this.leads.update(fields).eq('id', id);
+        await this.leads.update(fields).eq('id', id).eq('is_active', true);
       } catch {
         // still allow reveal of legacy value
       }
     }
 
-    await this.panAudit.record({
+    const audited = await this.panAudit.record({
       leadId: id,
       action: 'reveal',
       adminId: actor.adminId,
@@ -822,6 +636,9 @@ export class LeadsService {
       reason: actor.reason ?? 'admin_reveal',
       metadata: { pan_masked: maskPan(plain) },
     });
+    if (!audited) {
+      return { ok: false, message: 'Audit logging failed; PAN not revealed' };
+    }
 
     return { ok: true, pan: plain, masked: maskPan(plain) };
   }
@@ -890,7 +707,11 @@ export class LeadsService {
   }
 
   async deleteById(id: string): Promise<boolean> {
-    const { error } = await this.leads.delete().eq('id', id);
+    const { data, error } = await this.leads
+      .update({ is_active: false, updated_at: new Date().toISOString() })
+      .eq('id', id.trim())
+      .eq('is_active', true)
+      .select('id');
 
     if (error) {
       if (process.env.NODE_ENV !== 'production') {
@@ -899,34 +720,8 @@ export class LeadsService {
       return false;
     }
 
-    return true;
+    return Array.isArray(data) && data.length > 0;
   }
-}
-
-class RevealPanDto {
-  @IsOptional()
-  @IsString()
-  adminId?: string;
-
-  @IsOptional()
-  @IsString()
-  adminEmail?: string;
-
-  @IsOptional()
-  @IsString()
-  adminRole?: string;
-
-  @IsOptional()
-  @IsString()
-  reason?: string;
-
-  @IsOptional()
-  @IsString()
-  ipAddress?: string;
-
-  @IsOptional()
-  @IsString()
-  userAgent?: string;
 }
 
 @Controller('leads')
@@ -938,8 +733,7 @@ export class LeadsController {
   ) {}
 
   private sanitizePublicLead(lead: Record<string, unknown>): Record<string, unknown> {
-    const { pan: _pan, notes: _notes, ...rest } = lead;
-    return rest;
+    return sanitizePublicLead(lead);
   }
 
   @Get()
@@ -1219,6 +1013,15 @@ export class LeadsController {
     }
     if (!dto.adminEmail?.trim() && !dto.adminId?.trim()) {
       throw new BadRequestException('Admin identity is required for PAN reveal');
+    }
+    const role = String(dto.adminRole ?? '').trim().toLowerCase();
+    if (role !== 'admin' && role !== 'staff') {
+      throw new UnauthorizedException('Insufficient role for PAN reveal');
+    }
+
+    const rateKey = `pan-reveal:${dto.adminEmail || dto.adminId}`;
+    if (!allowRateLimitedAction(rateKey, 10, 60_000)) {
+      throw new BadRequestException('Too many PAN reveals. Try again in a minute.');
     }
 
     const result = await this.leadsService.revealPan(id, {

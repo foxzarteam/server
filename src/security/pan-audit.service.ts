@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { SupabaseClient } from '@supabase/supabase-js';
 import { Inject } from '@nestjs/common';
 import { SUPABASE_CLIENT } from '../config/supabase';
@@ -27,9 +27,12 @@ export type PanAuditEntry = {
 
 @Injectable()
 export class PanAuditService {
+  private readonly logger = new Logger(PanAuditService.name);
+
   constructor(@Inject(SUPABASE_CLIENT) private readonly supabase: SupabaseClient) {}
 
-  async record(entry: PanAuditEntry): Promise<void> {
+  /** Returns false if the audit row could not be persisted (callers must not ignore). */
+  async record(entry: PanAuditEntry): Promise<boolean> {
     const payload = {
       lead_id: entry.leadId,
       action: entry.action,
@@ -46,8 +49,10 @@ export class PanAuditService {
     };
 
     const { error } = await this.supabase.from(TABLE_PAN_ACCESS_AUDIT).insert(payload);
-    if (error && process.env.NODE_ENV !== 'production') {
-      console.error('PanAuditService.record failed', error.message);
+    if (error) {
+      this.logger.error(`pan_access_audit insert failed: ${error.message}`);
+      return false;
     }
+    return true;
   }
 }
