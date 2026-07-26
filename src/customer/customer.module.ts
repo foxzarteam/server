@@ -1,11 +1,14 @@
 import {
   Body,
   Controller,
+  Delete,
   Headers,
   HttpCode,
   HttpStatus,
   Injectable,
   Module,
+  NotFoundException,
+  Param,
   Post,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -113,6 +116,26 @@ export class CustomerService {
     return apps.length > 0;
   }
 
+  /** Soft-ownership check: only delete if lead belongs to this mobile. */
+  async deleteOwnApplication(
+    id: string,
+    mobileNumber: string,
+  ): Promise<{ ok: boolean; message?: string }> {
+    const lead = await this.leadsService.getById(id.trim());
+    if (!lead) {
+      return { ok: false, message: 'Application not found' };
+    }
+    const leadMobile = asString(lead.mobile_number);
+    if (leadMobile !== mobileNumber.trim()) {
+      return { ok: false, message: 'Application not found' };
+    }
+    const ok = await this.leadsService.deleteById(id.trim());
+    if (!ok) {
+      return { ok: false, message: 'Failed to delete application' };
+    }
+    return { ok: true };
+  }
+
   async login(
     mobileNumber: string,
     idToken: string,
@@ -212,6 +235,24 @@ export class CustomerController {
       },
       applications,
     };
+  }
+
+  /** BFF-only: customer deletes own application (mobile must match). */
+  @Delete('applications/:id')
+  @HttpCode(HttpStatus.OK)
+  async deleteApplication(
+    @Headers('x-admin-internal-key') adminKey: string | undefined,
+    @Param('id') id: string,
+    @Body() dto: ApplicationsDto,
+  ) {
+    if (!adminInternalKeyOk(adminKey)) {
+      throw new UnauthorizedException('Unauthorized');
+    }
+    const result = await this.customerService.deleteOwnApplication(id, dto.mobileNumber);
+    if (!result.ok) {
+      throw new NotFoundException(result.message || 'Application not found');
+    }
+    return { success: true };
   }
 }
 

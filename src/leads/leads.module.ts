@@ -871,6 +871,25 @@ export class LeadsController {
       throw new UnauthorizedException('Unauthorized');
     }
 
+    const [byMobile, byPan] = await Promise.all([
+      this.leadsService.getByMobile(dto.mobileNumber),
+      this.leadsService.getByPan(dto.pan),
+    ]);
+    if (byMobile) {
+      return {
+        success: false,
+        field: 'mobileNumber',
+        message: 'A lead with this phone number already exists',
+      };
+    }
+    if (byPan) {
+      return {
+        success: false,
+        field: 'pan',
+        message: 'A lead with this PAN already exists',
+      };
+    }
+
     const created = await this.leadsService.create({
       pan: dto.pan,
       mobileNumber: dto.mobileNumber,
