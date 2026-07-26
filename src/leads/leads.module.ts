@@ -650,6 +650,31 @@ export class LeadsService {
     return data as Record<string, unknown>;
   }
 
+  /** Update shared applicant details on every active lead for a mobile. */
+  async updateProfileByMobile(
+    mobileNumber: string,
+    dto: { fullName?: string; email?: string | null },
+  ): Promise<boolean> {
+    const payload: Record<string, unknown> = { updated_at: new Date().toISOString() };
+    if (dto.fullName != null) payload.full_name = dto.fullName.trim();
+    if (dto.email !== undefined) payload.email = dto.email?.trim() || null;
+    if (Object.keys(payload).length === 1) return false;
+
+    const { error } = await this.leads
+      .update(payload)
+      .eq('mobile_number', mobileNumber.trim())
+      .eq('is_active', true);
+
+    if (error) {
+      if (process.env.NODE_ENV !== 'production') {
+        console.error('LeadsService.updateProfileByMobile', error);
+      }
+      return false;
+    }
+
+    return true;
+  }
+
   async deleteById(id: string): Promise<boolean> {
     const { error } = await this.leads.delete().eq('id', id);
 

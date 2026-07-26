@@ -9,10 +9,11 @@ import {
   Module,
   NotFoundException,
   Param,
+  Patch,
   Post,
   UnauthorizedException,
 } from '@nestjs/common';
-import { IsString, Length, Matches, MinLength } from 'class-validator';
+import { IsOptional, IsString, Length, Matches, MinLength } from 'class-validator';
 import { adminInternalKeyOk } from '../common/admin-internal';
 import { LeadsModule, LeadsService } from '../leads/leads.module';
 import { OtpModule, OtpService } from '../otp/otp.module';
@@ -41,6 +42,30 @@ class ApplicationsDto {
   @Matches(/^[6-9]\d{9}$/, { message: 'Invalid Indian mobile number' })
   mobileNumber: string;
 }
+
+class UpdateProfileDto {
+  @IsString()
+  @Length(10, 10, { message: 'mobileNumber must be 10 digits' })
+  @Matches(/^[6-9]\d{9}$/, { message: 'Invalid Indian mobile number' })
+  mobileNumber: string;
+
+  @IsString()
+  @MinLength(2, { message: 'Name must be at least 2 characters' })
+  fullName: string;
+
+  @IsOptional()
+  @IsString()
+  email?: string;
+}
+
+export type CustomerProfile = {
+  name: string;
+  mobile: string;
+  email: string | null;
+  pan: string | null;
+  totalApplications: number;
+  memberSince: string | null;
+};
 
 export type CustomerApplication = {
   id: string;
@@ -114,6 +139,49 @@ export class CustomerService {
   async mobileHasApplication(mobileNumber: string): Promise<boolean> {
     const apps = await this.getApplications(mobileNumber);
     return apps.length > 0;
+  }
+
+  /** Profile is derived from the customer's leads (newest lead wins). */
+  async getProfile(mobileNumber: string): Promise<CustomerProfile | null> {
+    const mobile = mobileNumber.trim();
+    const rows = (await this.leadsService.listByMobile(mobile)).filter(
+      (row) => !this.leadsService.isDraftLead(row),
+    );
+    if (rows.length === 0) return null;
+
+    const latest = rows[0];
+    const oldest = rows[rows.length - 1];
+
+    return {
+      name: asString(latest.full_name) || 'Customer',
+      mobile,
+      email: asString(latest.email) || null,
+      pan: asString(latest.pan) || null,
+      totalApplications: rows.length,
+      memberSince: asString(oldest.created_at) || null,
+    };
+  }
+
+  async updateProfile(
+    mobileNumber: string,
+    dto: { fullName: string; email?: string },
+  ): Promise<{ ok: boolean; message?: string; profile?: CustomerProfile }> {
+    const mobile = mobileNumber.trim();
+    const existing = await this.getProfile(mobile);
+    if (!existing) {
+      return { ok: false, message: 'Profile not found' };
+    }
+
+    const updated = await this.leadsService.updateProfileByMobile(mobile, {
+      fullName: dto.fullName,
+      email: dto.email ?? null,
+    });
+    if (!updated) {
+      return { ok: false, message: 'Failed to update profile' };
+    }
+
+    const profile = await this.getProfile(mobile);
+    return { ok: true, profile: profile ?? undefined };
   }
 
   /** Soft-ownership check: only delete if lead belongs to this mobile. */
@@ -235,6 +303,43 @@ export class CustomerController {
       },
       applications,
     };
+  }
+
+  /** BFF-only: read customer profile derived from their applications. */
+  @Post('profile')
+  @HttpCode(HttpStatus.OK)
+  async profile(
+    @Headers('x-admin-internal-key') adminKey: string | undefined,
+    @Body() dto: ApplicationsDto,
+  ) {
+    if (!adminInternalKeyOk(adminKey)) {
+      throw new UnauthorizedException('Unauthorized');
+    }
+    const profile = await this.customerService.getProfile(dto.mobileNumber);
+    if (!profile) {
+      throw new NotFoundException('Profile not found');
+    }
+    return { success: true, profile };
+  }
+
+  /** BFF-only: customer updates own name / email. */
+  @Patch('profile')
+  @HttpCode(HttpStatus.OK)
+  async updateProfile(
+    @Headers('x-admin-internal-key') adminKey: string | undefined,
+    @Body() dto: UpdateProfileDto,
+  ) {
+    if (!adminInternalKeyOk(adminKey)) {
+      throw new UnauthorizedException('Unauthorized');
+    }
+    const result = await this.customerService.updateProfile(dto.mobileNumber, {
+      fullName: dto.fullName,
+      email: dto.email,
+    });
+    if (!result.ok) {
+      return { success: false, message: result.message || 'Update failed' };
+    }
+    return { success: true, profile: result.profile };
   }
 
   /** BFF-only: customer deletes own application (mobile must match). */
