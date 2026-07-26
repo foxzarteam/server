@@ -202,7 +202,14 @@ export class LeadsService {
 
     const mobile = dto.mobileNumber.trim();
     const byMobile = await this.getByMobile(mobile);
-    if (byMobile && !this.isDraftLead(byMobile)) {
+    // Draft / still-pending rows for this mobile are upgraded (chat: OTP → form).
+    // Only block when a finished (approved/rejected) application already exists.
+    const mobileStatus = String(byMobile?.['status'] ?? '').toLowerCase();
+    const mobileLocked =
+      byMobile &&
+      !this.isDraftLead(byMobile) &&
+      (mobileStatus === 'approved' || mobileStatus === 'rejected');
+    if (mobileLocked) {
       return {
         ok: false,
         message: 'This mobile number already exists. Please use a different number.',
@@ -210,7 +217,13 @@ export class LeadsService {
     }
 
     const byPan = await this.getByPan(panUpper);
-    if (byPan && !this.isDraftLead(byPan) && String(byPan.id) !== String(byMobile?.id ?? '')) {
+    const panStatus = String(byPan?.['status'] ?? '').toLowerCase();
+    const panOnOtherLead =
+      byPan &&
+      String(byPan.id) !== String(byMobile?.id ?? '') &&
+      !this.isDraftLead(byPan) &&
+      (panStatus === 'approved' || panStatus === 'rejected' || panStatus === 'pending');
+    if (panOnOtherLead) {
       return {
         ok: false,
         message: 'This PAN already exists. Please use a different PAN.',
@@ -247,8 +260,8 @@ export class LeadsService {
       if (dto.insType) payload.ins_type = dto.insType;
     }
 
-    // Upgrade an existing OTP/start draft into a real application instead of rejecting.
-    if (byMobile && this.isDraftLead(byMobile) && byMobile.id) {
+    // Upgrade existing draft / pending row for this mobile (chat OTP → form submit).
+    if (byMobile?.id && !mobileLocked) {
       const updated = await this.updateById(String(byMobile.id), {
         pan: panUpper,
         fullName: dto.fullName.trim(),
@@ -256,6 +269,7 @@ export class LeadsService {
         pincode: dto.pincode,
         requiredAmount: dto.category === 'insurance' ? null : dto.requiredAmount,
         category: dto.category,
+        status: 'pending',
         loanAmt: dto.category === 'personal_loan' ? null : undefined,
         insType: dto.category === 'insurance' ? dto.insType ?? null : null,
       });
@@ -265,7 +279,9 @@ export class LeadsService {
       await this.panAudit.record({
         leadId: String(byMobile.id),
         action: 'update',
-        reason: 'public_apply_upgrade_draft',
+        reason: this.isDraftLead(byMobile)
+          ? 'public_apply_upgrade_draft'
+          : 'public_apply_update_pending',
         metadata: { pan_masked: panFields.pan },
       });
       return { ok: true, lead: updated };
@@ -322,17 +338,30 @@ export class LeadsService {
   async startLead(mobileNumber: string, category?: string): Promise<{
     ok: boolean;
     lead?: Record<string, unknown>;
+    isDraft?: boolean;
+    message?: string;
   }> {
     const cat = category?.trim() || 'personal_loan';
     const existing = await this.getByMobile(mobileNumber);
 
     if (existing) {
-      return { ok: true, lead: this.safeLead(existing)! };
+      const status = String(existing['status'] ?? '').toLowerCase();
+      if (status === 'approved' || status === 'rejected') {
+        return {
+          ok: false,
+          message: 'This mobile number already exists. Please use a different number.',
+        };
+      }
+      return {
+        ok: true,
+        lead: this.safeLead(existing)!,
+        isDraft: this.isDraftLead(existing),
+      };
     }
 
     const created = await this.createDraft(mobileNumber, cat);
-    if (!created) return { ok: false };
-    return { ok: true, lead: created };
+    if (!created) return { ok: false, message: 'Failed to save mobile number.' };
+    return { ok: true, lead: created, isDraft: true };
   }
 
   async completeLead(
@@ -344,7 +373,11 @@ export class LeadsService {
       return null;
     }
 
-    const existing = await this.leads.select().eq('id', id).maybeSingle();
+    const existing = await this.leads
+      .select()
+      .eq('id', id)
+      .eq('is_active', true)
+      .maybeSingle();
     if (existing.error || !existing.data) {
       return null;
     }
@@ -369,15 +402,18 @@ export class LeadsService {
     const update: UpdateLeadDto = {
       pan: panUpper,
       fullName: dto.fullName.trim(),
-      category: dto.category,
+      category: dto.category ?? category,
+      status: 'pending',
     };
 
     if (category === 'personal_loan') {
       update.loanAmt = dto.loanAmt ?? null;
       update.insType = null;
+      if (dto.requiredAmount != null) update.requiredAmount = dto.requiredAmount;
     } else if (category === 'insurance') {
       update.insType = dto.insType ?? null;
       update.loanAmt = null;
+      update.requiredAmount = null;
     }
 
     return this.updateById(id, update);
@@ -708,9 +744,8 @@ export class LeadsService {
 
   async deleteById(id: string): Promise<boolean> {
     const { data, error } = await this.leads
-      .update({ is_active: false, updated_at: new Date().toISOString() })
+      .delete()
       .eq('id', id.trim())
-      .eq('is_active', true)
       .select('id');
 
     if (error) {
@@ -769,10 +804,17 @@ export class LeadsController {
     );
 
     if (!result.ok || !result.lead) {
-      return { success: false, message: 'Failed to save mobile number. Please try again.' };
+      return {
+        success: false,
+        message: result.message || 'Failed to save mobile number. Please try again.',
+      };
     }
 
-    return { success: true, data: this.sanitizePublicLead(result.lead) };
+    return {
+      success: true,
+      data: this.sanitizePublicLead(result.lead),
+      isDraft: result.isDraft === true,
+    };
   }
 
   /**

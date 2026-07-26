@@ -58,6 +58,13 @@ export class CompleteLeadDto {
   @Matches(LEAD_CATEGORY_PATTERN, { message: 'Invalid category' })
   category?: string;
 
+  /** Exact loan amount in rupees (chat / personal loan form). */
+  @IsOptional()
+  @IsNumber()
+  @ValidateIf((o) => o.requiredAmount != null)
+  @Min(0, { message: 'Required amount must be positive' })
+  requiredAmount?: number;
+
   @IsOptional()
   @IsString()
   @IsIn([...LOAN_AMT_VALUES], { message: 'Invalid loan amount range' })
