@@ -212,6 +212,64 @@ class UpdateLeadDto {
   insType?: string | null;
 }
 
+/** Admin CRM — create lead with optional status/notes. */
+class AdminCreateLeadDto {
+  @IsString()
+  @Length(10, 10, { message: 'PAN must be 10 characters' })
+  pan: string;
+
+  @IsString()
+  @Length(10, 10, { message: 'mobileNumber must be 10 digits' })
+  @Matches(/^[6-9]\d{9}$/, { message: 'Invalid Indian mobile number' })
+  mobileNumber: string;
+
+  @IsString()
+  fullName: string;
+
+  @IsOptional()
+  @IsString()
+  email?: string;
+
+  @IsOptional()
+  @IsString()
+  @ValidateIf((o) => o.pincode != null && o.pincode !== '')
+  @Length(6, 6, { message: 'Pincode must be 6 digits' })
+  pincode?: string;
+
+  @IsOptional()
+  @IsNumber()
+  @ValidateIf((o) => o.requiredAmount != null)
+  @Min(0, { message: 'Required amount must be positive' })
+  requiredAmount?: number;
+
+  @IsString()
+  @Matches(LEAD_CATEGORY_PATTERN, {
+    message: 'Invalid category (use service slug with underscores, e.g. personal_loan)',
+  })
+  category: string;
+
+  @IsOptional()
+  @IsString()
+  @IsIn(['pending', 'approved', 'rejected'], {
+    message: 'Status must be one of: pending, approved, rejected',
+  })
+  status?: string;
+
+  @IsOptional()
+  @IsString()
+  notes?: string;
+
+  @IsOptional()
+  @IsString()
+  @IsIn([...LOAN_AMT_VALUES], { message: 'Invalid loan amount range' })
+  loanAmt?: string;
+
+  @IsOptional()
+  @IsString()
+  @IsIn([...INS_TYPE_VALUES], { message: 'Invalid insurance type' })
+  insType?: string;
+}
+
 @Injectable()
 export class LeadsService {
   constructor(
@@ -800,6 +858,48 @@ export class LeadsController {
     }
     const leads = await this.leadsService.getAll();
     return { success: true, data: leads };
+  }
+
+  /** Always insert a new lead (admin CRM). Does not upsert by mobile. */
+  @Post('admin')
+  @HttpCode(HttpStatus.CREATED)
+  async createForAdmin(
+    @Headers('x-admin-internal-key') adminKey: string | undefined,
+    @Body() dto: AdminCreateLeadDto,
+  ) {
+    if (!adminInternalKeyOk(adminKey)) {
+      throw new UnauthorizedException('Unauthorized');
+    }
+
+    const created = await this.leadsService.create({
+      pan: dto.pan,
+      mobileNumber: dto.mobileNumber,
+      fullName: dto.fullName,
+      email: dto.email,
+      pincode: dto.pincode,
+      requiredAmount: dto.requiredAmount,
+      category: dto.category,
+      loanAmt: dto.loanAmt,
+      insType: dto.insType,
+    });
+
+    if (!created?.id) {
+      return {
+        success: false,
+        message: 'Failed to create lead. Check PAN / mobile and try again.',
+      };
+    }
+
+    let lead = created;
+    if (dto.status != null || dto.notes !== undefined) {
+      const updated = await this.leadsService.updateById(String(created.id), {
+        status: dto.status,
+        notes: dto.notes,
+      });
+      if (updated) lead = updated;
+    }
+
+    return { success: true, data: lead };
   }
 
   @Patch('admin/:id')
