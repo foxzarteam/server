@@ -8,6 +8,8 @@ export const TABLE_PAYMENT_ACCOUNTS = 'payment_accounts';
 export const TABLE_WALLET = 'wallet';
 /** Admin/staff panel users (`public.auth`). */
 export const TABLE_AUTH = 'auth';
+export const TABLE_CONTACT = 'contact';
+export const TABLE_CHAT = 'chat';
 
 /** Max OTP sends per mobile per calendar day (IST). */
 export const OTP_MAX_SENDS_PER_DAY = 5;

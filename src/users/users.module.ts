@@ -17,10 +17,13 @@ import {
   UnauthorizedException,
 } from '@nestjs/common';
 import { adminInternalKeyOk } from '../common/admin-internal';
+import { hashMpin, mpinMatches, sanitizeUserPublic, storedMpinLooksBcrypt } from '../common/mpin';
+import { assertMobileAccess, extractIdToken } from '../common/phone-access';
 import { SupabaseClient } from '@supabase/supabase-js';
-import { IsBoolean, IsOptional, IsString, Length, Matches } from 'class-validator';
+import { IsBoolean, IsOptional, IsString, Length, Matches, MinLength } from 'class-validator';
 import { SUPABASE_CLIENT } from '../config/supabase';
 import { MSG_USER_CREATE_FAILED, TABLE_USERS, getCurrentIsoTime } from '../common/constants';
+import { OtpModule, OtpService } from '../otp/otp.module';
 
 class CreateUserDto {
   @IsString()
@@ -35,6 +38,11 @@ class CreateUserDto {
   @IsOptional()
   @IsString()
   email?: string;
+
+  @IsOptional()
+  @IsString()
+  @MinLength(20)
+  idToken?: string;
 }
 
 class UpsertUserDto {
@@ -60,6 +68,11 @@ class UpsertUserDto {
   @IsOptional()
   @IsBoolean()
   isLoggedIn?: boolean;
+
+  @IsOptional()
+  @IsString()
+  @MinLength(20)
+  idToken?: string;
 }
 
 class UpdateProfileDto {
@@ -70,6 +83,11 @@ class UpdateProfileDto {
   @IsOptional()
   @IsString()
   email?: string;
+
+  @IsOptional()
+  @IsString()
+  @MinLength(20)
+  idToken?: string;
 }
 
 class UpdateMpinDto {
@@ -77,11 +95,33 @@ class UpdateMpinDto {
   @Length(4, 4, { message: 'mpin must be 4 digits' })
   @Matches(/^\d{4}$/, { message: 'mpin must be 4 digits' })
   mpin: string;
+
+  @IsOptional()
+  @IsString()
+  @MinLength(20)
+  idToken?: string;
+}
+
+class VerifyMpinDto {
+  @IsString()
+  @Length(4, 4, { message: 'mpin must be 4 digits' })
+  @Matches(/^\d{4}$/, { message: 'mpin must be 4 digits' })
+  mpin: string;
+
+  @IsOptional()
+  @IsString()
+  @MinLength(20)
+  idToken?: string;
 }
 
 class UpdateLoginStatusDto {
   @IsBoolean()
   isLoggedIn: boolean;
+
+  @IsOptional()
+  @IsString()
+  @MinLength(20)
+  idToken?: string;
 }
 
 class AdminUpdateUserDto {
@@ -133,6 +173,17 @@ export class UsersService {
     return data as Record<string, unknown> | null;
   }
 
+  async getById(id: string): Promise<Record<string, unknown> | null> {
+    const { data, error } = await this.users.select().eq('id', id.trim()).maybeSingle();
+    if (error) {
+      if (process.env.NODE_ENV !== 'production') {
+        console.error('UsersService.getById', error);
+      }
+      return null;
+    }
+    return data as Record<string, unknown> | null;
+  }
+
   async create(dto: CreateUserDto): Promise<Record<string, unknown> | null> {
     const existing = await this.getByMobile(dto.mobileNumber);
     if (existing) {
@@ -161,10 +212,11 @@ export class UsersService {
     return data as Record<string, unknown>;
   }
 
-  async updateMpin(mobile: string, dto: UpdateMpinDto): Promise<boolean> {
+  async updateMpin(mobile: string, plainMpin: string): Promise<boolean> {
+    const hashed = await hashMpin(plainMpin);
     const { error } = await this.users
       .update({
-        mpin: dto.mpin.trim(),
+        mpin: hashed,
         updated_at: getCurrentIsoTime(),
       })
       .eq('mobile_number', mobile);
@@ -173,6 +225,17 @@ export class UsersService {
         console.error('UsersService.updateMpin', error);
       }
       return false;
+    }
+    return true;
+  }
+
+  async verifyMpin(mobile: string, plain: string): Promise<boolean> {
+    const user = await this.getByMobile(mobile);
+    if (!user) return false;
+    const stored = String(user.mpin ?? '');
+    if (!(await mpinMatches(plain, stored))) return false;
+    if (stored && !storedMpinLooksBcrypt(stored)) {
+      await this.updateMpin(mobile, plain);
     }
     return true;
   }
@@ -214,7 +277,9 @@ export class UsersService {
     return true;
   }
 
-  private buildUpsertUpdatePayload(dto: UpsertUserDto): Record<string, unknown> | null {
+  private async buildUpsertUpdatePayload(
+    dto: UpsertUserDto,
+  ): Promise<Record<string, unknown> | null> {
     const now = getCurrentIsoTime();
     const payload: Record<string, unknown> = { updated_at: now };
     if (dto.userName != null) payload.user_name = dto.userName;
@@ -222,7 +287,7 @@ export class UsersService {
     if (dto.mpin != null) {
       const trimmed = dto.mpin.trim();
       if (trimmed.length !== MPIN_LENGTH) return null;
-      payload.mpin = trimmed;
+      payload.mpin = await hashMpin(trimmed);
     }
     if (dto.isLoggedIn != null) {
       payload.is_logged_in = dto.isLoggedIn;
@@ -248,7 +313,7 @@ export class UsersService {
       mobile_number: dto.mobileNumber,
       user_name: dto.userName ?? DEFAULT_USER_NAME,
       email: dto.email ?? null,
-      mpin: dto.mpin != null ? dto.mpin.trim() : null,
+      mpin: dto.mpin != null ? await hashMpin(dto.mpin) : null,
       is_active: true,
       is_logged_in: dto.isLoggedIn ?? false,
     };
@@ -267,16 +332,9 @@ export class UsersService {
     const existing = await this.getByMobile(dto.mobileNumber);
 
     if (existing) {
-      const updatePayload = this.buildUpsertUpdatePayload(dto);
+      const updatePayload = await this.buildUpsertUpdatePayload(dto);
       if (updatePayload == null) return false;
-      const ok = await this.updateUser(dto.mobileNumber, updatePayload);
-      if (!ok) return false;
-      if (dto.mpin != null) {
-        const verify = await this.getByMobile(dto.mobileNumber);
-        const saved = (verify?.mpin as string)?.trim() ?? '';
-        if (saved !== dto.mpin.trim()) return false;
-      }
-      return true;
+      return this.updateUser(dto.mobileNumber, updatePayload);
     }
 
     return this.insertUser(dto);
@@ -292,7 +350,9 @@ export class UsersService {
       return [];
     }
 
-    return (data as Record<string, unknown>[]) || [];
+    return ((data as Record<string, unknown>[]) || []).map(
+      (row) => sanitizeUserPublic(row) as Record<string, unknown>,
+    );
   }
 
   async updateById(id: string, dto: AdminUpdateUserDto): Promise<Record<string, unknown> | null> {
@@ -319,7 +379,7 @@ export class UsersService {
       return null;
     }
 
-    return data as Record<string, unknown>;
+    return sanitizeUserPublic(data as Record<string, unknown>);
   }
 
   async deleteById(id: string): Promise<boolean> {
@@ -338,7 +398,17 @@ export class UsersService {
 
 @Controller('users')
 export class UsersController {
-  constructor(private readonly usersService: UsersService) {}
+  constructor(
+    private readonly usersService: UsersService,
+    private readonly otpService: OtpService,
+  ) {}
+
+  private idTokenFrom(
+    headers: Record<string, string | string[] | undefined>,
+    bodyToken?: unknown,
+  ): string | undefined {
+    return extractIdToken(headers, bodyToken);
+  }
 
   @Get('admin/all')
   @HttpCode(HttpStatus.OK)
@@ -385,24 +455,65 @@ export class UsersController {
 
   @Get('mobile/:mobile')
   @HttpCode(HttpStatus.OK)
-  async getByMobile(@Param('mobile') mobile: string) {
+  async getByMobile(
+    @Param('mobile') mobile: string,
+    @Headers() headers: Record<string, string | string[] | undefined>,
+    @Headers('x-admin-internal-key') adminKey: string | undefined,
+  ) {
+    await assertMobileAccess(this.otpService, mobile, {
+      adminKey,
+      idToken: this.idTokenFrom(headers),
+    });
     const user = await this.usersService.getByMobile(mobile);
     if (!user) return { success: false, data: null };
-    return { success: true, data: user };
+    return { success: true, data: sanitizeUserPublic(user) };
   }
 
   @Post()
   @HttpCode(HttpStatus.CREATED)
-  async create(@Body() dto: CreateUserDto) {
+  async create(
+    @Body() dto: CreateUserDto,
+    @Headers() headers: Record<string, string | string[] | undefined>,
+    @Headers('x-admin-internal-key') adminKey: string | undefined,
+  ) {
+    await assertMobileAccess(this.otpService, dto.mobileNumber, {
+      adminKey,
+      idToken: this.idTokenFrom(headers, dto.idToken),
+    });
     const user = await this.usersService.create(dto);
     if (!user) return { success: false, message: MSG_USER_CREATE_FAILED };
-    return { success: true, data: user };
+    return { success: true, data: sanitizeUserPublic(user) };
+  }
+
+  @Post('mobile/:mobile/verify-mpin')
+  @HttpCode(HttpStatus.OK)
+  async verifyMpinRoute(
+    @Param('mobile') mobile: string,
+    @Body() dto: VerifyMpinDto,
+    @Headers() headers: Record<string, string | string[] | undefined>,
+    @Headers('x-admin-internal-key') adminKey: string | undefined,
+  ) {
+    await assertMobileAccess(this.otpService, mobile, {
+      adminKey,
+      idToken: this.idTokenFrom(headers, dto.idToken),
+    });
+    const ok = await this.usersService.verifyMpin(mobile, dto.mpin);
+    return { success: ok };
   }
 
   @Patch('mobile/:mobile/mpin')
   @HttpCode(HttpStatus.OK)
-  async updateMpin(@Param('mobile') mobile: string, @Body() dto: UpdateMpinDto) {
-    const ok = await this.usersService.updateMpin(mobile, dto);
+  async updateMpin(
+    @Param('mobile') mobile: string,
+    @Body() dto: UpdateMpinDto,
+    @Headers() headers: Record<string, string | string[] | undefined>,
+    @Headers('x-admin-internal-key') adminKey: string | undefined,
+  ) {
+    await assertMobileAccess(this.otpService, mobile, {
+      adminKey,
+      idToken: this.idTokenFrom(headers, dto.idToken),
+    });
+    const ok = await this.usersService.updateMpin(mobile, dto.mpin);
     return { success: ok };
   }
 
@@ -411,27 +522,51 @@ export class UsersController {
   async updateLoginStatus(
     @Param('mobile') mobile: string,
     @Body() dto: UpdateLoginStatusDto,
+    @Headers() headers: Record<string, string | string[] | undefined>,
+    @Headers('x-admin-internal-key') adminKey: string | undefined,
   ) {
+    await assertMobileAccess(this.otpService, mobile, {
+      adminKey,
+      idToken: this.idTokenFrom(headers, dto.idToken),
+    });
     const ok = await this.usersService.updateLoginStatus(mobile, dto);
     return { success: ok };
   }
 
   @Patch('mobile/:mobile/profile')
   @HttpCode(HttpStatus.OK)
-  async updateProfile(@Param('mobile') mobile: string, @Body() dto: UpdateProfileDto) {
+  async updateProfile(
+    @Param('mobile') mobile: string,
+    @Body() dto: UpdateProfileDto,
+    @Headers() headers: Record<string, string | string[] | undefined>,
+    @Headers('x-admin-internal-key') adminKey: string | undefined,
+  ) {
+    await assertMobileAccess(this.otpService, mobile, {
+      adminKey,
+      idToken: this.idTokenFrom(headers, dto.idToken),
+    });
     const ok = await this.usersService.updateProfile(mobile, dto);
     return { success: ok };
   }
 
   @Put('upsert')
   @HttpCode(HttpStatus.OK)
-  async upsert(@Body() dto: UpsertUserDto) {
+  async upsert(
+    @Body() dto: UpsertUserDto,
+    @Headers() headers: Record<string, string | string[] | undefined>,
+    @Headers('x-admin-internal-key') adminKey: string | undefined,
+  ) {
+    await assertMobileAccess(this.otpService, dto.mobileNumber, {
+      adminKey,
+      idToken: this.idTokenFrom(headers, dto.idToken),
+    });
     const ok = await this.usersService.upsert(dto);
     return { success: ok };
   }
 }
 
 @Module({
+  imports: [OtpModule],
   controllers: [UsersController],
   providers: [UsersService],
   exports: [UsersService],

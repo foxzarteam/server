@@ -4,9 +4,15 @@ import { AppModule } from './app.module';
 import { ConfigService } from '@nestjs/config';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import compression from 'compression';
+import { CORS_ALLOWED_HEADERS, resolveCorsOrigin } from './common/cors';
 import { ROOT_PAGE_HTML } from './root-landing';
 
 async function bootstrap() {
+  if (process.env.NODE_ENV === 'production' && !(process.env.ADMIN_INTERNAL_KEY ?? '').trim()) {
+    console.error('FATAL: ADMIN_INTERNAL_KEY is required in production.');
+    process.exit(1);
+  }
+
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
     bufferLogs: true,
     logger: process.env.NODE_ENV === 'production' ? ['error', 'warn', 'log'] : undefined,
@@ -24,12 +30,10 @@ async function bootstrap() {
   app.use(compression());
   app.getHttpAdapter().getInstance().set('trust proxy', 1);
 
-  const isProduction = process.env.NODE_ENV === 'production';
-  const allowedOrigins = process.env.ALLOWED_ORIGINS?.split(',').map((o) => o.trim()).filter(Boolean);
   app.enableCors({
-    origin: isProduction && allowedOrigins?.length ? allowedOrigins : true,
+    origin: resolveCorsOrigin(),
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
-    allowedHeaders: ['Content-Type', 'Accept', 'Authorization', 'x-admin-internal-key'],
+    allowedHeaders: CORS_ALLOWED_HEADERS,
   });
   app.useGlobalPipes(
     new ValidationPipe({

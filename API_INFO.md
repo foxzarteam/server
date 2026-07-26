@@ -10,31 +10,45 @@ Base URL (local paths doc): `http://localhost:3000/api` — prefix `api`, port `
 
 - **POST** `/auth/login` — Admin/staff: body `{ "email", "password" }` → Supabase `public.auth`. **Browser** az_web se seedha is URL pe `POST` karta hai (`NEXT_PUBLIC_API_URL` + `/api/auth/login`); pass hone par same site **`POST` az_web** `/api/admin/session` cookie set karta hai (server dubara verify karta hai).
 
-- **GET** `/users/mobile/:mobile` — User row fetch by mobile number (not found → `data: null`).
-- **POST** `/users` — New user create (duplicate mobile pe fail).
-- **PUT** `/users/upsert` — User insert ya same mobile par partial update.
-- **PATCH** `/users/mobile/:mobile/mpin` — MPIN set/update.
-- **PATCH** `/users/mobile/:mobile/login-status` — Login / logout status aur `last_login_at`.
-- **PATCH** `/users/mobile/:mobile/profile` — `userName` / `email` update.
+- **GET** `/users/mobile/:mobile` — Auth required (OTP / Firebase idToken / admin key). Returns user **without** `mpin` (`has_mpin` flag).
+- **POST** `/users` — Auth required. New user create.
+- **PUT** `/users/upsert` — Auth required.
+- **PATCH** `/users/mobile/:mobile/mpin` — Auth required. Stores **bcrypt-hashed** MPIN.
+- **POST** `/users/mobile/:mobile/verify-mpin` — Auth required. Body `{ mpin }` → `{ success }` (does not return hash).
+- **PATCH** `/users/mobile/:mobile/login-status` — Auth required.
+- **PATCH** `/users/mobile/:mobile/profile` — Auth required.
 
 - **POST** `/otp/send` — Dev flow: DB me OTP session banata hai (SMS yahan nahi).
-- **POST** `/otp/verify` — OTP verify karke session marked verified.
+- **POST** `/otp/request-send` — Rate-limit check + send row before Firebase SMS.
 - **POST** `/otp/verify-firebase` — Firebase ID token verify (az_web). Body: `{ mobileNumber, idToken }`.
 - **GET** `/otp/live` — Env `LIVE` se `{ live: boolean }`.
 - **GET** `/otp/dev` — Recent OTP rows ki HTML debug page (prod me usually 404, `ALLOW_OTP_DEV=true` se allow).
 
 - **GET** `/leads` — API info / related routes ka short meta (DB list nahi).
-- **POST** `/leads` — Naya lead create (duplicate mobile same user pe rokta hai).
-- **GET** `/leads/user/:userId` — Us user ke active leads.
-- **GET** `/leads/user/:userId/category/:category` — User leads category se filter.
+- **POST** `/leads/apply` — Public apply (az_web form). Duplicate mobile/PAN block.
+- **POST** `/leads/start` — Requires recent OTP verification.
+- **POST** `/leads` — Auth required (OTP / idToken / admin key).
+- **PATCH** `/leads/:id/complete` — Auth required for that lead’s mobile.
+- **GET** `/leads/user/:userId` — Auth required (owner OTP or admin key). PAN/notes stripped.
+- **GET** `/leads/user/:userId/category/:category` — Same auth as above.
 
-- **GET** `/banners` — Sab active banners ordered.
-- **GET** `/banners/category/:category` — Active banners us category ke.
-- **GET** `/banners/all` — Sab banners (inactive bhi).
+- **GET** `/payment-accounts/user/:userId` — Auth required (owner OTP / idToken / admin key).
+- **PUT** `/payment-accounts/user/:userId` — Auth required.
 
-- **GET** `/services` — Active services list, `sort_order` se ordered.
+- **GET** `/wallet/user/:userId` — Auth required.
 
-- **GET** `/payment-accounts/user/:userId` — User ke payment accounts list.
-- **PUT** `/payment-accounts/user/:userId` — UPI ya bank row upsert (`user_id` + `payment_type` conflict).
+**Auth for mobile routes:** `x-admin-internal-key` **or** recent verified OTP for that mobile **or** `x-firebase-id-token` / `Authorization: Bearer` / body `idToken`.
 
-- **GET** `/wallet/user/:userId` — User wallet row (balance, earning, redeem, etc.).
+**Production fail-closed:** `ADMIN_INTERNAL_KEY` + `ALLOWED_ORIGINS` required. Admin passwords must be bcrypt (plaintext login disabled).
+
+- **POST** `/customer/check-mobile` — Public. Body: `{ mobileNumber }` → `{ success, exists }` (active lead for that mobile?).
+- **POST** `/customer/login` — Public. Body: `{ mobileNumber, idToken }` → Firebase verify + applications. Response: `{ success, customer, applications }` ya error (`NO_APPLICATION` / `LOGIN_FAILED`). az_web isse session cookie set karta hai.
+- **POST** `/customer/applications` — Internal (`x-admin-internal-key`). Body: `{ mobileNumber }` → `{ success, customer, applications }` (dashboard /me BFF).
+
+- **POST** `/contact` — Public contact form. Body: `{ name, email, phone, message }` → `{ success, id }`.
+- **GET** `/contact/admin/all` — Internal key. Sab contacts (newest first).
+- **PATCH** `/contact/admin/:id` — Internal key. Update name/email/phone/message/status.
+- **DELETE** `/contact/admin/:id` — Internal key. Delete contact.
+
+- **POST** `/chat` — Public loan-helper chat start. Body: `{ mobileNumber, answers, status? }` → `{ success, id, status }`.
+- **PATCH** `/chat/:id` — Auth required (OTP / idToken / admin key for that chat’s mobile). Update `status` / `leadId`.

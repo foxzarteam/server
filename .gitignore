@@ -3,6 +3,11 @@ dist
 *.tsbuildinfo
 .env
 .env.local
+.env.txt
+**/imp.txt
 firebase-service-account.json
 *.log
 .DS_Store
+api/index.js
+api/index.js.map
+api/index.d.ts

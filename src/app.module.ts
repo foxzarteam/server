@@ -12,6 +12,9 @@ import { WalletModule } from './wallet/wallet.module';
 import { AuthModule } from './auth/auth.module';
 import { AdminModule } from './admin/admin.module';
 import { PartnerModule } from './partner/partner.module';
+import { CustomerModule } from './customer/customer.module';
+import { ContactModule } from './contact/contact.module';
+import { ChatModule } from './chat/chat.module';
 
 @Module({
   imports: [
@@ -31,6 +34,9 @@ import { PartnerModule } from './partner/partner.module';
     AuthModule,
     AdminModule,
     PartnerModule,
+    CustomerModule,
+    ContactModule,
+    ChatModule,
   ],
 })
 export class AppModule {}

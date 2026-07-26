@@ -30,8 +30,10 @@ import {
 } from 'class-validator';
 import { SUPABASE_CLIENT } from '../config/supabase';
 import { adminInternalKeyOk } from '../common/admin-internal';
+import { assertMobileAccess, extractIdToken } from '../common/phone-access';
 import { TABLE_LEADS, MSG_OTP_PHONE_NOT_VERIFIED } from '../common/constants';
 import { OtpModule, OtpService } from '../otp/otp.module';
+import { UsersModule, UsersService } from '../users/users.module';
 
 /** Placeholder until user completes the second-step form */
 export const LEAD_DRAFT_FULL_NAME = 'Unknown';
@@ -260,6 +262,37 @@ export class LeadsService {
     }
 
     return (data as Record<string, unknown>) ?? null;
+  }
+
+  async getById(id: string): Promise<Record<string, unknown> | null> {
+    const { data, error } = await this.leads.select().eq('id', id.trim()).maybeSingle();
+    if (error) {
+      if (process.env.NODE_ENV !== 'production') {
+        console.error('LeadsService.getById', error);
+      }
+      return null;
+    }
+    return (data as Record<string, unknown>) ?? null;
+  }
+
+  /** All active leads for a mobile (newest first). Used by customer track status. */
+  async listByMobile(mobileNumber: string): Promise<Record<string, unknown>[]> {
+    const mobile = mobileNumber.trim();
+    const { data, error } = await this.leads
+      .select()
+      .eq('mobile_number', mobile)
+      .eq('is_active', true)
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      if (process.env.NODE_ENV !== 'production') {
+        console.error('LeadsService.listByMobile', error);
+      }
+      return [];
+    }
+
+    const leads = (data as Record<string, unknown>[]) || [];
+    return this.withOtpVerified(leads);
   }
 
   async getByPan(pan: string): Promise<Record<string, unknown> | null> {
@@ -578,18 +611,24 @@ export class LeadsController {
   constructor(
     private readonly leadsService: LeadsService,
     private readonly otpService: OtpService,
+    private readonly usersService: UsersService,
   ) {}
+
+  private sanitizePublicLead(lead: Record<string, unknown>): Record<string, unknown> {
+    const { pan: _pan, notes: _notes, ...rest } = lead;
+    return rest;
+  }
 
   @Get()
   @HttpCode(HttpStatus.OK)
   async getAll() {
     return {
       success: true,
-      message: 'Leads API is working! Use POST /api/leads to create a lead.',
+      message: 'Leads API is working! Prefer POST /api/leads/apply for new applications.',
       endpoints: {
-        create: 'POST /api/leads',
-        getByUser: 'GET /api/leads/user/:userId',
-        getByCategory: 'GET /api/leads/user/:userId/category/:category',
+        apply: 'POST /api/leads/apply',
+        start: 'POST /api/leads/start',
+        getByUser: 'GET /api/leads/user/:userId (auth required)',
       },
     };
   }
@@ -616,7 +655,7 @@ export class LeadsController {
       return { success: false, message: 'Failed to save mobile number. Please try again.' };
     }
 
-    return { success: true, data: result.lead };
+    return { success: true, data: this.sanitizePublicLead(result.lead) };
   }
 
   /**
@@ -634,12 +673,27 @@ export class LeadsController {
       }
       throw new BadRequestException(message);
     }
-    return { success: true, data: result.lead };
+    return { success: true, data: this.sanitizePublicLead(result.lead) };
   }
 
   @Patch(':id/complete')
   @HttpCode(HttpStatus.OK)
-  async complete(@Param('id') id: string, @Body() dto: CompleteLeadDto) {
+  async complete(
+    @Param('id') id: string,
+    @Body() dto: CompleteLeadDto,
+    @Headers() headers: Record<string, string | string[] | undefined>,
+    @Headers('x-admin-internal-key') adminKey: string | undefined,
+  ) {
+    const existing = await this.leadsService.getById(id);
+    if (!existing) {
+      return { success: false, message: 'Lead not found.' };
+    }
+    const mobile = String(existing.mobile_number ?? '').trim();
+    await assertMobileAccess(this.otpService, mobile, {
+      adminKey,
+      idToken: extractIdToken(headers),
+    });
+
     const lead = await this.leadsService.completeLead(id, dto);
     if (!lead) {
       return {
@@ -647,12 +701,21 @@ export class LeadsController {
         message: 'Failed to update details. Please check PAN and try again.',
       };
     }
-    return { success: true, data: lead };
+    return { success: true, data: this.sanitizePublicLead(lead) };
   }
 
   @Post()
   @HttpCode(HttpStatus.CREATED)
-  async create(@Body() dto: CreateLeadDto) {
+  async create(
+    @Body() dto: CreateLeadDto,
+    @Headers() headers: Record<string, string | string[] | undefined>,
+    @Headers('x-admin-internal-key') adminKey: string | undefined,
+  ) {
+    await assertMobileAccess(this.otpService, dto.mobileNumber, {
+      adminKey,
+      idToken: extractIdToken(headers),
+    });
+
     try {
       const existing = await this.leadsService.getByMobile(dto.mobileNumber);
       if (existing) {
@@ -669,14 +732,14 @@ export class LeadsController {
         if (!updated) {
           return { success: false, message: 'Failed to update lead' };
         }
-        return { success: true, data: updated };
+        return { success: true, data: this.sanitizePublicLead(updated) };
       }
 
       const lead = await this.leadsService.create(dto);
       if (!lead) {
         return { success: false, message: 'Failed to create lead' };
       }
-      return { success: true, data: lead };
+      return { success: true, data: this.sanitizePublicLead(lead) };
     } catch (error) {
       if (process.env.NODE_ENV !== 'production') {
         console.error('LeadsController.create', error);
@@ -690,9 +753,22 @@ export class LeadsController {
 
   @Get('user/:userId')
   @HttpCode(HttpStatus.OK)
-  async getByUserId(@Param('userId') userId: string) {
+  async getByUserId(
+    @Param('userId') userId: string,
+    @Headers() headers: Record<string, string | string[] | undefined>,
+    @Headers('x-admin-internal-key') adminKey: string | undefined,
+  ) {
+    if (!adminInternalKeyOk(adminKey)) {
+      const user = await this.usersService.getById(userId);
+      const mobile = String(user?.mobile_number ?? '').trim();
+      if (!mobile) throw new UnauthorizedException('Unauthorized');
+      await assertMobileAccess(this.otpService, mobile, {
+        adminKey,
+        idToken: extractIdToken(headers),
+      });
+    }
     const leads = await this.leadsService.getByUserId(userId);
-    return { success: true, data: leads };
+    return { success: true, data: leads.map((l) => this.sanitizePublicLead(l)) };
   }
 
   @Get('user/:userId/category/:category')
@@ -700,9 +776,20 @@ export class LeadsController {
   async getByCategory(
     @Param('userId') userId: string,
     @Param('category') category: string,
+    @Headers() headers: Record<string, string | string[] | undefined>,
+    @Headers('x-admin-internal-key') adminKey: string | undefined,
   ) {
+    if (!adminInternalKeyOk(adminKey)) {
+      const user = await this.usersService.getById(userId);
+      const mobile = String(user?.mobile_number ?? '').trim();
+      if (!mobile) throw new UnauthorizedException('Unauthorized');
+      await assertMobileAccess(this.otpService, mobile, {
+        adminKey,
+        idToken: extractIdToken(headers),
+      });
+    }
     const leads = await this.leadsService.getByCategory(userId, category);
-    return { success: true, data: leads };
+    return { success: true, data: leads.map((l) => this.sanitizePublicLead(l)) };
   }
 
   @Get('admin/all')
@@ -750,8 +837,9 @@ export class LeadsController {
 }
 
 @Module({
-  imports: [OtpModule],
+  imports: [OtpModule, UsersModule],
   controllers: [LeadsController],
   providers: [LeadsService],
+  exports: [LeadsService],
 })
 export class LeadsModule {}

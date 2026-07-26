@@ -69,22 +69,19 @@ export class AuthService {
   }
 
   private async passwordOk(plain: string, storedRaw: string | null | undefined): Promise<boolean> {
-    const stored = normalizeStoredCredential(String(storedRaw ?? ""));
-    const p = String(plain ?? "")
-      .replace(/^\uFEFF/, "")
+    const stored = normalizeStoredCredential(String(storedRaw ?? ''));
+    const p = String(plain ?? '')
+      .replace(/^\uFEFF/, '')
       .trim();
-    if (!stored) return false;
-    if (storedPasswordLooksBcrypt(stored)) {
-      try {
-        return await bcrypt.compare(p, stored);
-      } catch {
-        return false;
-      }
+    if (!stored || !storedPasswordLooksBcrypt(stored)) return false;
+    try {
+      return await bcrypt.compare(p, stored);
+    } catch {
+      return false;
     }
-    return p.normalize('NFKC') === stored.normalize('NFKC');
   }
 
-  /** `public.auth`: email row + password (bcrypt or plain) + role admin|staff. */
+  /** `public.auth`: email row + bcrypt password + role admin|staff. */
   async verifyAdminLogin(email: string, plainPassword: string): Promise<AuthUserPublic> {
     const trimmed = email.trim();
     const normalized = trimmed.toLowerCase();
