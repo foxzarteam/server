@@ -208,14 +208,8 @@ export class LeadsService {
 
     const mobile = dto.mobileNumber.trim();
     const byMobile = await this.getByMobile(mobile);
-    // Draft / still-pending rows for this mobile are upgraded (chat: OTP → form).
-    // Only block when a finished (approved/rejected) application already exists.
-    const mobileStatus = String(byMobile?.['status'] ?? '').toLowerCase();
-    const mobileLocked =
-      byMobile &&
-      !this.isDraftLead(byMobile) &&
-      (mobileStatus === 'approved' || mobileStatus === 'rejected');
-    if (mobileLocked) {
+    // Any real (non-draft) lead with this mobile → block BEFORE OTP is sent.
+    if (byMobile && !this.isDraftLead(byMobile)) {
       return {
         ok: false,
         message: 'This mobile number already exists. Please use a different number.',
@@ -223,13 +217,11 @@ export class LeadsService {
     }
 
     const byPan = await this.getByPan(panUpper);
-    const panStatus = String(byPan?.['status'] ?? '').toLowerCase();
-    const panOnOtherLead =
+    if (
       byPan &&
-      String(byPan.id) !== String(byMobile?.id ?? '') &&
       !this.isDraftLead(byPan) &&
-      (panStatus === 'approved' || panStatus === 'rejected' || panStatus === 'pending');
-    if (panOnOtherLead) {
+      String(byPan.id) !== String(byMobile?.id ?? '')
+    ) {
       return {
         ok: false,
         message: 'This PAN already exists. Please use a different PAN.',
@@ -266,8 +258,8 @@ export class LeadsService {
       if (dto.insType) payload.ins_type = dto.insType;
     }
 
-    // Upgrade existing draft / pending row for this mobile (chat OTP → form submit).
-    if (byMobile?.id && !mobileLocked) {
+    // Upgrade OTP/start draft only — never overwrite a real application.
+    if (byMobile && this.isDraftLead(byMobile) && byMobile.id) {
       const updated = await this.updateById(String(byMobile.id), {
         pan: panUpper,
         fullName: dto.fullName.trim(),
@@ -285,9 +277,7 @@ export class LeadsService {
       await this.panAudit.record({
         leadId: String(byMobile.id),
         action: 'update',
-        reason: this.isDraftLead(byMobile)
-          ? 'public_apply_upgrade_draft'
-          : 'public_apply_update_pending',
+        reason: 'public_apply_upgrade_draft',
         metadata: { pan_masked: panFields.pan },
       });
       return { ok: true, lead: updated };
@@ -351,8 +341,8 @@ export class LeadsService {
     const existing = await this.getByMobile(mobileNumber);
 
     if (existing) {
-      const status = String(existing['status'] ?? '').toLowerCase();
-      if (status === 'approved' || status === 'rejected') {
+      // Chat OTP → start: only allow when there is no real application yet.
+      if (!this.isDraftLead(existing)) {
         return {
           ok: false,
           message: 'This mobile number already exists. Please use a different number.',
@@ -361,7 +351,7 @@ export class LeadsService {
       return {
         ok: true,
         lead: this.safeLead(existing)!,
-        isDraft: this.isDraftLead(existing),
+        isDraft: true,
       };
     }
 
@@ -373,10 +363,10 @@ export class LeadsService {
   async completeLead(
     id: string,
     dto: CompleteLeadDto,
-  ): Promise<Record<string, unknown> | null> {
+  ): Promise<{ ok: true; lead: Record<string, unknown> } | { ok: false; message: string }> {
     const panUpper = normalizePan(dto.pan);
     if (!isValidPanFormat(panUpper)) {
-      return null;
+      return { ok: false, message: 'Invalid PAN format.' };
     }
 
     const existing = await this.leads
@@ -385,7 +375,7 @@ export class LeadsService {
       .eq('is_active', true)
       .maybeSingle();
     if (existing.error || !existing.data) {
-      return null;
+      return { ok: false, message: 'Application not found.' };
     }
 
     const row = existing.data as Record<string, unknown>;
@@ -396,12 +386,22 @@ export class LeadsService {
       String(other['id']) !== id &&
       !this.isDraftLead(other)
     ) {
-      return null;
+      return {
+        ok: false,
+        message: 'This mobile number already exists. Please use a different number.',
+      };
     }
 
     const duplicatePan = await this.getByPan(panUpper);
-    if (duplicatePan && String(duplicatePan.id) !== id) {
-      return null;
+    if (
+      duplicatePan &&
+      String(duplicatePan.id) !== id &&
+      !this.isDraftLead(duplicatePan)
+    ) {
+      return {
+        ok: false,
+        message: 'This PAN already exists. Please use a different PAN.',
+      };
     }
 
     const category = (dto.category?.trim() || String(row['category'] ?? '')).trim();
@@ -422,7 +422,14 @@ export class LeadsService {
       update.requiredAmount = null;
     }
 
-    return this.updateById(id, update);
+    const lead = await this.updateById(id, update);
+    if (!lead) {
+      return {
+        ok: false,
+        message: 'Failed to update details. Please check PAN and try again.',
+      };
+    }
+    return { ok: true, lead };
   }
 
   async create(dto: CreateLeadDto): Promise<Record<string, unknown> | null> {
@@ -859,14 +866,15 @@ export class LeadsController {
       idToken: extractIdToken(headers),
     });
 
-    const lead = await this.leadsService.completeLead(id, dto);
-    if (!lead) {
-      return {
-        success: false,
-        message: 'Failed to update details. Please check PAN and try again.',
-      };
+    const result = await this.leadsService.completeLead(id, dto);
+    if (!result.ok) {
+      const message = result.message || 'Failed to update details.';
+      if (message.toLowerCase().includes('already exists')) {
+        throw new ConflictException(message);
+      }
+      throw new BadRequestException(message);
     }
-    return { success: true, data: this.sanitizePublicLead(lead) };
+    return { success: true, data: this.sanitizePublicLead(result.lead) };
   }
 
   @Post()
