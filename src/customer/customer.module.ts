@@ -17,6 +17,7 @@ import { IsOptional, IsString, Length, Matches, MinLength } from 'class-validato
 import { adminInternalKeyOk } from '../common/admin-internal';
 import { LeadsModule, LeadsService } from '../leads/leads.module';
 import { OtpModule, OtpService } from '../otp/otp.module';
+import { isMaskedPan, isValidPanFormat, maskPan, normalizePan } from '../security/pan-crypto';
 
 class CheckMobileDto {
   @IsString()
@@ -156,7 +157,13 @@ export class CustomerService {
       name: asString(latest.full_name) || 'Customer',
       mobile,
       email: asString(latest.email) || null,
-      pan: asString(latest.pan) || null,
+      pan: (() => {
+        const raw = asString(latest.pan);
+        if (!raw) return null;
+        if (isMaskedPan(raw)) return normalizePan(raw);
+        if (isValidPanFormat(raw)) return maskPan(raw);
+        return maskPan(raw);
+      })(),
       totalApplications: rows.length,
       memberSince: asString(oldest.created_at) || null,
     };

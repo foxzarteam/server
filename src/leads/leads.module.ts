@@ -34,6 +34,20 @@ import { assertMobileAccess, extractIdToken } from '../common/phone-access';
 import { TABLE_LEADS, MSG_OTP_PHONE_NOT_VERIFIED } from '../common/constants';
 import { OtpModule, OtpService } from '../otp/otp.module';
 import { UsersModule, UsersService } from '../users/users.module';
+import {
+  hashPan,
+  isMaskedPan,
+  isValidPanFormat,
+  normalizePan,
+  panStorageFields,
+  redactSensitiveLeadPayload,
+  toSafeLeadRow,
+  decryptPan,
+  maskPan,
+  PAN_FORMAT_REGEX,
+} from '../security/pan-crypto';
+import { PanAuditService } from '../security/pan-audit.service';
+import { withDecryptedPanForPartner } from '../security/pan-partner';
 
 /** Placeholder until user completes the second-step form */
 export const LEAD_DRAFT_FULL_NAME = 'Unknown';
@@ -76,6 +90,7 @@ class StartLeadDto {
 class CompleteLeadDto {
   @IsString()
   @Length(10, 10, { message: 'PAN must be 10 characters' })
+  @Matches(PAN_FORMAT_REGEX, { message: 'Invalid PAN format (e.g. ABCDE1234F)' })
   pan: string;
 
   @IsString()
@@ -110,6 +125,7 @@ class CreateLeadDto {
 
   @IsString()
   @Length(10, 10, { message: 'PAN must be 10 characters' })
+  @Matches(PAN_FORMAT_REGEX, { message: 'Invalid PAN format (e.g. ABCDE1234F)' })
   pan: string;
 
   @IsString()
@@ -170,7 +186,9 @@ class UpdateLeadDto {
 
   @IsOptional()
   @IsString()
+  @ValidateIf((o) => o.pan != null && o.pan !== '' && !isMaskedPan(String(o.pan)))
   @Length(10, 10, { message: 'PAN must be 10 characters' })
+  @Matches(PAN_FORMAT_REGEX, { message: 'Invalid PAN format (e.g. ABCDE1234F)' })
   pan?: string;
 
   @IsOptional()
@@ -216,6 +234,7 @@ class UpdateLeadDto {
 class AdminCreateLeadDto {
   @IsString()
   @Length(10, 10, { message: 'PAN must be 10 characters' })
+  @Matches(PAN_FORMAT_REGEX, { message: 'Invalid PAN format (e.g. ABCDE1234F)' })
   pan: string;
 
   @IsString()
@@ -275,10 +294,20 @@ export class LeadsService {
   constructor(
     @Inject(SUPABASE_CLIENT) private readonly supabase: SupabaseClient,
     private readonly otpService: OtpService,
+    private readonly panAudit: PanAuditService,
   ) {}
 
   private get leads() {
     return this.supabase.from(TABLE_LEADS);
+  }
+
+  private safeLead(row: Record<string, unknown> | null): Record<string, unknown> | null {
+    if (!row) return null;
+    return toSafeLeadRow(row);
+  }
+
+  private safeLeads(rows: Record<string, unknown>[]): Record<string, unknown>[] {
+    return rows.map((r) => toSafeLeadRow(r));
   }
 
   private async withOtpVerified(
@@ -354,7 +383,23 @@ export class LeadsService {
   }
 
   async getByPan(pan: string): Promise<Record<string, unknown> | null> {
-    const panUpper = pan.trim().toUpperCase();
+    const panUpper = normalizePan(pan);
+    if (!isValidPanFormat(panUpper)) return null;
+
+    const digest = hashPan(panUpper);
+    const byHash = await this.leads
+      .select()
+      .eq('pan_hash', digest)
+      .eq('is_active', true)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (!byHash.error && byHash.data) {
+      return byHash.data as Record<string, unknown>;
+    }
+
+    // Legacy plaintext rows (pre-migration): lookup then stop returning plaintext via callers.
     const { data, error } = await this.leads
       .select()
       .eq('pan', panUpper)
@@ -365,7 +410,7 @@ export class LeadsService {
 
     if (error) {
       if (process.env.NODE_ENV !== 'production') {
-        console.error('LeadsService.getByPan', error);
+        console.error('LeadsService.getByPan', error.message);
       }
       return null;
     }
@@ -382,8 +427,8 @@ export class LeadsService {
     lead?: Record<string, unknown>;
     message?: string;
   }> {
-    const panUpper = dto.pan.trim().toUpperCase();
-    if (!/^[A-Z]{5}[0-9]{4}[A-Z]{1}$/.test(panUpper)) {
+    const panUpper = normalizePan(dto.pan);
+    if (!isValidPanFormat(panUpper)) {
       return { ok: false, message: 'Invalid PAN format.' };
     }
 
@@ -404,8 +449,15 @@ export class LeadsService {
       };
     }
 
+    let panFields: ReturnType<typeof panStorageFields>;
+    try {
+      panFields = panStorageFields(panUpper);
+    } catch {
+      return { ok: false, message: 'Invalid PAN format.' };
+    }
+
     const payload: Record<string, unknown> = {
-      pan: panUpper,
+      ...panFields,
       mobile_number: mobile,
       full_name: dto.fullName.trim(),
       email: dto.email?.trim() || null,
@@ -417,7 +469,6 @@ export class LeadsService {
     };
 
     if (dto.userId?.trim()) payload.user_id = dto.userId.trim();
-    // Exact slider amount → required_amount; do not store range in loan_amt
     if (dto.category === 'personal_loan') {
       payload.loan_amt = null;
       if (dto.requiredAmount != null) payload.required_amount = dto.requiredAmount;
@@ -427,17 +478,29 @@ export class LeadsService {
     const { data, error } = await this.leads.insert(payload).select().single();
     if (error) {
       if (process.env.NODE_ENV !== 'production') {
-        console.error('LeadsService.applyLead', error, payload);
+        console.error('LeadsService.applyLead', error.message, redactSensitiveLeadPayload(payload));
       }
       return { ok: false, message: 'Failed to create lead. Please try again.' };
     }
 
-    return { ok: true, lead: data as Record<string, unknown> };
+    const lead = data as Record<string, unknown>;
+    if (lead.id) {
+      await this.panAudit.record({
+        leadId: String(lead.id),
+        action: 'create',
+        reason: 'public_apply',
+        metadata: { pan_masked: panFields.pan },
+      });
+    }
+
+    return { ok: true, lead: this.safeLead(lead)! };
   }
 
   async createDraft(mobileNumber: string, category: string): Promise<Record<string, unknown> | null> {
     const payload: Record<string, unknown> = {
       pan: LEAD_DRAFT_PAN,
+      pan_encrypted: null,
+      pan_hash: null,
       mobile_number: mobileNumber.trim(),
       full_name: LEAD_DRAFT_FULL_NAME,
       email: null,
@@ -452,12 +515,12 @@ export class LeadsService {
 
     if (error) {
       if (process.env.NODE_ENV !== 'production') {
-        console.error('LeadsService.createDraft error:', error, payload);
+        console.error('LeadsService.createDraft error:', error.message, redactSensitiveLeadPayload(payload));
       }
       return null;
     }
 
-    return data as Record<string, unknown>;
+    return this.safeLead(data as Record<string, unknown>);
   }
 
   async startLead(mobileNumber: string, category?: string): Promise<{
@@ -480,8 +543,8 @@ export class LeadsService {
     id: string,
     dto: CompleteLeadDto,
   ): Promise<Record<string, unknown> | null> {
-    const panUpper = dto.pan.trim().toUpperCase();
-    if (!/^[A-Z]{5}[0-9]{4}[A-Z]{1}$/.test(panUpper)) {
+    const panUpper = normalizePan(dto.pan);
+    if (!isValidPanFormat(panUpper)) {
       return null;
     }
 
@@ -498,6 +561,11 @@ export class LeadsService {
       String(other['id']) !== id &&
       !this.isDraftLead(other)
     ) {
+      return null;
+    }
+
+    const duplicatePan = await this.getByPan(panUpper);
+    if (duplicatePan && String(duplicatePan.id) !== id) {
       return null;
     }
 
@@ -523,16 +591,20 @@ export class LeadsService {
   }
 
   async create(dto: CreateLeadDto): Promise<Record<string, unknown> | null> {
-    const panUpper = dto.pan.trim().toUpperCase();
-    if (!/^[A-Z]{5}[0-9]{4}[A-Z]{1}$/.test(panUpper)) {
-      if (process.env.NODE_ENV !== 'production') {
-        console.error('LeadsService.create: Invalid PAN format', panUpper);
-      }
+    const panUpper = normalizePan(dto.pan);
+    if (!isValidPanFormat(panUpper)) {
+      return null;
+    }
+
+    let panFields: ReturnType<typeof panStorageFields>;
+    try {
+      panFields = panStorageFields(panUpper);
+    } catch {
       return null;
     }
 
     const payload: Record<string, unknown> = {
-      pan: panUpper,
+      ...panFields,
       mobile_number: dto.mobileNumber.trim(),
       full_name: dto.fullName.trim(),
       email: dto.email?.trim() || null,
@@ -559,12 +631,22 @@ export class LeadsService {
 
     if (error) {
       if (process.env.NODE_ENV !== 'production') {
-        console.error('LeadsService.create error:', error, payload);
+        console.error('LeadsService.create error:', error.message, redactSensitiveLeadPayload(payload));
       }
       return null;
     }
 
-    return data as Record<string, unknown>;
+    const lead = data as Record<string, unknown>;
+    if (lead.id) {
+      await this.panAudit.record({
+        leadId: String(lead.id),
+        action: 'create',
+        reason: 'admin_or_api_create',
+        metadata: { pan_masked: panFields.pan },
+      });
+    }
+
+    return this.safeLead(lead);
   }
 
   async getByUserId(userId: string): Promise<Record<string, unknown>[]> {
@@ -581,7 +663,7 @@ export class LeadsService {
       return [];
     }
 
-    return (data as Record<string, unknown>[]) || [];
+    return this.safeLeads((data as Record<string, unknown>[]) || []);
   }
 
   async getByCategory(userId: string, category: string): Promise<Record<string, unknown>[]> {
@@ -594,12 +676,12 @@ export class LeadsService {
 
     if (error) {
       if (process.env.NODE_ENV !== 'production') {
-        console.error('LeadsService.getByCategory', error);
+        console.error('LeadsService.getByCategory', error.message);
       }
       return [];
     }
 
-    return (data as Record<string, unknown>[]) || [];
+    return this.safeLeads((data as Record<string, unknown>[]) || []);
   }
 
   async getAll(): Promise<Record<string, unknown>[]> {
@@ -607,13 +689,14 @@ export class LeadsService {
 
     if (error) {
       if (process.env.NODE_ENV !== 'production') {
-        console.error('LeadsService.getAll', error);
+        console.error('LeadsService.getAll', error.message);
       }
       return [];
     }
 
     const leads = (data as Record<string, unknown>[]) || [];
-    return this.withOtpVerified(leads);
+    const withOtp = await this.withOtpVerified(leads);
+    return this.safeLeads(withOtp);
   }
 
   async updateById(id: string, dto: UpdateLeadDto): Promise<Record<string, unknown> | null> {
@@ -630,10 +713,26 @@ export class LeadsService {
     if (dto.loanAmt !== undefined) payload.loan_amt = dto.loanAmt ?? null;
     if (dto.insType !== undefined) payload.ins_type = dto.insType ?? null;
 
-    if (dto.pan != null) {
-      const panUpper = dto.pan.trim().toUpperCase();
-      if (!/^[A-Z]{5}[0-9]{4}[A-Z]{1}$/.test(panUpper)) return null;
-      payload.pan = panUpper;
+    let panChanged = false;
+    let panMasked: string | null = null;
+    if (dto.pan != null && String(dto.pan).trim() !== '') {
+      // Masked value means "leave PAN unchanged" (admin edit form).
+      if (isMaskedPan(String(dto.pan))) {
+        // skip
+      } else {
+        const panUpper = normalizePan(dto.pan);
+        if (!isValidPanFormat(panUpper)) return null;
+        const other = await this.getByPan(panUpper);
+        if (other && String(other.id) !== id) return null;
+        try {
+          const fields = panStorageFields(panUpper);
+          Object.assign(payload, fields);
+          panChanged = true;
+          panMasked = fields.pan;
+        } catch {
+          return null;
+        }
+      }
     }
 
     if (Object.keys(payload).length === 1) return null;
@@ -642,12 +741,127 @@ export class LeadsService {
 
     if (error) {
       if (process.env.NODE_ENV !== 'production') {
-        console.error('LeadsService.updateById', error);
+        console.error('LeadsService.updateById', error.message, redactSensitiveLeadPayload(payload));
       }
       return null;
     }
 
-    return data as Record<string, unknown>;
+    const lead = data as Record<string, unknown>;
+    if (panChanged && lead.id) {
+      await this.panAudit.record({
+        leadId: String(lead.id),
+        action: 'update',
+        reason: 'pan_rotated',
+        metadata: { pan_masked: panMasked },
+      });
+    }
+
+    return this.safeLead(lead);
+  }
+
+  /**
+   * Decrypt PAN for authorized admin reveal. Always audited.
+   * Never logs the plaintext value.
+   */
+  async revealPan(
+    id: string,
+    actor: {
+      adminId?: string;
+      adminEmail?: string;
+      adminRole?: string;
+      ipAddress?: string;
+      userAgent?: string;
+      reason?: string;
+    },
+  ): Promise<{ ok: true; pan: string; masked: string } | { ok: false; message: string }> {
+    const row = await this.getById(id);
+    if (!row) return { ok: false, message: 'Lead not found' };
+
+    const encrypted = row.pan_encrypted != null ? String(row.pan_encrypted) : '';
+    let plain: string | null = null;
+
+    if (encrypted) {
+      try {
+        plain = decryptPan(encrypted);
+      } catch {
+        await this.panAudit.record({
+          leadId: id,
+          action: 'decrypt_failed',
+          adminId: actor.adminId,
+          adminEmail: actor.adminEmail,
+          adminRole: actor.adminRole,
+          ipAddress: actor.ipAddress,
+          userAgent: actor.userAgent,
+          reason: actor.reason ?? 'admin_reveal',
+        });
+        return { ok: false, message: 'Unable to decrypt PAN' };
+      }
+    } else {
+      // Legacy plaintext migration path — encrypt in place after reveal.
+      const legacy = normalizePan(String(row.pan ?? ''));
+      if (!isValidPanFormat(legacy)) {
+        return { ok: false, message: 'PAN not available' };
+      }
+      plain = legacy;
+      try {
+        const fields = panStorageFields(legacy);
+        await this.leads.update(fields).eq('id', id);
+      } catch {
+        // still allow reveal of legacy value
+      }
+    }
+
+    await this.panAudit.record({
+      leadId: id,
+      action: 'reveal',
+      adminId: actor.adminId,
+      adminEmail: actor.adminEmail,
+      adminRole: actor.adminRole,
+      ipAddress: actor.ipAddress,
+      userAgent: actor.userAgent,
+      reason: actor.reason ?? 'admin_reveal',
+      metadata: { pan_masked: maskPan(plain) },
+    });
+
+    return { ok: true, pan: plain, masked: maskPan(plain) };
+  }
+
+  /**
+   * Decrypt temporarily and invoke partner handler. Audited as partner_send.
+   */
+  async sendPanToPartner(
+    leadId: string,
+    partner: { id: string; name?: string },
+    actor: {
+      adminId?: string;
+      adminEmail?: string;
+      adminRole?: string;
+      ipAddress?: string;
+      userAgent?: string;
+      reason?: string;
+    },
+    handler: (plainPan: string) => Promise<void> | void,
+  ) {
+    const row = await this.getById(leadId);
+    if (!row?.pan_encrypted) {
+      return { ok: false as const, message: 'Encrypted PAN not found for this lead' };
+    }
+    return withDecryptedPanForPartner(
+      String(row.pan_encrypted),
+      this.panAudit,
+      {
+        leadId,
+        partnerId: partner.id,
+        partnerName: partner.name,
+        adminId: actor.adminId,
+        adminEmail: actor.adminEmail,
+        adminRole: actor.adminRole,
+        ipAddress: actor.ipAddress,
+        userAgent: actor.userAgent,
+        reason: actor.reason,
+      },
+      handler,
+    );
   }
 
   /** Update shared applicant details on every active lead for a mobile. */
@@ -667,7 +881,7 @@ export class LeadsService {
 
     if (error) {
       if (process.env.NODE_ENV !== 'production') {
-        console.error('LeadsService.updateProfileByMobile', error);
+        console.error('LeadsService.updateProfileByMobile', error.message);
       }
       return false;
     }
@@ -680,13 +894,39 @@ export class LeadsService {
 
     if (error) {
       if (process.env.NODE_ENV !== 'production') {
-        console.error('LeadsService.deleteById', error);
+        console.error('LeadsService.deleteById', error.message);
       }
       return false;
     }
 
     return true;
   }
+}
+
+class RevealPanDto {
+  @IsOptional()
+  @IsString()
+  adminId?: string;
+
+  @IsOptional()
+  @IsString()
+  adminEmail?: string;
+
+  @IsOptional()
+  @IsString()
+  adminRole?: string;
+
+  @IsOptional()
+  @IsString()
+  reason?: string;
+
+  @IsOptional()
+  @IsString()
+  ipAddress?: string;
+
+  @IsOptional()
+  @IsString()
+  userAgent?: string;
 }
 
 @Controller('leads')
@@ -963,6 +1203,45 @@ export class LeadsController {
     return { success: true, data: lead };
   }
 
+  /**
+   * Reveal full PAN for a lead. Requires admin internal key.
+   * Every call is written to pan_access_audit with admin identity + timestamp.
+   */
+  @Post('admin/:id/pan/reveal')
+  @HttpCode(HttpStatus.OK)
+  async revealPanForAdmin(
+    @Headers('x-admin-internal-key') adminKey: string | undefined,
+    @Param('id') id: string,
+    @Body() dto: RevealPanDto,
+  ) {
+    if (!adminInternalKeyOk(adminKey)) {
+      throw new UnauthorizedException('Unauthorized');
+    }
+    if (!dto.adminEmail?.trim() && !dto.adminId?.trim()) {
+      throw new BadRequestException('Admin identity is required for PAN reveal');
+    }
+
+    const result = await this.leadsService.revealPan(id, {
+      adminId: dto.adminId,
+      adminEmail: dto.adminEmail,
+      adminRole: dto.adminRole,
+      ipAddress: dto.ipAddress,
+      userAgent: dto.userAgent,
+      reason: dto.reason ?? 'admin_panel_reveal',
+    });
+
+    if (!result.ok) {
+      throw new NotFoundException(result.message);
+    }
+
+    return {
+      success: true,
+      pan: result.pan,
+      masked: result.masked,
+      revealedAt: new Date().toISOString(),
+    };
+  }
+
   @Delete('admin/:id')
   @HttpCode(HttpStatus.OK)
   async deleteForAdmin(
@@ -983,7 +1262,7 @@ export class LeadsController {
 @Module({
   imports: [OtpModule, UsersModule],
   controllers: [LeadsController],
-  providers: [LeadsService],
-  exports: [LeadsService],
+  providers: [LeadsService, PanAuditService],
+  exports: [LeadsService, PanAuditService],
 })
 export class LeadsModule {}

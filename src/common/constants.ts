@@ -10,6 +10,8 @@ export const TABLE_WALLET = 'wallet';
 export const TABLE_AUTH = 'auth';
 export const TABLE_CONTACT = 'contact';
 export const TABLE_CHAT = 'chat';
+/** PAN reveal / partner-send audit trail. */
+export const TABLE_PAN_ACCESS_AUDIT = 'pan_access_audit';
 
 /** Max OTP sends per mobile per calendar day (IST). */
 export const OTP_MAX_SENDS_PER_DAY = 5;
