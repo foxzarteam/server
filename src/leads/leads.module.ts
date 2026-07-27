@@ -76,12 +76,26 @@ export class LeadsService {
   private async withOtpVerified(
     leads: Record<string, unknown>[],
   ): Promise<Record<string, unknown>[]> {
+    if (!leads.length) return [];
     const mobiles = leads.map((l) => String(l.mobile_number ?? ''));
-    const verified = await this.otpService.getVerifiedMobiles(mobiles);
-    return leads.map((lead) => ({
-      ...lead,
-      otp_verified: verified.has(String(lead.mobile_number ?? '').trim()),
-    }));
+    const verifiedAtByMobile = await this.otpService.getVerifiedAtByMobiles(mobiles);
+    // Allow 2 minutes skew so OTP completed just before lead insert still counts.
+    const SKEW_MS = 2 * 60 * 1000;
+
+    return leads.map((lead) => {
+      const mobile = String(lead.mobile_number ?? '').trim();
+      const createdRaw = String(lead.created_at ?? '').trim();
+      const createdMs = createdRaw ? Date.parse(createdRaw) : NaN;
+      const times = verifiedAtByMobile.get(mobile) ?? [];
+      const otp_verified =
+        times.length > 0 &&
+        (!Number.isFinite(createdMs) ||
+          times.some((at) => {
+            const t = Date.parse(at);
+            return Number.isFinite(t) && t >= createdMs - SKEW_MS;
+          }));
+      return { ...lead, otp_verified };
+    });
   }
 
   isDraftLead(lead: Record<string, unknown>): boolean {

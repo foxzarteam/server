@@ -25,7 +25,7 @@ export const MSG_OTP_FIREBASE_NOT_CONFIGURED =
 export const MSG_OTP_FIREBASE_MISMATCH = 'Mobile number does not match Firebase token.';
 export const MSG_OTP_PHONE_NOT_VERIFIED = 'Please verify your mobile number with OTP first.';
 export const MSG_OTP_DAILY_LIMIT =
-  'OTP limit reached for this mobile number. Please try again tomorrow.';
+  `Daily OTP limit reached for this mobile number (max ${OTP_MAX_SENDS_PER_DAY} OTPs per day). Please try again tomorrow.`;
 export const PHONE_VERIFICATION_WINDOW_MINUTES = 30;
 
 export const MSG_USER_CREATE_FAILED = 'Failed to create user';

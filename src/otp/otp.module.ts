@@ -278,30 +278,51 @@ export class OtpService {
     return Array.isArray(data) && data.length > 0;
   }
 
-  /** Mobiles that have at least one verified OTP session. */
-  async getVerifiedMobiles(mobiles: string[]): Promise<Set<string>> {
+  /**
+   * Verified OTP timestamps per mobile (for attaching otp_verified to leads).
+   * Only sessions with is_verified=true and a verified_at are returned.
+   */
+  async getVerifiedAtByMobiles(
+    mobiles: string[],
+  ): Promise<Map<string, string[]>> {
     const unique = [
       ...new Set(mobiles.map((m) => m.trim()).filter((m) => m.length === 10)),
     ];
-    if (!unique.length) return new Set();
+    const out = new Map<string, string[]>();
+    if (!unique.length) return out;
 
     const { data, error } = await this.otpSessions
-      .select('mobile_number')
+      .select('mobile_number, verified_at')
       .in('mobile_number', unique)
-      .eq('is_verified', true);
+      .eq('is_verified', true)
+      .not('verified_at', 'is', null);
 
     if (error) {
       if (process.env.NODE_ENV !== 'production') {
-        console.error('OtpService.getVerifiedMobiles', error);
+        console.error('OtpService.getVerifiedAtByMobiles', error);
       }
-      return new Set();
+      return out;
     }
 
-    return new Set(
-      (data ?? []).map((row: { mobile_number?: string }) =>
-        String(row.mobile_number ?? '').trim(),
-      ),
-    );
+    for (const row of data ?? []) {
+      const mobile = String(
+        (row as { mobile_number?: string }).mobile_number ?? '',
+      ).trim();
+      const at = String(
+        (row as { verified_at?: string | null }).verified_at ?? '',
+      ).trim();
+      if (!mobile || !at) continue;
+      const list = out.get(mobile) ?? [];
+      list.push(at);
+      out.set(mobile, list);
+    }
+    return out;
+  }
+
+  /** Mobiles that have at least one verified OTP session. */
+  async getVerifiedMobiles(mobiles: string[]): Promise<Set<string>> {
+    const map = await this.getVerifiedAtByMobiles(mobiles);
+    return new Set(map.keys());
   }
 }
 
