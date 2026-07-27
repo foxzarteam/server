@@ -76,6 +76,7 @@ export type CustomerApplication = {
   category: string;
   status: string;
   required_amount: number | null;
+  ins_type: string | null;
   created_at: string | null;
   updated_at: string | null;
   otp_verified: boolean;
@@ -116,6 +117,7 @@ function sanitizeApplication(row: Record<string, unknown>): CustomerApplication 
     category: asString(row.category) || 'personal_loan',
     status: asString(row.status).toLowerCase() || 'pending',
     required_amount: asAmount(row.required_amount),
+    ins_type: asString(row.ins_type) || null,
     created_at: asString(row.created_at) || null,
     updated_at: asString(row.updated_at) || null,
     otp_verified: asBool(row.otp_verified),
