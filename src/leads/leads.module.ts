@@ -339,6 +339,8 @@ export class LeadsService {
     if (category === 'personal_loan') {
       payload.loan_amt = null;
       if (dto.requiredAmount != null) payload.required_amount = dto.requiredAmount;
+      if (dto.employmentType) payload.employment_type = dto.employmentType;
+      if (dto.netMonthlyIncome != null) payload.net_monthly_income = dto.netMonthlyIncome;
     }
     if (category === 'insurance') {
       payload.required_amount = null;
@@ -358,6 +360,10 @@ export class LeadsService {
         status: 'pending',
         loanAmt: category === 'personal_loan' ? null : undefined,
         insType: category === 'insurance' ? dto.insType ?? null : null,
+        employmentType:
+          category === 'personal_loan' ? dto.employmentType ?? null : null,
+        netMonthlyIncome:
+          category === 'personal_loan' ? dto.netMonthlyIncome ?? null : null,
       });
       if (!updated) {
         return { ok: false, message: 'Failed to create lead. Please try again.' };
@@ -508,10 +514,14 @@ export class LeadsService {
       update.loanAmt = dto.loanAmt ?? null;
       update.insType = null;
       if (dto.requiredAmount != null) update.requiredAmount = dto.requiredAmount;
+      if (dto.employmentType) update.employmentType = dto.employmentType;
+      if (dto.netMonthlyIncome != null) update.netMonthlyIncome = dto.netMonthlyIncome;
     } else if (category === 'insurance') {
       update.insType = dto.insType ?? null;
       update.loanAmt = null;
       update.requiredAmount = null;
+      update.employmentType = null;
+      update.netMonthlyIncome = null;
     }
 
     const lead = await this.updateById(id, update);
@@ -556,6 +566,8 @@ export class LeadsService {
     if (dto.category === 'personal_loan') {
       payload.loan_amt = null;
       if (dto.requiredAmount != null) payload.required_amount = dto.requiredAmount;
+      if (dto.employmentType) payload.employment_type = dto.employmentType;
+      if (dto.netMonthlyIncome != null) payload.net_monthly_income = dto.netMonthlyIncome;
     }
     if (dto.category === 'insurance' && dto.insType) {
       payload.ins_type = dto.insType;
@@ -662,6 +674,12 @@ export class LeadsService {
     if (dto.notes !== undefined) payload.notes = dto.notes?.trim() || null;
     if (dto.loanAmt !== undefined) payload.loan_amt = dto.loanAmt ?? null;
     if (dto.insType !== undefined) payload.ins_type = dto.insType ?? null;
+    if (dto.employmentType !== undefined) {
+      payload.employment_type = dto.employmentType ?? null;
+    }
+    if (dto.netMonthlyIncome !== undefined) {
+      payload.net_monthly_income = dto.netMonthlyIncome ?? null;
+    }
 
     let panChanged = false;
     let panMasked: string | null = null;
@@ -1010,6 +1028,10 @@ export class LeadsController {
           requiredAmount: dto.requiredAmount,
           loanAmt: dto.category === 'personal_loan' ? dto.loanAmt ?? null : null,
           insType: dto.category === 'insurance' ? dto.insType ?? null : null,
+          employmentType:
+            dto.category === 'personal_loan' ? dto.employmentType ?? null : null,
+          netMonthlyIncome:
+            dto.category === 'personal_loan' ? dto.netMonthlyIncome ?? null : null,
         });
         if (!updated) {
           return { success: false, message: 'Failed to update lead' };
@@ -1129,6 +1151,8 @@ export class LeadsController {
       category: dto.category,
       loanAmt: dto.loanAmt,
       insType: dto.insType,
+      employmentType: dto.employmentType,
+      netMonthlyIncome: dto.netMonthlyIncome,
     });
 
     if (!created?.id) {

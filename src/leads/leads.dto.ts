@@ -32,6 +32,8 @@ export const INS_TYPE_VALUES = [
   'motor_insurance',
 ] as const;
 
+export const EMPLOYMENT_TYPE_VALUES = ['salaried', 'self_employed'] as const;
+
 export class StartLeadDto {
   @IsString()
   @Length(10, 10, { message: 'mobileNumber must be 10 digits' })
@@ -74,6 +76,17 @@ export class CompleteLeadDto {
   @IsString()
   @IsIn([...INS_TYPE_VALUES], { message: 'Invalid insurance type' })
   insType?: string;
+
+  @IsOptional()
+  @IsString()
+  @IsIn([...EMPLOYMENT_TYPE_VALUES], { message: 'Invalid employment type' })
+  employmentType?: string;
+
+  @IsOptional()
+  @IsNumber()
+  @ValidateIf((o) => o.netMonthlyIncome != null)
+  @Min(0, { message: 'Net monthly income must be positive' })
+  netMonthlyIncome?: number;
 }
 
 export class CreateLeadDto {
@@ -125,6 +138,17 @@ export class CreateLeadDto {
   @IsString()
   @IsIn([...INS_TYPE_VALUES], { message: 'Invalid insurance type' })
   insType?: string;
+
+  @IsOptional()
+  @IsString()
+  @IsIn([...EMPLOYMENT_TYPE_VALUES], { message: 'Invalid employment type' })
+  employmentType?: string;
+
+  @IsOptional()
+  @IsNumber()
+  @ValidateIf((o) => o.netMonthlyIncome != null)
+  @Min(0, { message: 'Net monthly income must be positive' })
+  netMonthlyIncome?: number;
 }
 
 export class UpdateLeadDto {
@@ -186,6 +210,17 @@ export class UpdateLeadDto {
   @IsString()
   @IsIn([...INS_TYPE_VALUES], { message: 'Invalid insurance type' })
   insType?: string | null;
+
+  @IsOptional()
+  @IsString()
+  @IsIn([...EMPLOYMENT_TYPE_VALUES], { message: 'Invalid employment type' })
+  employmentType?: string | null;
+
+  @IsOptional()
+  @IsNumber()
+  @ValidateIf((o) => o.netMonthlyIncome != null)
+  @Min(0, { message: 'Net monthly income must be positive' })
+  netMonthlyIncome?: number | null;
 }
 
 /** Admin CRM — create lead with optional status/notes. */
@@ -245,6 +280,17 @@ export class AdminCreateLeadDto {
   @IsString()
   @IsIn([...INS_TYPE_VALUES], { message: 'Invalid insurance type' })
   insType?: string;
+
+  @IsOptional()
+  @IsString()
+  @IsIn([...EMPLOYMENT_TYPE_VALUES], { message: 'Invalid employment type' })
+  employmentType?: string;
+
+  @IsOptional()
+  @IsNumber()
+  @ValidateIf((o) => o.netMonthlyIncome != null)
+  @Min(0, { message: 'Net monthly income must be positive' })
+  netMonthlyIncome?: number;
 }
 
 export class RevealPanDto {

@@ -77,6 +77,8 @@ export type CustomerApplication = {
   status: string;
   required_amount: number | null;
   ins_type: string | null;
+  employment_type: string | null;
+  net_monthly_income: number | null;
   created_at: string | null;
   updated_at: string | null;
   otp_verified: boolean;
@@ -118,6 +120,8 @@ function sanitizeApplication(row: Record<string, unknown>): CustomerApplication 
     status: asString(row.status).toLowerCase() || 'pending',
     required_amount: asAmount(row.required_amount),
     ins_type: asString(row.ins_type) || null,
+    employment_type: asString(row.employment_type) || null,
+    net_monthly_income: asAmount(row.net_monthly_income),
     created_at: asString(row.created_at) || null,
     updated_at: asString(row.updated_at) || null,
     otp_verified: asBool(row.otp_verified),
