@@ -192,9 +192,82 @@ export class LeadsService {
     return (data as Record<string, unknown>) ?? null;
   }
 
+  private normalizeCategory(category?: string | null): string {
+    const c = String(category ?? '').trim();
+    return c || 'personal_loan';
+  }
+
+  /** Active lead for this mobile + product category (newest first). */
+  async getByMobileAndCategory(
+    mobileNumber: string,
+    category: string,
+  ): Promise<Record<string, unknown> | null> {
+    const mobile = mobileNumber.trim();
+    const cat = this.normalizeCategory(category);
+    const { data, error } = await this.leads
+      .select()
+      .eq('mobile_number', mobile)
+      .eq('category', cat)
+      .eq('is_active', true)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (error) {
+      if (process.env.NODE_ENV !== 'production') {
+        console.error('LeadsService.getByMobileAndCategory', error);
+      }
+      return null;
+    }
+
+    return (data as Record<string, unknown>) ?? null;
+  }
+
+  /** Active lead for this PAN + product category (newest first). */
+  async getByPanAndCategory(
+    pan: string,
+    category: string,
+  ): Promise<Record<string, unknown> | null> {
+    const panUpper = normalizePan(pan);
+    if (!isValidPanFormat(panUpper)) return null;
+    const cat = this.normalizeCategory(category);
+
+    const digest = hashPan(panUpper);
+    const byHash = await this.leads
+      .select()
+      .eq('pan_hash', digest)
+      .eq('category', cat)
+      .eq('is_active', true)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (!byHash.error && byHash.data) {
+      return byHash.data as Record<string, unknown>;
+    }
+
+    const { data, error } = await this.leads
+      .select()
+      .eq('pan', panUpper)
+      .eq('category', cat)
+      .eq('is_active', true)
+      .order('created_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (error) {
+      if (process.env.NODE_ENV !== 'production') {
+        console.error('LeadsService.getByPanAndCategory', error.message);
+      }
+      return null;
+    }
+
+    return (data as Record<string, unknown>) ?? null;
+  }
+
   /**
    * Create lead BEFORE OTP.
-   * Rejects if mobile or PAN already exists.
+   * Same mobile/PAN may apply once per category (e.g. personal_loan + insurance).
    */
   async applyLead(dto: CreateLeadDto): Promise<{
     ok: boolean;
@@ -207,16 +280,17 @@ export class LeadsService {
     }
 
     const mobile = dto.mobileNumber.trim();
-    const byMobile = await this.getByMobile(mobile);
-    // Any real (non-draft) lead with this mobile → block BEFORE OTP is sent.
+    const category = this.normalizeCategory(dto.category);
+    const byMobile = await this.getByMobileAndCategory(mobile, category);
     if (byMobile && !this.isDraftLead(byMobile)) {
       return {
         ok: false,
-        message: 'This mobile number already exists. Please use a different number.',
+        message:
+          'You already have an application for this product with this mobile number.',
       };
     }
 
-    const byPan = await this.getByPan(panUpper);
+    const byPan = await this.getByPanAndCategory(panUpper, category);
     if (
       byPan &&
       !this.isDraftLead(byPan) &&
@@ -224,7 +298,7 @@ export class LeadsService {
     ) {
       return {
         ok: false,
-        message: 'This PAN already exists. Please use a different PAN.',
+        message: 'You already have an application for this product with this PAN.',
       };
     }
 
@@ -242,34 +316,34 @@ export class LeadsService {
       email: dto.email?.trim() || null,
       pincode: dto.pincode?.trim() || null,
       required_amount: dto.requiredAmount || null,
-      category: dto.category || 'personal_loan',
+      category,
       status: 'pending',
       is_active: true,
     };
 
     if (dto.userId?.trim()) payload.user_id = dto.userId.trim();
-    if (dto.category === 'personal_loan') {
+    if (category === 'personal_loan') {
       payload.loan_amt = null;
       if (dto.requiredAmount != null) payload.required_amount = dto.requiredAmount;
     }
-    if (dto.category === 'insurance') {
+    if (category === 'insurance') {
       payload.required_amount = null;
       payload.loan_amt = null;
       if (dto.insType) payload.ins_type = dto.insType;
     }
 
-    // Upgrade OTP/start draft only — never overwrite a real application.
+    // Upgrade OTP/start draft for this category only — never overwrite another product.
     if (byMobile && this.isDraftLead(byMobile) && byMobile.id) {
       const updated = await this.updateById(String(byMobile.id), {
         pan: panUpper,
         fullName: dto.fullName.trim(),
         email: dto.email,
         pincode: dto.pincode,
-        requiredAmount: dto.category === 'insurance' ? null : dto.requiredAmount,
-        category: dto.category,
+        requiredAmount: category === 'insurance' ? null : dto.requiredAmount,
+        category,
         status: 'pending',
-        loanAmt: dto.category === 'personal_loan' ? null : undefined,
-        insType: dto.category === 'insurance' ? dto.insType ?? null : null,
+        loanAmt: category === 'personal_loan' ? null : undefined,
+        insType: category === 'insurance' ? dto.insType ?? null : null,
       });
       if (!updated) {
         return { ok: false, message: 'Failed to create lead. Please try again.' };
@@ -337,15 +411,16 @@ export class LeadsService {
     isDraft?: boolean;
     message?: string;
   }> {
-    const cat = category?.trim() || 'personal_loan';
-    const existing = await this.getByMobile(mobileNumber);
+    const cat = this.normalizeCategory(category);
+    const existing = await this.getByMobileAndCategory(mobileNumber, cat);
 
     if (existing) {
-      // Chat OTP → start: only allow when there is no real application yet.
+      // Chat OTP → start: only block when this product already has a real application.
       if (!this.isDraftLead(existing)) {
         return {
           ok: false,
-          message: 'This mobile number already exists. Please use a different number.',
+          message:
+            'You already have an application for this product with this mobile number.',
         };
       }
       return {
@@ -380,7 +455,10 @@ export class LeadsService {
 
     const row = existing.data as Record<string, unknown>;
     const mobile = String(row['mobile_number'] ?? '').trim();
-    const other = await this.getByMobile(mobile);
+    const category = this.normalizeCategory(
+      dto.category?.trim() || String(row['category'] ?? ''),
+    );
+    const other = await this.getByMobileAndCategory(mobile, category);
     if (
       other &&
       String(other['id']) !== id &&
@@ -388,11 +466,12 @@ export class LeadsService {
     ) {
       return {
         ok: false,
-        message: 'This mobile number already exists. Please use a different number.',
+        message:
+          'You already have an application for this product with this mobile number.',
       };
     }
 
-    const duplicatePan = await this.getByPan(panUpper);
+    const duplicatePan = await this.getByPanAndCategory(panUpper, category);
     if (
       duplicatePan &&
       String(duplicatePan.id) !== id &&
@@ -400,11 +479,10 @@ export class LeadsService {
     ) {
       return {
         ok: false,
-        message: 'This PAN already exists. Please use a different PAN.',
+        message: 'You already have an application for this product with this PAN.',
       };
     }
 
-    const category = (dto.category?.trim() || String(row['category'] ?? '')).trim();
     const update: UpdateLeadDto = {
       pan: panUpper,
       fullName: dto.fullName.trim(),
@@ -554,7 +632,10 @@ export class LeadsService {
     if (dto.email !== undefined) payload.email = dto.email?.trim() || null;
     if (dto.mobileNumber != null) {
       const mobile = dto.mobileNumber.trim();
-      const otherMobile = await this.getByMobile(mobile);
+      const category = this.normalizeCategory(
+        dto.category ?? String(existing['category'] ?? ''),
+      );
+      const otherMobile = await this.getByMobileAndCategory(mobile, category);
       if (otherMobile && String(otherMobile.id) !== id && !this.isDraftLead(otherMobile)) {
         return null;
       }
@@ -577,8 +658,13 @@ export class LeadsService {
       } else {
         const panUpper = normalizePan(dto.pan);
         if (!isValidPanFormat(panUpper)) return null;
-        const other = await this.getByPan(panUpper);
-        if (other && String(other.id) !== id) return null;
+        const category = this.normalizeCategory(
+          dto.category ??
+            (payload.category as string | undefined) ??
+            String(existing['category'] ?? ''),
+        );
+        const other = await this.getByPanAndCategory(panUpper, category);
+        if (other && String(other.id) !== id && !this.isDraftLead(other)) return null;
         try {
           const fields = panStorageFields(panUpper);
           Object.assign(payload, fields);
@@ -832,7 +918,7 @@ export class LeadsController {
 
   /**
    * Public apply: save lead BEFORE OTP.
-   * Blocks duplicate mobile / PAN.
+   * Same mobile/PAN allowed once per product category.
    */
   @Post('apply')
   @HttpCode(HttpStatus.CREATED)
@@ -840,7 +926,10 @@ export class LeadsController {
     const result = await this.leadsService.applyLead(dto);
     if (!result.ok || !result.lead) {
       const message = result.message || 'Failed to create lead';
-      if (message.toLowerCase().includes('already exists')) {
+      if (
+        message.toLowerCase().includes('already') ||
+        message.toLowerCase().includes('already have')
+      ) {
         throw new ConflictException(message);
       }
       throw new BadRequestException(message);
@@ -869,7 +958,10 @@ export class LeadsController {
     const result = await this.leadsService.completeLead(id, dto);
     if (!result.ok) {
       const message = result.message || 'Failed to update details.';
-      if (message.toLowerCase().includes('already exists')) {
+      if (
+        message.toLowerCase().includes('already') ||
+        message.toLowerCase().includes('already have')
+      ) {
         throw new ConflictException(message);
       }
       throw new BadRequestException(message);
@@ -890,7 +982,10 @@ export class LeadsController {
     });
 
     try {
-      const existing = await this.leadsService.getByMobile(dto.mobileNumber);
+      const existing = await this.leadsService.getByMobileAndCategory(
+        dto.mobileNumber,
+        dto.category || 'personal_loan',
+      );
       if (existing) {
         const updated = await this.leadsService.updateById(String(existing['id']), {
           pan: dto.pan,
@@ -986,22 +1081,27 @@ export class LeadsController {
       throw new UnauthorizedException('Unauthorized');
     }
 
+    const category = dto.category || 'personal_loan';
     const [byMobile, byPan] = await Promise.all([
-      this.leadsService.getByMobile(dto.mobileNumber),
-      this.leadsService.getByPan(dto.pan),
+      this.leadsService.getByMobileAndCategory(dto.mobileNumber, category),
+      this.leadsService.getByPanAndCategory(dto.pan, category),
     ]);
-    if (byMobile) {
+    if (byMobile && !this.leadsService.isDraftLead(byMobile)) {
       return {
         success: false,
         field: 'mobileNumber',
-        message: 'A lead with this phone number already exists',
+        message: 'A lead with this phone number already exists for this product',
       };
     }
-    if (byPan) {
+    if (
+      byPan &&
+      !this.leadsService.isDraftLead(byPan) &&
+      String(byPan.id) !== String(byMobile?.id ?? '')
+    ) {
       return {
         success: false,
         field: 'pan',
-        message: 'A lead with this PAN already exists',
+        message: 'A lead with this PAN already exists for this product',
       };
     }
 
