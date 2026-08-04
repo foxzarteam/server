@@ -1,6 +1,6 @@
 import { UnauthorizedException } from '@nestjs/common';
 import { adminInternalKeyOk } from './admin-internal';
-import type { OtpService } from '../otp/otp.module';
+import type { OtpService } from '../otp/otp.service';
 
 /**
  * Allow access when:

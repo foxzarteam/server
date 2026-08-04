@@ -77,15 +77,15 @@ export class CompleteLeadDto {
   @IsIn([...INS_TYPE_VALUES], { message: 'Invalid insurance type' })
   insType?: string;
 
-  @IsOptional()
-  @IsString()
+  /** Required when category is personal_loan */
+  @ValidateIf((o) => (o.category ?? 'personal_loan') === 'personal_loan')
+  @IsString({ message: 'Employment type is required for personal loan' })
   @IsIn([...EMPLOYMENT_TYPE_VALUES], { message: 'Invalid employment type' })
   employmentType?: string;
 
-  @IsOptional()
-  @IsNumber()
-  @ValidateIf((o) => o.netMonthlyIncome != null)
-  @Min(0, { message: 'Net monthly income must be positive' })
+  @ValidateIf((o) => (o.category ?? 'personal_loan') === 'personal_loan')
+  @IsNumber({}, { message: 'Net monthly income is required for personal loan' })
+  @Min(1, { message: 'Net monthly income must be at least 1' })
   netMonthlyIncome?: number;
 }
 
@@ -139,15 +139,15 @@ export class CreateLeadDto {
   @IsIn([...INS_TYPE_VALUES], { message: 'Invalid insurance type' })
   insType?: string;
 
-  @IsOptional()
-  @IsString()
+  /** Required when category is personal_loan */
+  @ValidateIf((o) => o.category === 'personal_loan')
+  @IsString({ message: 'Employment type is required for personal loan' })
   @IsIn([...EMPLOYMENT_TYPE_VALUES], { message: 'Invalid employment type' })
   employmentType?: string;
 
-  @IsOptional()
-  @IsNumber()
-  @ValidateIf((o) => o.netMonthlyIncome != null)
-  @Min(0, { message: 'Net monthly income must be positive' })
+  @ValidateIf((o) => o.category === 'personal_loan')
+  @IsNumber({}, { message: 'Net monthly income is required for personal loan' })
+  @Min(1, { message: 'Net monthly income must be at least 1' })
   netMonthlyIncome?: number;
 }
 
@@ -281,15 +281,15 @@ export class AdminCreateLeadDto {
   @IsIn([...INS_TYPE_VALUES], { message: 'Invalid insurance type' })
   insType?: string;
 
-  @IsOptional()
-  @IsString()
+  /** Required when category is personal_loan */
+  @ValidateIf((o) => o.category === 'personal_loan')
+  @IsString({ message: 'Employment type is required for personal loan' })
   @IsIn([...EMPLOYMENT_TYPE_VALUES], { message: 'Invalid employment type' })
   employmentType?: string;
 
-  @IsOptional()
-  @IsNumber()
-  @ValidateIf((o) => o.netMonthlyIncome != null)
-  @Min(0, { message: 'Net monthly income must be positive' })
+  @ValidateIf((o) => o.category === 'personal_loan')
+  @IsNumber({}, { message: 'Net monthly income is required for personal loan' })
+  @Min(1, { message: 'Net monthly income must be at least 1' })
   netMonthlyIncome?: number;
 }
 
