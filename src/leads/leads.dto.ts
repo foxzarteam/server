@@ -34,6 +34,14 @@ export const INS_TYPE_VALUES = [
 
 export const EMPLOYMENT_TYPE_VALUES = ['salaried', 'self_employed'] as const;
 
+export const LEAD_STATUS_VALUES = [
+  'pending',
+  'in_process',
+  'approved',
+  'rejected',
+  'action_required',
+] as const;
+
 export class StartLeadDto {
   @IsString()
   @Length(10, 10, { message: 'mobileNumber must be 10 digits' })
@@ -77,6 +85,14 @@ export class CompleteLeadDto {
   @IsIn([...INS_TYPE_VALUES], { message: 'Invalid insurance type' })
   insType?: string;
 
+  /** Optional on complete; client apply forms always send it. */
+  @IsOptional()
+  @IsString()
+  @ValidateIf((o) => o.pincode != null && o.pincode !== '')
+  @Length(6, 6, { message: 'Pincode must be 6 digits' })
+  @Matches(/^[1-9][0-9]{5}$/, { message: 'Invalid Indian pincode' })
+  pincode?: string;
+
   /** Required when category is personal_loan */
   @ValidateIf((o) => (o.category ?? 'personal_loan') === 'personal_loan')
   @IsString({ message: 'Employment type is required for personal loan' })
@@ -111,10 +127,12 @@ export class CreateLeadDto {
   @IsString()
   email?: string;
 
+  /** Public PL/insurance apply forms always send this (Indian 6-digit PIN). */
   @IsOptional()
   @IsString()
   @ValidateIf((o) => o.pincode != null && o.pincode !== '')
   @Length(6, 6, { message: 'Pincode must be 6 digits' })
+  @Matches(/^[1-9][0-9]{5}$/, { message: 'Invalid Indian pincode (e.g. 302002)' })
   pincode?: string;
 
   @IsOptional()
@@ -177,6 +195,7 @@ export class UpdateLeadDto {
   @IsString()
   @ValidateIf((o) => o.pincode != null && o.pincode !== '')
   @Length(6, 6, { message: 'Pincode must be 6 digits' })
+  @Matches(/^[1-9][0-9]{5}$/, { message: 'Invalid Indian pincode' })
   pincode?: string;
 
   @IsOptional()
@@ -192,10 +211,16 @@ export class UpdateLeadDto {
 
   @IsOptional()
   @IsString()
-  @IsIn(['pending', 'approved', 'rejected'], {
-    message: 'Status must be one of: pending, approved, rejected',
+  @IsIn([...LEAD_STATUS_VALUES], {
+    message: `Status must be one of: ${LEAD_STATUS_VALUES.join(', ')}`,
   })
   status?: string;
+
+  @IsOptional()
+  @IsString()
+  @ValidateIf((o) => o.clientIp != null && o.clientIp !== '')
+  @Length(1, 45)
+  clientIp?: string | null;
 
   @IsOptional()
   @IsString()
@@ -246,6 +271,7 @@ export class AdminCreateLeadDto {
   @IsString()
   @ValidateIf((o) => o.pincode != null && o.pincode !== '')
   @Length(6, 6, { message: 'Pincode must be 6 digits' })
+  @Matches(/^[1-9][0-9]{5}$/, { message: 'Invalid Indian pincode' })
   pincode?: string;
 
   @IsOptional()
@@ -262,8 +288,8 @@ export class AdminCreateLeadDto {
 
   @IsOptional()
   @IsString()
-  @IsIn(['pending', 'approved', 'rejected'], {
-    message: 'Status must be one of: pending, approved, rejected',
+  @IsIn([...LEAD_STATUS_VALUES], {
+    message: `Status must be one of: ${LEAD_STATUS_VALUES.join(', ')}`,
   })
   status?: string;
 

@@ -14,7 +14,9 @@ import {
   ConflictException,
   BadRequestException,
   UseGuards,
+  Req,
 } from '@nestjs/common';
+import type { Request } from 'express';
 import { adminInternalKeyOk } from '../common/admin-internal';
 import { AdminInternalGuard } from '../common/admin-internal.guard';
 import { MobileAccessGuard } from '../common/mobile-access.guard';
@@ -24,6 +26,7 @@ import { OtpService } from '../otp/otp.service';
 import { UsersService } from '../users/users.service';
 import { sanitizePublicLead } from '../security/pan-crypto';
 import { allowRateLimitedAction } from '../security/rate-limit';
+import { extractClientIp } from '../common/client-ip';
 import {
   AdminCreateLeadDto,
   CompleteLeadDto,
@@ -46,6 +49,13 @@ export class LeadsController {
     return sanitizePublicLead(lead);
   }
 
+  private clientIp(req: Request): string | null {
+    return extractClientIp(
+      req.headers as Record<string, string | string[] | undefined>,
+      req.ip ?? req.socket?.remoteAddress,
+    );
+  }
+
   @Get()
   @HttpCode(HttpStatus.OK)
   async getAll() {
@@ -62,7 +72,7 @@ export class LeadsController {
 
   @Post('start')
   @HttpCode(HttpStatus.OK)
-  async start(@Body() dto: StartLeadDto) {
+  async start(@Body() dto: StartLeadDto, @Req() req: Request) {
     const verified = await this.otpService.hasRecentPhoneVerification(
       dto.mobileNumber,
     );
@@ -76,6 +86,7 @@ export class LeadsController {
     const result = await this.leadsService.startLead(
       dto.mobileNumber,
       dto.category,
+      this.clientIp(req),
     );
 
     if (!result.ok || !result.lead) {
@@ -98,13 +109,15 @@ export class LeadsController {
    */
   @Post('apply')
   @HttpCode(HttpStatus.CREATED)
-  async apply(@Body() dto: CreateLeadDto) {
+  async apply(@Body() dto: CreateLeadDto, @Req() req: Request) {
     const mobile = dto.mobileNumber?.trim() ?? '';
     if (mobile && !allowRateLimitedAction(`lead-apply:${mobile}`, 8, 60_000)) {
       throw new BadRequestException('Too many applications. Please try again in a minute.');
     }
 
-    const result = await this.leadsService.applyLead(dto);
+    const result = await this.leadsService.applyLead(dto, {
+      clientIp: this.clientIp(req),
+    });
     if (!result.ok || !result.lead) {
       const message = result.message || 'Failed to create lead';
       if (
@@ -125,6 +138,7 @@ export class LeadsController {
     @Body() dto: CompleteLeadDto,
     @Headers() headers: Record<string, string | string[] | undefined>,
     @Headers('x-admin-internal-key') adminKey: string | undefined,
+    @Req() req: Request,
   ) {
     const existing = await this.leadsService.getById(id);
     if (!existing) {
@@ -136,7 +150,9 @@ export class LeadsController {
       idToken: extractIdToken(headers),
     });
 
-    const result = await this.leadsService.completeLead(id, dto);
+    const result = await this.leadsService.completeLead(id, dto, {
+      clientIp: this.clientIp(req),
+    });
     if (!result.ok) {
       const message = result.message || 'Failed to update details.';
       if (
@@ -153,7 +169,7 @@ export class LeadsController {
   @Post()
   @UseGuards(MobileAccessGuard)
   @HttpCode(HttpStatus.CREATED)
-  async create(@Body() dto: CreateLeadDto) {
+  async create(@Body() dto: CreateLeadDto, @Req() req: Request) {
     try {
       const existing = await this.leadsService.getByMobileAndCategory(
         dto.mobileNumber,
@@ -173,6 +189,7 @@ export class LeadsController {
             dto.category === 'personal_loan' ? dto.employmentType ?? null : null,
           netMonthlyIncome:
             dto.category === 'personal_loan' ? dto.netMonthlyIncome ?? null : null,
+          clientIp: this.clientIp(req),
         });
         if (!updated) {
           return { success: false, message: 'Failed to update lead' };
@@ -180,7 +197,7 @@ export class LeadsController {
         return { success: true, data: this.sanitizePublicLead(updated) };
       }
 
-      const lead = await this.leadsService.create(dto);
+      const lead = await this.leadsService.create(dto, { clientIp: this.clientIp(req) });
       if (!lead) {
         return { success: false, message: 'Failed to create lead' };
       }

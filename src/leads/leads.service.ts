@@ -2,6 +2,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import { SupabaseClient } from '@supabase/supabase-js';
 import { SUPABASE_CLIENT } from '../config/supabase';
 import { TABLE_LEADS } from '../common/constants';
+import { resolveIpLocation } from '../common/ip-geo';
 import { OtpService } from '../otp/otp.service';
 import {
   hashPan,
@@ -46,6 +47,16 @@ export class LeadsService {
 
   private safeLeads(rows: Record<string, unknown>[]): Record<string, unknown>[] {
     return rows.map((r) => toSafeLeadRow(r));
+  }
+
+  /** Attach client IP + best-effort geo label for admin display. */
+  private async ipFields(
+    clientIp?: string | null,
+  ): Promise<{ ip?: string; ip_location?: string | null }> {
+    const ip = String(clientIp ?? '').trim().slice(0, 45);
+    if (!ip) return {};
+    const location = await resolveIpLocation(ip);
+    return { ip, ip_location: location };
   }
 
   /** Defense in depth if ValidationPipe is bypassed. */
@@ -274,7 +285,7 @@ export class LeadsService {
    * Create lead BEFORE OTP.
    * Same mobile/PAN may apply once per category (e.g. personal_loan + insurance).
    */
-  async applyLead(dto: CreateLeadDto): Promise<{
+  async applyLead(dto: CreateLeadDto, meta?: { clientIp?: string | null }): Promise<{
     ok: boolean;
     lead?: Record<string, unknown>;
     message?: string;
@@ -331,6 +342,7 @@ export class LeadsService {
     };
 
     if (dto.userId?.trim()) payload.user_id = dto.userId.trim();
+    Object.assign(payload, await this.ipFields(meta?.clientIp));
     if (category === 'personal_loan') {
       payload.loan_amt = null;
       if (dto.requiredAmount != null) payload.required_amount = dto.requiredAmount;
@@ -359,6 +371,7 @@ export class LeadsService {
           category === 'personal_loan' ? dto.employmentType ?? null : null,
         netMonthlyIncome:
           category === 'personal_loan' ? dto.netMonthlyIncome ?? null : null,
+        clientIp: meta?.clientIp ?? undefined,
       });
       if (!updated) {
         return { ok: false, message: 'Failed to create lead. Please try again.' };
@@ -393,7 +406,7 @@ export class LeadsService {
     return { ok: true, lead: this.safeLead(lead)! };
   }
 
-  async createDraft(mobileNumber: string, category: string): Promise<Record<string, unknown> | null> {
+  async createDraft(mobileNumber: string, category: string, clientIp?: string | null): Promise<Record<string, unknown> | null> {
     const payload: Record<string, unknown> = {
       pan: LEAD_DRAFT_PAN,
       pan_encrypted: null,
@@ -407,6 +420,7 @@ export class LeadsService {
       status: 'pending',
       is_active: true,
     };
+    if (clientIp) Object.assign(payload, await this.ipFields(clientIp));
 
     const { data, error } = await this.leads.insert(payload).select().single();
 
@@ -420,7 +434,7 @@ export class LeadsService {
     return this.safeLead(data as Record<string, unknown>);
   }
 
-  async startLead(mobileNumber: string, category?: string): Promise<{
+  async startLead(mobileNumber: string, category?: string, clientIp?: string | null): Promise<{
     ok: boolean;
     lead?: Record<string, unknown>;
     isDraft?: boolean;
@@ -445,7 +459,7 @@ export class LeadsService {
       };
     }
 
-    const created = await this.createDraft(mobileNumber, cat);
+    const created = await this.createDraft(mobileNumber, cat, clientIp);
     if (!created) return { ok: false, message: 'Failed to save mobile number.' };
     return { ok: true, lead: created, isDraft: true };
   }
@@ -453,6 +467,7 @@ export class LeadsService {
   async completeLead(
     id: string,
     dto: CompleteLeadDto,
+    meta?: { clientIp?: string | null },
   ): Promise<{ ok: true; lead: Record<string, unknown> } | { ok: false; message: string }> {
     const panUpper = normalizePan(dto.pan);
     if (!isValidPanFormat(panUpper)) {
@@ -509,6 +524,13 @@ export class LeadsService {
       status: 'pending',
     };
 
+    if (dto.pincode?.trim()) {
+      update.pincode = dto.pincode.trim();
+    }
+    if (meta?.clientIp) {
+      update.clientIp = meta.clientIp;
+    }
+
     if (category === 'personal_loan') {
       update.loanAmt = dto.loanAmt ?? null;
       update.insType = null;
@@ -533,7 +555,7 @@ export class LeadsService {
     return { ok: true, lead };
   }
 
-  async create(dto: CreateLeadDto): Promise<Record<string, unknown> | null> {
+  async create(dto: CreateLeadDto, meta?: { clientIp?: string | null }): Promise<Record<string, unknown> | null> {
     const panUpper = normalizePan(dto.pan);
     if (!isValidPanFormat(panUpper)) {
       return null;
@@ -566,6 +588,7 @@ export class LeadsService {
     if (dto.userId && dto.userId.trim()) {
       payload.user_id = dto.userId.trim();
     }
+    Object.assign(payload, await this.ipFields(meta?.clientIp));
 
     if (category === 'personal_loan') {
       payload.loan_amt = null;
@@ -649,7 +672,53 @@ export class LeadsService {
 
     const leads = (data as Record<string, unknown>[]) || [];
     const withOtp = await this.withOtpVerified(leads);
-    return this.safeLeads(withOtp);
+    const safe = this.safeLeads(withOtp);
+    return this.enrichMissingIpLocations(safe);
+  }
+
+  /**
+   * Resolve geo for rows that have IP but no stored location (legacy rows).
+   * Caps unique lookups so the admin list stays responsive.
+   */
+  private async enrichMissingIpLocations(
+    rows: Record<string, unknown>[],
+  ): Promise<Record<string, unknown>[]> {
+    const need = new Map<string, string[]>();
+    for (const row of rows) {
+      const ip = String(row.ip ?? '').trim();
+      const loc = String(row.ip_location ?? '').trim();
+      if (!ip || loc) continue;
+      const ids = need.get(ip) ?? [];
+      if (row.id != null) ids.push(String(row.id));
+      need.set(ip, ids);
+    }
+    if (need.size === 0) return rows;
+
+    const ips = [...need.keys()].slice(0, 40);
+    const resolved = await Promise.all(
+      ips.map(async (ip) => [ip, await resolveIpLocation(ip)] as const),
+    );
+
+    const byIp = new Map(resolved);
+    const updates: Array<{ id: string; location: string }> = [];
+
+    const out = rows.map((row) => {
+      const ip = String(row.ip ?? '').trim();
+      if (!ip || String(row.ip_location ?? '').trim()) return row;
+      const location = byIp.get(ip);
+      if (!location) return row;
+      if (row.id != null) updates.push({ id: String(row.id), location });
+      return { ...row, ip_location: location };
+    });
+
+    // Persist best-effort so next load is free of geo API calls
+    void Promise.all(
+      updates.slice(0, 40).map(({ id, location }) =>
+        this.leads.update({ ip_location: location }).eq('id', id).then(() => undefined),
+      ),
+    ).catch(() => undefined);
+
+    return out;
   }
 
   async updateById(id: string, dto: UpdateLeadDto): Promise<Record<string, unknown> | null> {
@@ -672,6 +741,15 @@ export class LeadsService {
       payload.mobile_number = mobile;
     }
     if (dto.pincode !== undefined) payload.pincode = dto.pincode?.trim() || null;
+    if (dto.clientIp !== undefined) {
+      const trimmed = dto.clientIp?.trim() || null;
+      if (!trimmed) {
+        payload.ip = null;
+        payload.ip_location = null;
+      } else {
+        Object.assign(payload, await this.ipFields(trimmed));
+      }
+    }
     if (dto.requiredAmount !== undefined) payload.required_amount = dto.requiredAmount ?? null;
     if (dto.category != null) payload.category = dto.category;
     if (dto.status != null) payload.status = dto.status;

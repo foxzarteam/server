@@ -172,6 +172,8 @@ export function sanitizePublicLead(row: Record<string, unknown>): Record<string,
     notes: _notes,
     pan_encrypted: _enc,
     pan_hash: _hash,
+    ip: _ip,
+    ip_location: _ipLoc,
     ...rest
   } = safe;
   return rest;
