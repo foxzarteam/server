@@ -56,7 +56,70 @@ export class LeadsService {
     const ip = String(clientIp ?? '').trim().slice(0, 45);
     if (!ip) return {};
     const location = await resolveIpLocation(ip);
-    return { ip, ip_location: location };
+    // Only send ip_location when known — avoids insert errors if column not migrated yet.
+    return location ? { ip, ip_location: location } : { ip };
+  }
+
+  private missingColumnFromError(message: string | undefined): string | null {
+    if (!message) return null;
+    // PostgREST: Could not find the 'ip_location' column of 'leads' in the schema cache
+    const m = message.match(/'([^']+)' column/i) ?? message.match(/column "?([a-z_][a-z0-9_]*)"?/i);
+    return m?.[1] ?? null;
+  }
+
+  /** Insert with automatic drop of payload keys DB schema does not have yet. */
+  private async insertLead(
+    payload: Record<string, unknown>,
+    logLabel: string,
+  ): Promise<{ data: Record<string, unknown> | null; errorMessage?: string }> {
+    let body = { ...payload };
+    for (let attempt = 0; attempt < 6; attempt++) {
+      const { data, error } = await this.leads.insert(body).select().single();
+      if (!error) {
+        return { data: (data as Record<string, unknown>) ?? null };
+      }
+      const col = this.missingColumnFromError(error.message);
+      if (col && Object.prototype.hasOwnProperty.call(body, col)) {
+        console.error(`${logLabel}: missing column "${col}", retrying without it`);
+        const next = { ...body };
+        delete next[col];
+        body = next;
+        continue;
+      }
+      console.error(logLabel, error.message, redactSensitiveLeadPayload(body));
+      return { data: null, errorMessage: error.message };
+    }
+    return { data: null, errorMessage: 'Insert failed after schema retries' };
+  }
+
+  private async updateLeadRow(
+    id: string,
+    payload: Record<string, unknown>,
+    logLabel: string,
+  ): Promise<{ data: Record<string, unknown> | null; errorMessage?: string }> {
+    let body = { ...payload };
+    for (let attempt = 0; attempt < 6; attempt++) {
+      const { data, error } = await this.leads
+        .update(body)
+        .eq('id', id)
+        .eq('is_active', true)
+        .select()
+        .single();
+      if (!error) {
+        return { data: (data as Record<string, unknown>) ?? null };
+      }
+      const col = this.missingColumnFromError(error.message);
+      if (col && Object.prototype.hasOwnProperty.call(body, col)) {
+        console.error(`${logLabel}: missing column "${col}", retrying without it`);
+        const next = { ...body };
+        delete next[col];
+        body = next;
+        continue;
+      }
+      console.error(logLabel, error.message, redactSensitiveLeadPayload(body));
+      return { data: null, errorMessage: error.message };
+    }
+    return { data: null, errorMessage: 'Update failed after schema retries' };
   }
 
   /** Defense in depth if ValidationPipe is bypassed. */
@@ -385,15 +448,20 @@ export class LeadsService {
       return { ok: true, lead: updated };
     }
 
-    const { data, error } = await this.leads.insert(payload).select().single();
-    if (error) {
-      if (process.env.NODE_ENV !== 'production') {
-        console.error('LeadsService.applyLead', error.message, redactSensitiveLeadPayload(payload));
-      }
-      return { ok: false, message: 'Failed to create lead. Please try again.' };
+    const { data, errorMessage } = await this.insertLead(payload, 'LeadsService.applyLead');
+    if (!data) {
+      // Prefer useful DB signal in non-prod; production stays generic for applicants.
+      const detail =
+        process.env.NODE_ENV !== 'production' && errorMessage
+          ? ` (${errorMessage})`
+          : '';
+      return {
+        ok: false,
+        message: `Failed to create lead. Please try again.${detail}`,
+      };
     }
 
-    const lead = data as Record<string, unknown>;
+    const lead = data;
     if (lead.id) {
       await this.panAudit.record({
         leadId: String(lead.id),
@@ -422,16 +490,15 @@ export class LeadsService {
     };
     if (clientIp) Object.assign(payload, await this.ipFields(clientIp));
 
-    const { data, error } = await this.leads.insert(payload).select().single();
-
-    if (error) {
-      if (process.env.NODE_ENV !== 'production') {
-        console.error('LeadsService.createDraft error:', error.message, redactSensitiveLeadPayload(payload));
+    const { data, errorMessage } = await this.insertLead(payload, 'LeadsService.createDraft');
+    if (!data) {
+      if (process.env.NODE_ENV !== 'production' && errorMessage) {
+        console.error('LeadsService.createDraft failed:', errorMessage);
       }
       return null;
     }
 
-    return this.safeLead(data as Record<string, unknown>);
+    return this.safeLead(data);
   }
 
   async startLead(mobileNumber: string, category?: string, clientIp?: string | null): Promise<{
@@ -600,26 +667,24 @@ export class LeadsService {
       payload.ins_type = dto.insType;
     }
 
-    const { data, error } = await this.leads.insert(payload).select().single();
-
-    if (error) {
-      if (process.env.NODE_ENV !== 'production') {
-        console.error('LeadsService.create error:', error.message, redactSensitiveLeadPayload(payload));
+    const { data, errorMessage } = await this.insertLead(payload, 'LeadsService.create');
+    if (!data) {
+      if (process.env.NODE_ENV !== 'production' && errorMessage) {
+        console.error('LeadsService.create failed:', errorMessage);
       }
       return null;
     }
 
-    const lead = data as Record<string, unknown>;
-    if (lead.id) {
+    if (data.id) {
       await this.panAudit.record({
-        leadId: String(lead.id),
+        leadId: String(data.id),
         action: 'create',
         reason: 'admin_or_api_create',
         metadata: { pan_masked: panFields.pan },
       });
     }
 
-    return this.safeLead(lead);
+    return this.safeLead(data);
   }
 
   async getByUserId(userId: string): Promise<Record<string, unknown>[]> {
@@ -792,31 +857,28 @@ export class LeadsService {
 
     if (Object.keys(payload).length === 1) return null;
 
-    const { data, error } = await this.leads
-      .update(payload)
-      .eq('id', id)
-      .eq('is_active', true)
-      .select()
-      .single();
-
-    if (error) {
-      if (process.env.NODE_ENV !== 'production') {
-        console.error('LeadsService.updateById', error.message, redactSensitiveLeadPayload(payload));
+    const { data, errorMessage } = await this.updateLeadRow(
+      id,
+      payload,
+      'LeadsService.updateById',
+    );
+    if (!data) {
+      if (process.env.NODE_ENV !== 'production' && errorMessage) {
+        console.error('LeadsService.updateById failed:', errorMessage);
       }
       return null;
     }
 
-    const lead = data as Record<string, unknown>;
-    if (panChanged && lead.id) {
+    if (panChanged && data.id) {
       await this.panAudit.record({
-        leadId: String(lead.id),
+        leadId: String(data.id),
         action: 'update',
         reason: 'pan_rotated',
         metadata: { pan_masked: panMasked },
       });
     }
 
-    return this.safeLead(lead);
+    return this.safeLead(data);
   }
 
   /**
