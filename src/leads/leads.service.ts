@@ -2,7 +2,7 @@ import { Inject, Injectable } from '@nestjs/common';
 import { SupabaseClient } from '@supabase/supabase-js';
 import { SUPABASE_CLIENT } from '../config/supabase';
 import { TABLE_LEADS } from '../common/constants';
-import { resolveIpLocation } from '../common/ip-geo';
+import { resolveIpLocation, resolveIpLocationsBatch } from '../common/ip-geo';
 import { OtpService } from '../otp/otp.service';
 import {
   hashPan,
@@ -23,6 +23,8 @@ import {
   CreateLeadDto,
   UpdateLeadDto,
 } from './leads.dto';
+import { mapLeadWriteError } from './lead-write-errors';
+import { personalLoanEmploymentError as checkPersonalLoanEmployment } from './personal-loan-employment';
 
 /** Placeholder until user completes the second-step form */
 export const LEAD_DRAFT_FULL_NAME = 'Unknown';
@@ -49,15 +51,29 @@ export class LeadsService {
     return rows.map((r) => toSafeLeadRow(r));
   }
 
-  /** Attach client IP + best-effort geo label for admin display. */
-  private async ipFields(
-    clientIp?: string | null,
-  ): Promise<{ ip?: string; ip_location?: string | null }> {
+  /** IP only on the critical path — geo is filled async after write. */
+  private ipFields(clientIp?: string | null): { ip?: string } {
     const ip = String(clientIp ?? '').trim().slice(0, 45);
-    if (!ip) return {};
-    const location = await resolveIpLocation(ip);
-    // Only send ip_location when known — avoids insert errors if column not migrated yet.
-    return location ? { ip, ip_location: location } : { ip };
+    return ip ? { ip } : {};
+  }
+
+  /** Background geo fill — never throws into apply/start. */
+  private scheduleIpLocationFill(leadId: string | undefined | null, clientIp?: string | null): void {
+    const id = leadId != null ? String(leadId).trim() : '';
+    const ip = String(clientIp ?? '').trim().slice(0, 45);
+    if (!id || !ip) return;
+
+    void (async () => {
+      try {
+        const location = await resolveIpLocation(ip);
+        if (!location) return;
+        await this.leads.update({ ip_location: location }).eq('id', id);
+      } catch (err) {
+        if (process.env.NODE_ENV !== 'production') {
+          console.error('scheduleIpLocationFill', err);
+        }
+      }
+    })();
   }
 
   private missingColumnFromError(message: string | undefined): string | null {
@@ -122,20 +138,11 @@ export class LeadsService {
     return { data: null, errorMessage: 'Update failed after schema retries' };
   }
 
-  /** Defense in depth if ValidationPipe is bypassed. */
   private personalLoanEmploymentError(dto: {
     employmentType?: string | null;
     netMonthlyIncome?: number | null;
   }): string | null {
-    const emp = String(dto.employmentType ?? '').trim();
-    if (emp !== 'salaried' && emp !== 'self_employed') {
-      return 'Employment type is required for personal loan.';
-    }
-    const income = dto.netMonthlyIncome;
-    if (income == null || !Number.isFinite(Number(income)) || Number(income) < 1) {
-      return 'Net monthly income is required for personal loan.';
-    }
-    return null;
+    return checkPersonalLoanEmployment(dto);
   }
 
   private async withOtpVerified(
@@ -405,7 +412,7 @@ export class LeadsService {
     };
 
     if (dto.userId?.trim()) payload.user_id = dto.userId.trim();
-    Object.assign(payload, await this.ipFields(meta?.clientIp));
+    Object.assign(payload, this.ipFields(meta?.clientIp));
     if (category === 'personal_loan') {
       payload.loan_amt = null;
       if (dto.requiredAmount != null) payload.required_amount = dto.requiredAmount;
@@ -437,8 +444,12 @@ export class LeadsService {
         clientIp: meta?.clientIp ?? undefined,
       });
       if (!updated) {
-        return { ok: false, message: 'Failed to create lead. Please try again.' };
+        return {
+          ok: false,
+          message: mapLeadWriteError('update draft failed'),
+        };
       }
+      this.scheduleIpLocationFill(String(byMobile.id), meta?.clientIp);
       await this.panAudit.record({
         leadId: String(byMobile.id),
         action: 'update',
@@ -450,19 +461,15 @@ export class LeadsService {
 
     const { data, errorMessage } = await this.insertLead(payload, 'LeadsService.applyLead');
     if (!data) {
-      // Prefer useful DB signal in non-prod; production stays generic for applicants.
-      const detail =
-        process.env.NODE_ENV !== 'production' && errorMessage
-          ? ` (${errorMessage})`
-          : '';
       return {
         ok: false,
-        message: `Failed to create lead. Please try again.${detail}`,
+        message: mapLeadWriteError(errorMessage),
       };
     }
 
     const lead = data;
     if (lead.id) {
+      this.scheduleIpLocationFill(String(lead.id), meta?.clientIp);
       await this.panAudit.record({
         leadId: String(lead.id),
         action: 'create',
@@ -488,16 +495,15 @@ export class LeadsService {
       status: 'pending',
       is_active: true,
     };
-    if (clientIp) Object.assign(payload, await this.ipFields(clientIp));
+    if (clientIp) Object.assign(payload, this.ipFields(clientIp));
 
     const { data, errorMessage } = await this.insertLead(payload, 'LeadsService.createDraft');
     if (!data) {
-      if (process.env.NODE_ENV !== 'production' && errorMessage) {
-        console.error('LeadsService.createDraft failed:', errorMessage);
-      }
+      console.error('LeadsService.createDraft failed:', errorMessage);
       return null;
     }
 
+    this.scheduleIpLocationFill(data.id != null ? String(data.id) : null, clientIp);
     return this.safeLead(data);
   }
 
@@ -655,7 +661,7 @@ export class LeadsService {
     if (dto.userId && dto.userId.trim()) {
       payload.user_id = dto.userId.trim();
     }
-    Object.assign(payload, await this.ipFields(meta?.clientIp));
+    Object.assign(payload, this.ipFields(meta?.clientIp));
 
     if (category === 'personal_loan') {
       payload.loan_amt = null;
@@ -669,11 +675,11 @@ export class LeadsService {
 
     const { data, errorMessage } = await this.insertLead(payload, 'LeadsService.create');
     if (!data) {
-      if (process.env.NODE_ENV !== 'production' && errorMessage) {
-        console.error('LeadsService.create failed:', errorMessage);
-      }
+      console.error('LeadsService.create failed:', errorMessage);
       return null;
     }
+
+    this.scheduleIpLocationFill(data.id != null ? String(data.id) : null, meta?.clientIp);
 
     if (data.id) {
       await this.panAudit.record({
@@ -729,9 +735,7 @@ export class LeadsService {
       .order('created_at', { ascending: false });
 
     if (error) {
-      if (process.env.NODE_ENV !== 'production') {
-        console.error('LeadsService.getAll', error.message);
-      }
+      console.error('LeadsService.getAll', error.message);
       return [];
     }
 
@@ -759,12 +763,8 @@ export class LeadsService {
     }
     if (need.size === 0) return rows;
 
-    const ips = [...need.keys()].slice(0, 40);
-    const resolved = await Promise.all(
-      ips.map(async (ip) => [ip, await resolveIpLocation(ip)] as const),
-    );
-
-    const byIp = new Map(resolved);
+    const ips = [...need.keys()].slice(0, 25);
+    const byIp = await resolveIpLocationsBatch(ips, 4);
     const updates: Array<{ id: string; location: string }> = [];
 
     const out = rows.map((row) => {
@@ -778,10 +778,12 @@ export class LeadsService {
 
     // Persist best-effort so next load is free of geo API calls
     void Promise.all(
-      updates.slice(0, 40).map(({ id, location }) =>
+      updates.slice(0, 25).map(({ id, location }) =>
         this.leads.update({ ip_location: location }).eq('id', id).then(() => undefined),
       ),
-    ).catch(() => undefined);
+    ).catch((err) => {
+      console.error('enrichMissingIpLocations persist', err);
+    });
 
     return out;
   }
@@ -812,7 +814,7 @@ export class LeadsService {
         payload.ip = null;
         payload.ip_location = null;
       } else {
-        Object.assign(payload, await this.ipFields(trimmed));
+        Object.assign(payload, this.ipFields(trimmed));
       }
     }
     if (dto.requiredAmount !== undefined) payload.required_amount = dto.requiredAmount ?? null;
@@ -863,10 +865,12 @@ export class LeadsService {
       'LeadsService.updateById',
     );
     if (!data) {
-      if (process.env.NODE_ENV !== 'production' && errorMessage) {
-        console.error('LeadsService.updateById failed:', errorMessage);
-      }
+      console.error('LeadsService.updateById failed:', errorMessage);
       return null;
+    }
+
+    if (dto.clientIp) {
+      this.scheduleIpLocationFill(id, dto.clientIp);
     }
 
     if (panChanged && data.id) {

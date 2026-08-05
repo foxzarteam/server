@@ -8,7 +8,9 @@
     "start": "nest start",
     "start:dev": "nest start --watch",
     "start:prod": "node dist/main.js",
-    "test:pan": "npx ts-node --transpile-only scripts/test-pan-crypto.ts"
+    "test:pan": "npx ts-node --transpile-only scripts/test-pan-crypto.ts",
+    "test:leads": "npx ts-node --transpile-only scripts/test-lead-quality.ts",
+    "test": "npm run test:pan && npm run test:leads"
   },
   "dependencies": {
     "@nestjs/common": "^10.4.15",
