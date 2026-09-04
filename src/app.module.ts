@@ -20,7 +20,7 @@ import { ChatModule } from './chat/chat.module';
   imports: [
     ConfigModule.forRoot({
       isGlobal: true,
-      envFilePath: ['.env', '.env.local'],
+      envFilePath: ['.env.local', '.env'],
     }),
     HealthModule,
     SupabaseModule,

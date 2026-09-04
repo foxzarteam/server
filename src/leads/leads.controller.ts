@@ -87,6 +87,7 @@ export class LeadsController {
       dto.mobileNumber,
       dto.category,
       this.clientIp(req),
+      dto.referralCode,
     );
 
     if (!result.ok || !result.lead) {
@@ -260,6 +261,14 @@ export class LeadsController {
   async getAllForAdmin() {
     const leads = await this.leadsService.getAll();
     return { success: true, data: leads };
+  }
+
+  @Get('admin/by-agent/:agentId')
+  @UseGuards(AdminInternalGuard)
+  @HttpCode(HttpStatus.OK)
+  async getByAgentForAdmin(@Param('agentId') agentId: string) {
+    const leads = await this.leadsService.getByAgentId(agentId);
+    return { success: true, data: leads.map((l) => this.sanitizePublicLead(l)) };
   }
 
   /** Always insert a new lead (admin CRM). Does not upsert by mobile. */

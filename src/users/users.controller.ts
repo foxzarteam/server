@@ -1,5 +1,7 @@
 import {
   Body,
+  BadRequestException,
+  ConflictException,
   Controller,
   Delete,
   Get,
@@ -17,8 +19,11 @@ import { adminInternalKeyOk } from '../common/admin-internal';
 import { sanitizeUserPublic } from '../common/mpin';
 import { assertMobileAccess, extractIdToken } from '../common/phone-access';
 import { MSG_USER_CREATE_FAILED } from '../common/constants';
+import { allowRateLimitedAction } from '../security/rate-limit';
 import { OtpService } from '../otp/otp.service';
 import {
+  AgentLoginDto,
+  AdminCreateUserDto,
   AdminUpdateUserDto,
   CreateUserDto,
   UpdateLoginStatusDto,
@@ -43,6 +48,35 @@ export class UsersController {
     return extractIdToken(headers, bodyToken);
   }
 
+  @Post('agent/login')
+  @HttpCode(HttpStatus.OK)
+  async agentLogin(@Body() dto: AgentLoginDto) {
+    if (!allowRateLimitedAction(`agent-login:${dto.mobileNumber}`, 8, 60_000)) {
+      throw new BadRequestException('Too many attempts. Try again in a minute.');
+    }
+    const user = await this.usersService.loginAgent(dto.mobileNumber, dto.mpin);
+    if (!user) {
+      throw new UnauthorizedException('Invalid phone or PIN');
+    }
+    return { success: true, data: user };
+  }
+
+  @Post('agent/register')
+  @HttpCode(HttpStatus.CREATED)
+  async agentRegister(@Body() dto: AdminCreateUserDto) {
+    if (!allowRateLimitedAction(`agent-register:${dto.mobileNumber}`, 4, 60_000)) {
+      throw new BadRequestException('Too many attempts. Try again in a minute.');
+    }
+    const result = await this.usersService.createForAdmin(dto);
+    if (!result.ok) {
+      if (result.duplicate) {
+        throw new ConflictException('This phone is already registered. Please log in.');
+      }
+      throw new BadRequestException(result.message);
+    }
+    return { success: true, data: result.user };
+  }
+
   @Get('admin/all')
   @HttpCode(HttpStatus.OK)
   async getAllForAdmin(@Headers('x-admin-internal-key') adminKey: string | undefined) {
@@ -51,6 +85,25 @@ export class UsersController {
     }
     const users = await this.usersService.getAll();
     return { success: true, data: users };
+  }
+
+  @Post('admin')
+  @HttpCode(HttpStatus.CREATED)
+  async createForAdmin(
+    @Headers('x-admin-internal-key') adminKey: string | undefined,
+    @Body() dto: AdminCreateUserDto,
+  ) {
+    if (!adminInternalKeyOk(adminKey)) {
+      throw new UnauthorizedException('Unauthorized');
+    }
+    const result = await this.usersService.createForAdmin(dto);
+    if (!result.ok) {
+      if (result.duplicate) {
+        throw new ConflictException(result.message);
+      }
+      throw new BadRequestException(result.message);
+    }
+    return { success: true, data: result.user };
   }
 
   @Patch('admin/:id')

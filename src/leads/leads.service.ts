@@ -16,6 +16,7 @@ import {
   maskPan,
 } from '../security/pan-crypto';
 import { PanAuditService } from '../security/pan-audit.service';
+import { UsersService } from '../users/users.service';
 import { withDecryptedPanForPartner } from '../security/pan-partner';
 import { allowRateLimitedAction } from '../security/rate-limit';
 import {
@@ -36,6 +37,7 @@ export class LeadsService {
     @Inject(SUPABASE_CLIENT) private readonly supabase: SupabaseClient,
     private readonly otpService: OtpService,
     private readonly panAudit: PanAuditService,
+    private readonly usersService: UsersService,
   ) {}
 
   private get leads() {
@@ -412,6 +414,8 @@ export class LeadsService {
     };
 
     if (dto.userId?.trim()) payload.user_id = dto.userId.trim();
+    const agentId = await this.usersService.getIdByReferralCode(dto.referralCode);
+    if (agentId) payload.agent_id = agentId;
     Object.assign(payload, this.ipFields(meta?.clientIp));
     if (category === 'personal_loan') {
       payload.loan_amt = null;
@@ -442,6 +446,7 @@ export class LeadsService {
         netMonthlyIncome:
           category === 'personal_loan' ? dto.netMonthlyIncome ?? null : null,
         clientIp: meta?.clientIp ?? undefined,
+        agentId: !byMobile.agent_id && agentId ? agentId : undefined,
       });
       if (!updated) {
         return {
@@ -481,7 +486,12 @@ export class LeadsService {
     return { ok: true, lead: this.safeLead(lead)! };
   }
 
-  async createDraft(mobileNumber: string, category: string, clientIp?: string | null): Promise<Record<string, unknown> | null> {
+  async createDraft(
+    mobileNumber: string,
+    category: string,
+    clientIp?: string | null,
+    agentId?: string | null,
+  ): Promise<Record<string, unknown> | null> {
     const payload: Record<string, unknown> = {
       pan: LEAD_DRAFT_PAN,
       pan_encrypted: null,
@@ -496,6 +506,7 @@ export class LeadsService {
       is_active: true,
     };
     if (clientIp) Object.assign(payload, this.ipFields(clientIp));
+    if (agentId) payload.agent_id = agentId;
 
     const { data, errorMessage } = await this.insertLead(payload, 'LeadsService.createDraft');
     if (!data) {
@@ -507,7 +518,12 @@ export class LeadsService {
     return this.safeLead(data);
   }
 
-  async startLead(mobileNumber: string, category?: string, clientIp?: string | null): Promise<{
+  async startLead(
+    mobileNumber: string,
+    category?: string,
+    clientIp?: string | null,
+    referralCode?: string,
+  ): Promise<{
     ok: boolean;
     lead?: Record<string, unknown>;
     isDraft?: boolean;
@@ -515,6 +531,7 @@ export class LeadsService {
   }> {
     const cat = this.normalizeCategory(category);
     const existing = await this.getByMobileAndCategory(mobileNumber, cat);
+    const agentId = await this.usersService.getIdByReferralCode(referralCode);
 
     if (existing) {
       // Chat OTP → start: only block when this product already has a real application.
@@ -525,6 +542,14 @@ export class LeadsService {
             'You already have an application for this product with this mobile number.',
         };
       }
+      if (agentId && !existing.agent_id && existing.id) {
+        const updated = await this.updateById(String(existing.id), { agentId });
+        return {
+          ok: true,
+          lead: this.safeLead(updated ?? existing)!,
+          isDraft: true,
+        };
+      }
       return {
         ok: true,
         lead: this.safeLead(existing)!,
@@ -532,7 +557,7 @@ export class LeadsService {
       };
     }
 
-    const created = await this.createDraft(mobileNumber, cat, clientIp);
+    const created = await this.createDraft(mobileNumber, cat, clientIp, agentId);
     if (!created) return { ok: false, message: 'Failed to save mobile number.' };
     return { ok: true, lead: created, isDraft: true };
   }
@@ -602,6 +627,10 @@ export class LeadsService {
     }
     if (meta?.clientIp) {
       update.clientIp = meta.clientIp;
+    }
+    if (!row.agent_id) {
+      const agentId = await this.usersService.getIdByReferralCode(dto.referralCode);
+      if (agentId) update.agentId = agentId;
     }
 
     if (category === 'personal_loan') {
@@ -745,6 +774,23 @@ export class LeadsService {
     return this.enrichMissingIpLocations(safe);
   }
 
+  async getByAgentId(agentId: string): Promise<Record<string, unknown>[]> {
+    const id = agentId.trim();
+    if (!id) return [];
+    const { data, error } = await this.leads
+      .select()
+      .eq('agent_id', id)
+      .eq('is_active', true)
+      .order('created_at', { ascending: false });
+    if (error) {
+      console.error('LeadsService.getByAgentId', error.message);
+      return [];
+    }
+    const leads = (data as Record<string, unknown>[]) || [];
+    const withOtp = await this.withOtpVerified(leads);
+    return this.safeLeads(withOtp);
+  }
+
   /**
    * Resolve geo for rows that have IP but no stored location (legacy rows).
    * Caps unique lookups so the admin list stays responsive.
@@ -829,6 +875,7 @@ export class LeadsService {
     if (dto.netMonthlyIncome !== undefined) {
       payload.net_monthly_income = dto.netMonthlyIncome ?? null;
     }
+    if (dto.agentId) payload.agent_id = dto.agentId.trim();
 
     let panChanged = false;
     let panMasked: string | null = null;

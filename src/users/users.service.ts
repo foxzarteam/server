@@ -1,9 +1,11 @@
+import { randomBytes } from 'crypto';
 import { Inject, Injectable } from '@nestjs/common';
 import { SupabaseClient } from '@supabase/supabase-js';
 import { hashMpin, mpinMatches, sanitizeUserPublic, storedMpinLooksBcrypt } from '../common/mpin';
 import { SUPABASE_CLIENT } from '../config/supabase';
 import { MSG_USER_CREATE_FAILED, TABLE_USERS, getCurrentIsoTime } from '../common/constants';
 import {
+  AdminCreateUserDto,
   AdminUpdateUserDto,
   CreateUserDto,
   DEFAULT_USER_NAME,
@@ -21,6 +23,63 @@ export class UsersService {
 
   private get users() {
     return this.supabase.from(TABLE_USERS);
+  }
+
+  private newReferralCode(): string {
+    const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+    const bytes = randomBytes(8);
+    let out = '';
+    for (let i = 0; i < 8; i++) out += alphabet[bytes[i]! % alphabet.length];
+    return out;
+  }
+
+  async generateUniqueReferralCode(): Promise<string> {
+    for (let i = 0; i < 12; i++) {
+      const code = this.newReferralCode();
+      const { data } = await this.users.select('id').eq('referral_code', code).maybeSingle();
+      if (!data) return code;
+    }
+    return this.newReferralCode() + this.newReferralCode().slice(0, 2);
+  }
+
+  async ensureReferralCode(row: Record<string, unknown>): Promise<Record<string, unknown>> {
+    const existing = String(row.referral_code ?? '').trim();
+    if (existing) return row;
+    const id = String(row.id ?? '').trim();
+    if (!id) return row;
+    const code = await this.generateUniqueReferralCode();
+    const { data, error } = await this.users
+      .update({ referral_code: code, updated_at: getCurrentIsoTime() })
+      .eq('id', id)
+      .select()
+      .single();
+    if (error || !data) return { ...row, referral_code: code };
+    return data as Record<string, unknown>;
+  }
+
+  async getIdByReferralCode(code: string | undefined): Promise<string | null> {
+    const c = String(code ?? '').trim().toUpperCase();
+    if (c.length < 6) return null;
+    const { data, error } = await this.users.select('id').eq('referral_code', c).maybeSingle();
+    if (error || !data) return null;
+    const id = String((data as { id?: string }).id ?? '').trim();
+    return id || null;
+  }
+
+  async loginAgent(mobile: string, mpin: string): Promise<Record<string, unknown> | null> {
+    const user = await this.getByMobile(mobile);
+    if (!user || user.is_active === false) return null;
+    const ok = await this.verifyMpin(mobile, mpin);
+    if (!ok) return null;
+    const withCode = await this.ensureReferralCode(user);
+    await this.users
+      .update({
+        is_logged_in: true,
+        last_login_at: getCurrentIsoTime(),
+        updated_at: getCurrentIsoTime(),
+      })
+      .eq('id', String(withCode.id ?? ''));
+    return sanitizeUserPublic(withCode);
   }
 
   async getByMobile(mobile: string): Promise<Record<string, unknown> | null> {
@@ -46,6 +105,56 @@ export class UsersService {
       return null;
     }
     return data as Record<string, unknown> | null;
+  }
+
+  async createForAdmin(
+    dto: AdminCreateUserDto,
+  ): Promise<{ ok: true; user: Record<string, unknown> } | { ok: false; duplicate: boolean; message: string }> {
+    const { data: existing, error: lookupError } = await this.users
+      .select('id')
+      .eq('mobile_number', dto.mobileNumber)
+      .maybeSingle();
+
+    if (lookupError) {
+      return { ok: false, duplicate: false, message: lookupError.message };
+    }
+    if (existing) {
+      return {
+        ok: false,
+        duplicate: true,
+        message: 'An agent with this phone number already exists in public.users.',
+      };
+    }
+
+    const email = dto.email?.trim() || null;
+    const referralCode = await this.generateUniqueReferralCode();
+    const { data, error } = await this.users
+      .insert({
+        mobile_number: dto.mobileNumber,
+        user_name: dto.userName.trim(),
+        email,
+        mpin: await hashMpin(dto.mpin),
+        referral_code: referralCode,
+        is_active: true,
+        is_logged_in: false,
+      })
+      .select()
+      .single();
+    if (error) {
+      if (process.env.NODE_ENV !== 'production') {
+        console.error('UsersService.createForAdmin', error);
+      }
+      const hint =
+        /permission denied|row-level security|rls/i.test(error.message)
+          ? ' Check SUPABASE_SERVICE_KEY is the service_role secret, not the publishable key.'
+          : '';
+      return { ok: false, duplicate: false, message: `${error.message}${hint}` };
+    }
+    const user = sanitizeUserPublic(data as Record<string, unknown>);
+    if (!user) {
+      return { ok: false, duplicate: false, message: 'Create succeeded but user payload was empty.' };
+    }
+    return { ok: true, user };
   }
 
   async create(dto: CreateUserDto): Promise<Record<string, unknown> | null> {

@@ -52,6 +52,12 @@ export class StartLeadDto {
   @IsString()
   @Matches(LEAD_CATEGORY_PATTERN, { message: 'Invalid category' })
   category?: string;
+
+  @IsOptional()
+  @IsString()
+  @Length(6, 12)
+  @Matches(/^[A-Za-z0-9]+$/, { message: 'Invalid referral code' })
+  referralCode?: string;
 }
 
 export class CompleteLeadDto {
@@ -103,6 +109,12 @@ export class CompleteLeadDto {
   @IsNumber({}, { message: 'Net monthly income is required for personal loan' })
   @Min(1, { message: 'Net monthly income must be at least 1' })
   netMonthlyIncome?: number;
+
+  @IsOptional()
+  @IsString()
+  @Length(6, 12)
+  @Matches(/^[A-Za-z0-9]+$/, { message: 'Invalid referral code' })
+  referralCode?: string;
 }
 
 export class CreateLeadDto {
@@ -167,6 +179,12 @@ export class CreateLeadDto {
   @IsNumber({}, { message: 'Net monthly income is required for personal loan' })
   @Min(1, { message: 'Net monthly income must be at least 1' })
   netMonthlyIncome?: number;
+
+  @IsOptional()
+  @IsString()
+  @Length(6, 12)
+  @Matches(/^[A-Za-z0-9]+$/, { message: 'Invalid referral code' })
+  referralCode?: string;
 }
 
 export class UpdateLeadDto {
@@ -246,6 +264,10 @@ export class UpdateLeadDto {
   @ValidateIf((o) => o.netMonthlyIncome != null)
   @Min(0, { message: 'Net monthly income must be positive' })
   netMonthlyIncome?: number | null;
+
+  @IsOptional()
+  @IsString()
+  agentId?: string;
 }
 
 /** Admin CRM — create lead with optional status/notes. */

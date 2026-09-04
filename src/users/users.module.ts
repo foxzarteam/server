@@ -21,4 +21,5 @@ export {
   VerifyMpinDto,
   UpdateLoginStatusDto,
   AdminUpdateUserDto,
+  AdminCreateUserDto,
 } from './users.dto';
