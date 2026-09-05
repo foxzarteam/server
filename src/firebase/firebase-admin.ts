@@ -25,6 +25,7 @@ export function getFirebaseAdmin(): admin.app.App | null {
 
   const rawJson = readServiceAccountJson();
   const projectId = process.env.FIREBASE_PROJECT_ID?.trim();
+  const isProd = process.env.NODE_ENV === 'production';
 
   try {
     if (rawJson) {
@@ -37,14 +38,14 @@ export function getFirebaseAdmin(): admin.app.App | null {
       return admin.app();
     }
 
-    // Dev/local only: projectId without service account. Never in production.
-    if (projectId && process.env.NODE_ENV !== 'production') {
+    // Local/dev only — production must use FIREBASE_SERVICE_ACCOUNT_JSON (or PATH).
+    if (projectId && !isProd) {
       admin.initializeApp({ projectId });
       initialized = true;
       return admin.app();
     }
   } catch (e) {
-    if (process.env.NODE_ENV !== 'production') {
+    if (!isProd) {
       console.error('Firebase Admin init failed:', e);
     }
   }
