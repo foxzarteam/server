@@ -14,6 +14,28 @@ export type WalletRow = {
   updated_at?: string;
 };
 
+/** Personal loan: 2% of lead amount. Insurance: flat ₹1000. */
+export const LOAN_COMMISSION_RATE = 0.02;
+export const INSURANCE_COMMISSION_FLAT = 1000;
+
+function roundMoney(n: number): number {
+  return Math.round(Math.max(0, n) * 100) / 100;
+}
+
+export function commissionForLead(lead: {
+  category?: unknown;
+  required_amount?: unknown;
+}): number {
+  const cat = String(lead.category ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/-/g, '_');
+  if (cat === 'insurance') return INSURANCE_COMMISSION_FLAT;
+  const amount = Number(lead.required_amount);
+  if (!Number.isFinite(amount) || amount <= 0) return 0;
+  return roundMoney(amount * LOAN_COMMISSION_RATE);
+}
+
 @Injectable()
 export class WalletService {
   constructor(@Inject(SUPABASE_CLIENT) private readonly supabase: SupabaseClient) {}
@@ -86,6 +108,47 @@ export class WalletService {
       if (process.env.NODE_ENV !== 'production') {
         console.error('WalletService.getOrCreateByUserId', error);
       }
+      return null;
+    }
+    return this.toWallet(data as Record<string, unknown>);
+  }
+
+  /**
+   * Set partner earning to the sum of commissions from approved leads.
+   * balance = earning − redeem (clamped ≥ 0).
+   */
+  async setEarningFromCommissions(
+    userId: string,
+    earningTotal: number,
+  ): Promise<WalletRow | null> {
+    const wallet = await this.getOrCreateByUserId(userId);
+    if (!wallet?.id) return null;
+
+    const earning = roundMoney(earningTotal);
+    const redeem = roundMoney(wallet.redeem);
+    const balance = roundMoney(Math.max(0, earning - redeem));
+
+    if (
+      wallet.earning === earning &&
+      wallet.balance === balance &&
+      wallet.redeem === redeem
+    ) {
+      return wallet;
+    }
+
+    const { data, error } = await this.table
+      .update({
+        earning,
+        redeem,
+        balance,
+        updated_at: getCurrentIsoTime(),
+      })
+      .eq('id', wallet.id)
+      .select('id, user_id, earning, redeem, balance, currency, created_at, updated_at')
+      .single();
+
+    if (error) {
+      console.error('WalletService.setEarningFromCommissions', error);
       return null;
     }
     return this.toWallet(data as Record<string, unknown>);

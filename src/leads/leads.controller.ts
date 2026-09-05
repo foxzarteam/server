@@ -23,7 +23,7 @@ import {
   isCrmAdminActor,
   verifyAdminActor,
 } from '../common/admin-actor';
-import { AdminCrmGuard, AdminOnlyGuard } from '../common/admin-crm.guard';
+import { AdminCrmGuard, AdminOnlyGuard, AdminPanelGuard } from '../common/admin-crm.guard';
 import { adminInternalKeyOk } from '../common/admin-internal';
 import { MobileAccessGuard } from '../common/mobile-access.guard';
 import {
@@ -308,11 +308,16 @@ export class LeadsController {
     return { success: true, data: leads.map((l) => this.sanitizePublicLead(l)) };
   }
 
-  /** Always insert a new lead (admin CRM). Does not upsert by mobile. */
+  /** Always insert a new lead (admin CRM / partner panel). Does not upsert by mobile. */
   @Post('admin')
-  @UseGuards(AdminCrmGuard)
+  @UseGuards(AdminPanelGuard)
   @HttpCode(HttpStatus.CREATED)
-  async createForAdmin(@Body() dto: AdminCreateLeadDto) {
+  async createForAdmin(
+    @Body() dto: AdminCreateLeadDto,
+    @Req() req: { adminActor?: AdminActor },
+  ) {
+    const actor = req.adminActor;
+    const isAgent = String(actor?.role ?? '').toLowerCase() === 'agent';
     const category = dto.category || 'personal_loan';
     const [byMobile, byPan] = await Promise.all([
       this.leadsService.getByMobileAndCategory(dto.mobileNumber, category),
@@ -359,11 +364,23 @@ export class LeadsController {
     }
 
     let lead = created;
-    if (dto.status != null || dto.notes !== undefined) {
-      const updated = await this.leadsService.updateById(String(created.id), {
-        status: dto.status,
-        notes: dto.notes,
-      });
+    const patch: {
+      status?: string;
+      notes?: string;
+      agentId?: string;
+    } = {};
+
+    if (isAgent && actor?.sub) {
+      // Partner manual lead: always attributed to them, always pending.
+      patch.agentId = actor.sub;
+      patch.status = 'pending';
+    } else {
+      if (dto.status != null) patch.status = dto.status;
+      if (dto.notes !== undefined) patch.notes = dto.notes;
+    }
+
+    if (Object.keys(patch).length > 0) {
+      const updated = await this.leadsService.updateById(String(created.id), patch);
       if (updated) lead = updated;
     }
 

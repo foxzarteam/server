@@ -17,6 +17,7 @@ import {
 } from '../security/pan-crypto';
 import { PanAuditService } from '../security/pan-audit.service';
 import { UsersService } from '../users/users.service';
+import { commissionForLead, WalletService } from '../wallet/wallet.service';
 import { withDecryptedPanForPartner } from '../security/pan-partner';
 import { allowRateLimitedAction } from '../security/rate-limit';
 import {
@@ -38,6 +39,7 @@ export class LeadsService {
     private readonly otpService: OtpService,
     private readonly panAudit: PanAuditService,
     private readonly usersService: UsersService,
+    private readonly walletService: WalletService,
   ) {}
 
   private get leads() {
@@ -47,6 +49,51 @@ export class LeadsService {
   private safeLead(row: Record<string, unknown> | null): Record<string, unknown> | null {
     if (!row) return null;
     return toSafeLeadRow(row);
+  }
+
+  private isApprovedStatus(status: unknown): boolean {
+    return String(status ?? '').trim().toLowerCase() === 'approved';
+  }
+
+  /** Recalc partner wallet from all their approved leads (loan 2% / insurance ₹1000). */
+  private async reconcileAgentWallet(agentId: unknown): Promise<void> {
+    const uid = String(agentId ?? '').trim();
+    if (!uid) return;
+
+    const { data, error } = await this.leads
+      .select('category, required_amount')
+      .eq('agent_id', uid)
+      .eq('status', 'approved')
+      .eq('is_active', true);
+
+    if (error) {
+      console.error('LeadsService.reconcileAgentWallet', error.message);
+      return;
+    }
+
+    const total = ((data as Record<string, unknown>[]) || []).reduce(
+      (sum, row) => sum + commissionForLead(row),
+      0,
+    );
+
+    await this.walletService.setEarningFromCommissions(uid, total);
+  }
+
+  private async syncWalletsForLeadChange(
+    before: Record<string, unknown>,
+    after: Record<string, unknown>,
+  ): Promise<void> {
+    if (!this.isApprovedStatus(before.status) && !this.isApprovedStatus(after.status)) {
+      return;
+    }
+    const agents = new Set<string>();
+    const oldAgent = String(before.agent_id ?? '').trim();
+    const newAgent = String(after.agent_id ?? '').trim();
+    if (oldAgent) agents.add(oldAgent);
+    if (newAgent) agents.add(newAgent);
+    for (const agentId of agents) {
+      await this.reconcileAgentWallet(agentId);
+    }
   }
 
   private safeLeads(rows: Record<string, unknown>[]): Record<string, unknown>[] {
@@ -929,6 +976,8 @@ export class LeadsService {
       });
     }
 
+    await this.syncWalletsForLeadChange(existing, data as Record<string, unknown>);
+
     return this.safeLead(data);
   }
 
@@ -1069,6 +1118,7 @@ export class LeadsService {
   }
 
   async deleteById(id: string): Promise<boolean> {
+    const existing = await this.getById(id);
     const { data, error } = await this.leads
       .delete()
       .eq('id', id.trim())
@@ -1081,6 +1131,10 @@ export class LeadsService {
       return false;
     }
 
-    return Array.isArray(data) && data.length > 0;
+    const ok = Array.isArray(data) && data.length > 0;
+    if (ok && existing && this.isApprovedStatus(existing.status)) {
+      await this.reconcileAgentWallet(existing.agent_id);
+    }
+    return ok;
   }
 }

@@ -95,6 +95,12 @@ export function isCrmAdminActor(actor: AdminActor | null): boolean {
   return actor.role === 'admin' || actor.role === 'staff';
 }
 
+/** Admin CRM + partner (agent) panel actions such as manual lead create. */
+export function isPanelActor(actor: AdminActor | null): boolean {
+  if (!actor) return false;
+  return isCrmAdminActor(actor) || actor.role === 'agent';
+}
+
 export function extractAdminActorToken(
   headers: Record<string, string | string[] | undefined>,
 ): string | undefined {

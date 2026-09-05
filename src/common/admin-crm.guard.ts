@@ -8,6 +8,7 @@ import { adminInternalKeyOk } from './admin-internal';
 import {
   extractAdminActorToken,
   isCrmAdminActor,
+  isPanelActor,
   verifyAdminActor,
   type AdminActor,
 } from './admin-actor';
@@ -33,6 +34,32 @@ export class AdminCrmGuard implements CanActivate {
 
     const actor = verifyAdminActor(extractAdminActorToken(req.headers ?? {}));
     if (!isCrmAdminActor(actor) || !actor) {
+      throw new UnauthorizedException('Unauthorized');
+    }
+
+    req.adminActor = actor;
+    return true;
+  }
+}
+
+/** Admin/staff/agent panel — for partner-safe actions (e.g. create lead). */
+@Injectable()
+export class AdminPanelGuard implements CanActivate {
+  canActivate(context: ExecutionContext): boolean {
+    const req = context.switchToHttp().getRequest<{
+      headers?: Record<string, string | string[] | undefined>;
+      adminActor?: AdminActor;
+    }>();
+    const rawKey =
+      req.headers?.['x-admin-internal-key'] ??
+      req.headers?.['X-Admin-Internal-Key'];
+    const key = Array.isArray(rawKey) ? rawKey[0] : rawKey;
+    if (!adminInternalKeyOk(key)) {
+      throw new UnauthorizedException('Unauthorized');
+    }
+
+    const actor = verifyAdminActor(extractAdminActorToken(req.headers ?? {}));
+    if (!isPanelActor(actor) || !actor) {
       throw new UnauthorizedException('Unauthorized');
     }
 
