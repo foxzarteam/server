@@ -4,18 +4,53 @@ import * as admin from 'firebase-admin';
 
 let initialized = false;
 
+const DEFAULT_SA_FILENAME = 'firebase-service-account.json';
+
+/** Resolve service-account JSON from env path or common project locations. */
+function resolveServiceAccountPath(): string | null {
+  const candidates: string[] = [];
+
+  const configured = process.env.FIREBASE_SERVICE_ACCOUNT_PATH?.trim();
+  if (configured) {
+    if (path.isAbsolute(configured)) {
+      candidates.push(configured);
+    } else {
+      candidates.push(path.resolve(process.cwd(), configured));
+      candidates.push(path.resolve(__dirname, '..', '..', configured));
+      candidates.push(path.resolve(__dirname, '..', '..', '..', configured));
+    }
+  }
+
+  // Default filename — no env needed if file sits in server root
+  candidates.push(path.resolve(process.cwd(), DEFAULT_SA_FILENAME));
+  candidates.push(path.resolve(process.cwd(), 'server', DEFAULT_SA_FILENAME));
+  candidates.push(path.resolve(__dirname, '..', '..', DEFAULT_SA_FILENAME));
+  candidates.push(path.resolve(__dirname, '..', '..', '..', DEFAULT_SA_FILENAME));
+
+  for (const candidate of candidates) {
+    try {
+      if (candidate && fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
+        return candidate;
+      }
+    } catch {
+      /* try next */
+    }
+  }
+  return null;
+}
+
 function readServiceAccountJson(): string | null {
+  // Optional override (hosting that cannot ship a file)
   const inline = process.env.FIREBASE_SERVICE_ACCOUNT_JSON?.trim();
   if (inline) return inline;
 
-  const filePath = process.env.FIREBASE_SERVICE_ACCOUNT_PATH?.trim();
-  if (!filePath) return null;
-
-  const resolved = path.isAbsolute(filePath)
-    ? filePath
-    : path.resolve(process.cwd(), filePath);
-  if (!fs.existsSync(resolved)) return null;
-  return fs.readFileSync(resolved, 'utf8').trim();
+  const resolved = resolveServiceAccountPath();
+  if (!resolved) return null;
+  try {
+    return fs.readFileSync(resolved, 'utf8').trim();
+  } catch {
+    return null;
+  }
 }
 
 export function getFirebaseAdmin(): admin.app.App | null {
@@ -38,7 +73,7 @@ export function getFirebaseAdmin(): admin.app.App | null {
       return admin.app();
     }
 
-    // Local/dev only — production must use FIREBASE_SERVICE_ACCOUNT_JSON (or PATH).
+    // Local/dev only when no file found
     if (projectId && !isProd) {
       admin.initializeApp({ projectId });
       initialized = true;
