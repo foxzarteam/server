@@ -161,13 +161,16 @@ export class UsersService {
     }
 
     const email = dto.email?.trim() || null;
-    const referralCode = await this.generateUniqueReferralCode();
+    const [referralCode, mpinHash] = await Promise.all([
+      this.generateUniqueReferralCode(),
+      hashMpin(dto.mpin),
+    ]);
     const { data, error } = await this.users
       .insert({
         mobile_number: dto.mobileNumber,
         user_name: dto.userName.trim(),
         email,
-        mpin: await hashMpin(dto.mpin),
+        mpin: mpinHash,
         referral_code: referralCode,
         is_active: true,
         is_logged_in: false,
@@ -188,7 +191,8 @@ export class UsersService {
     if (!user) {
       return { ok: false, duplicate: false, message: 'Could not create account. Please try again.' };
     }
-    await this.ensureWalletRow(String(user.id ?? ''));
+    // Don't block register response on wallet row (created on first earnings fetch if missing).
+    void this.ensureWalletRow(String(user.id ?? ''));
     return { ok: true, user };
   }
 
