@@ -1,10 +1,11 @@
 import { Module } from '@nestjs/common';
+import { AdminCrmGuard, AdminOnlyGuard } from '../common/admin-crm.guard';
 import { ContactController } from './contact.controller';
 import { ContactService } from './contact.service';
 
 @Module({
   controllers: [ContactController],
-  providers: [ContactService],
+  providers: [ContactService, AdminCrmGuard, AdminOnlyGuard],
   exports: [ContactService],
 })
 export class ContactModule {}

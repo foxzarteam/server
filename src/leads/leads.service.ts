@@ -413,7 +413,7 @@ export class LeadsService {
       is_active: true,
     };
 
-    if (dto.userId?.trim()) payload.user_id = dto.userId.trim();
+    // Public apply: never trust client-supplied userId (referral via code only).
     const agentId = await this.usersService.getIdByReferralCode(dto.referralCode);
     if (agentId) payload.agent_id = agentId;
     Object.assign(payload, this.ipFields(meta?.clientIp));

@@ -11,6 +11,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { assertMobileAccess, extractIdToken } from '../common/phone-access';
+import { allowRateLimitedAction } from '../security/rate-limit';
 import { OtpService } from '../otp/otp.service';
 import {
   CreateChatDto,
@@ -29,6 +30,10 @@ export class ChatController {
   @Post()
   @HttpCode(HttpStatus.CREATED)
   async create(@Body() dto: CreateChatDto) {
+    const mobile = String(dto.mobileNumber ?? '').trim();
+    if (mobile && !allowRateLimitedAction(`chat-create:${mobile}`, 6, 60_000)) {
+      throw new BadRequestException('Too many chat sessions. Please try again in a minute.');
+    }
     const answers = parseAnswers(dto.answers);
     if (!answers) {
       throw new BadRequestException('Chat answers are incomplete.');

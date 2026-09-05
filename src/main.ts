@@ -4,12 +4,17 @@ import { AppModule } from './app.module';
 import { ConfigService } from '@nestjs/config';
 import { NestExpressApplication } from '@nestjs/platform-express';
 import compression from 'compression';
+import helmet from 'helmet';
 import { CORS_ALLOWED_HEADERS, resolveCorsOrigin } from './common/cors';
 import { ROOT_PAGE_HTML } from './root-landing';
 
 async function bootstrap() {
   if (process.env.NODE_ENV === 'production' && !(process.env.ADMIN_INTERNAL_KEY ?? '').trim()) {
     console.error('FATAL: ADMIN_INTERNAL_KEY is required in production.');
+    process.exit(1);
+  }
+  if (process.env.NODE_ENV === 'production' && !(process.env.PAN_ENCRYPTION_KEY ?? '').trim()) {
+    console.error('FATAL: PAN_ENCRYPTION_KEY is required in production.');
     process.exit(1);
   }
 
@@ -27,6 +32,16 @@ async function bootstrap() {
   });
 
   app.setGlobalPrefix(prefix);
+  app.use(
+    helmet({
+      contentSecurityPolicy: false,
+      crossOriginResourcePolicy: { policy: 'cross-origin' },
+      hsts:
+        process.env.NODE_ENV === 'production'
+          ? { maxAge: 15552000, includeSubDomains: true }
+          : false,
+    }),
+  );
   app.use(compression());
   app.getHttpAdapter().getInstance().set('trust proxy', 1);
 
@@ -38,7 +53,7 @@ async function bootstrap() {
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,
-      forbidNonWhitelisted: false, // Allow extra fields
+      forbidNonWhitelisted: true,
       transform: true,
       transformOptions: { enableImplicitConversion: true },
       stopAtFirstError: false,

@@ -6,6 +6,7 @@ import { ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import express, { Request, Response } from 'express';
 import compression from 'compression';
+import helmet from 'helmet';
 import { CORS_ALLOWED_HEADERS, resolveCorsOrigin } from '../src/common/cors';
 import { ROOT_PAGE_HTML } from '../src/root-landing';
 
@@ -26,8 +27,21 @@ async function createApp(): Promise<express.Express> {
   if (process.env.NODE_ENV === 'production' && !(process.env.ADMIN_INTERNAL_KEY ?? '').trim()) {
     throw new Error('ADMIN_INTERNAL_KEY is required in production.');
   }
+  if (process.env.NODE_ENV === 'production' && !(process.env.PAN_ENCRYPTION_KEY ?? '').trim()) {
+    throw new Error('PAN_ENCRYPTION_KEY is required in production.');
+  }
 
   const expressApp = express();
+  expressApp.use(
+    helmet({
+      contentSecurityPolicy: false,
+      crossOriginResourcePolicy: { policy: 'cross-origin' },
+      hsts:
+        process.env.NODE_ENV === 'production'
+          ? { maxAge: 15552000, includeSubDomains: true }
+          : false,
+    }),
+  );
   expressApp.use(compression());
   expressApp.set('trust proxy', 1);
 
@@ -48,7 +62,7 @@ async function createApp(): Promise<express.Express> {
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,
-      forbidNonWhitelisted: false, // Allow extra fields
+      forbidNonWhitelisted: true,
       transform: true,
       transformOptions: { enableImplicitConversion: true },
       stopAtFirstError: false,

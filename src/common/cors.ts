@@ -24,5 +24,6 @@ export const CORS_ALLOWED_HEADERS = [
   'Accept',
   'Authorization',
   'x-admin-internal-key',
+  'x-admin-actor',
   'x-firebase-id-token',
 ];

@@ -2,8 +2,9 @@ import { randomBytes } from 'crypto';
 import { Inject, Injectable } from '@nestjs/common';
 import { SupabaseClient } from '@supabase/supabase-js';
 import { hashMpin, mpinMatches, sanitizeUserPublic, storedMpinLooksBcrypt } from '../common/mpin';
+import { toPublicErrorMessage } from '../common/public-error';
 import { SUPABASE_CLIENT } from '../config/supabase';
-import { MSG_USER_CREATE_FAILED, TABLE_USERS, getCurrentIsoTime } from '../common/constants';
+import { MSG_USER_CREATE_FAILED, TABLE_USERS, TABLE_WALLET, getCurrentIsoTime } from '../common/constants';
 import {
   AdminCreateUserDto,
   AdminUpdateUserDto,
@@ -23,6 +24,31 @@ export class UsersService {
 
   private get users() {
     return this.supabase.from(TABLE_USERS);
+  }
+
+  /** Ensure public.wallet row exists for this user (INR zeros if new). */
+  private async ensureWalletRow(userId: string): Promise<void> {
+    const uid = String(userId ?? '').trim();
+    if (!uid) return;
+    const { data } = await this.supabase
+      .from(TABLE_WALLET)
+      .select('id')
+      .eq('user_id', uid)
+      .maybeSingle();
+    if (data) return;
+    const now = getCurrentIsoTime();
+    const { error } = await this.supabase.from(TABLE_WALLET).insert({
+      user_id: uid,
+      earning: 0,
+      redeem: 0,
+      balance: 0,
+      currency: 'INR',
+      created_at: now,
+      updated_at: now,
+    });
+    if (error && process.env.NODE_ENV !== 'production') {
+      console.error('UsersService.ensureWalletRow', error);
+    }
   }
 
   private newReferralCode(): string {
@@ -72,6 +98,7 @@ export class UsersService {
     const ok = await this.verifyMpin(mobile, mpin);
     if (!ok) return null;
     const withCode = await this.ensureReferralCode(user);
+    await this.ensureWalletRow(String(withCode.id ?? ''));
     await this.users
       .update({
         is_logged_in: true,
@@ -116,13 +143,20 @@ export class UsersService {
       .maybeSingle();
 
     if (lookupError) {
-      return { ok: false, duplicate: false, message: lookupError.message };
+      if (process.env.NODE_ENV !== 'production') {
+        console.error('UsersService.createForAdmin lookup', lookupError);
+      }
+      return {
+        ok: false,
+        duplicate: false,
+        message: toPublicErrorMessage(lookupError.message, 'Could not create account. Please try again.'),
+      };
     }
     if (existing) {
       return {
         ok: false,
         duplicate: true,
-        message: 'An agent with this phone number already exists in public.users.',
+        message: 'This phone number is already registered. Please log in.',
       };
     }
 
@@ -144,16 +178,17 @@ export class UsersService {
       if (process.env.NODE_ENV !== 'production') {
         console.error('UsersService.createForAdmin', error);
       }
-      const hint =
-        /permission denied|row-level security|rls/i.test(error.message)
-          ? ' Check SUPABASE_SERVICE_KEY is the service_role secret, not the publishable key.'
-          : '';
-      return { ok: false, duplicate: false, message: `${error.message}${hint}` };
+      return {
+        ok: false,
+        duplicate: false,
+        message: toPublicErrorMessage(error.message, 'Could not create account. Please try again.'),
+      };
     }
     const user = sanitizeUserPublic(data as Record<string, unknown>);
     if (!user) {
-      return { ok: false, duplicate: false, message: 'Create succeeded but user payload was empty.' };
+      return { ok: false, duplicate: false, message: 'Could not create account. Please try again.' };
     }
+    await this.ensureWalletRow(String(user.id ?? ''));
     return { ok: true, user };
   }
 

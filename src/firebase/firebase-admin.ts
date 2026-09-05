@@ -37,7 +37,8 @@ export function getFirebaseAdmin(): admin.app.App | null {
       return admin.app();
     }
 
-    if (projectId) {
+    // Dev/local only: projectId without service account. Never in production.
+    if (projectId && process.env.NODE_ENV !== 'production') {
       admin.initializeApp({ projectId });
       initialized = true;
       return admin.app();

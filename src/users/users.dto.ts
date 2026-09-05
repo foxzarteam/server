@@ -127,6 +127,12 @@ export class AdminCreateUserDto {
   @Length(4, 4, { message: 'password must be 4 digits' })
   @Matches(/^\d{4}$/, { message: 'password must be 4 digits' })
   mpin: string;
+
+  /** Required for public agent register (Firebase idToken); unused on admin CRM create. */
+  @IsOptional()
+  @IsString()
+  @MinLength(20)
+  idToken?: string;
 }
 
 export class AdminUpdateUserDto {

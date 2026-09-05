@@ -1,10 +1,11 @@
 import { Module } from '@nestjs/common';
+import { AdminCrmGuard, AdminOnlyGuard } from '../common/admin-crm.guard';
 import { PartnerController } from './partner.controller';
 import { PartnerService } from './partner.service';
 
 @Module({
   controllers: [PartnerController],
-  providers: [PartnerService],
+  providers: [PartnerService, AdminCrmGuard, AdminOnlyGuard],
   exports: [PartnerService],
 })
 export class PartnerModule {}

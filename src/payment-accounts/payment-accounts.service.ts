@@ -72,7 +72,7 @@ export class PaymentAccountsService {
       .upsert(payload, {
         onConflict: 'user_id,payment_type',
       })
-      .select()
+      .select('id, payment_type, upi_id, bank_name, ifsc_code, created_at, updated_at')
       .single();
 
     if (error) {

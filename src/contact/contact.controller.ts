@@ -3,36 +3,18 @@ import {
   Controller,
   Delete,
   Get,
-  Headers,
   HttpCode,
   HttpStatus,
-  Inject,
-  Injectable,
   NotFoundException,
   Param,
   Patch,
   Post,
-  UnauthorizedException,
   BadRequestException,
+  UseGuards,
 } from '@nestjs/common';
-import { SupabaseClient } from '@supabase/supabase-js';
-import {
-  IsEmail,
-  IsIn,
-  IsOptional,
-  IsString,
-  Length,
-  Matches,
-  MinLength,
-} from 'class-validator';
-import { adminInternalKeyOk } from '../common/admin-internal';
-import { TABLE_CONTACT } from '../common/constants';
-import { SUPABASE_CLIENT } from '../config/supabase';
-
-import {
-  CreateContactDto,
-  UpdateContactDto,
-} from './contact.dto';
+import { AdminCrmGuard, AdminOnlyGuard } from '../common/admin-crm.guard';
+import { allowRateLimitedAction } from '../security/rate-limit';
+import { CreateContactDto, UpdateContactDto } from './contact.dto';
 import { ContactService } from './contact.service';
 
 @Controller('contact')
@@ -43,6 +25,10 @@ export class ContactController {
   @Post()
   @HttpCode(HttpStatus.CREATED)
   async create(@Body() dto: CreateContactDto) {
+    const emailKey = (dto.email ?? 'anon').trim().toLowerCase().slice(0, 80);
+    if (!allowRateLimitedAction(`contact:${emailKey}`, 5, 60_000)) {
+      throw new BadRequestException('Too many messages. Please try again in a minute.');
+    }
     const row = await this.contactService.create(dto);
     if (!row) {
       throw new BadRequestException('Could not save your message.');
@@ -51,25 +37,17 @@ export class ContactController {
   }
 
   @Get('admin/all')
+  @UseGuards(AdminCrmGuard)
   @HttpCode(HttpStatus.OK)
-  async getAllForAdmin(@Headers('x-admin-internal-key') adminKey: string | undefined) {
-    if (!adminInternalKeyOk(adminKey)) {
-      throw new UnauthorizedException('Unauthorized');
-    }
+  async getAllForAdmin() {
     const data = await this.contactService.getAll();
     return { success: true, data };
   }
 
   @Patch('admin/:id')
+  @UseGuards(AdminCrmGuard)
   @HttpCode(HttpStatus.OK)
-  async updateForAdmin(
-    @Headers('x-admin-internal-key') adminKey: string | undefined,
-    @Param('id') id: string,
-    @Body() dto: UpdateContactDto,
-  ) {
-    if (!adminInternalKeyOk(adminKey)) {
-      throw new UnauthorizedException('Unauthorized');
-    }
+  async updateForAdmin(@Param('id') id: string, @Body() dto: UpdateContactDto) {
     const data = await this.contactService.updateById(id, dto);
     if (!data) {
       throw new NotFoundException('Contact not found or update failed');
@@ -78,14 +56,9 @@ export class ContactController {
   }
 
   @Delete('admin/:id')
+  @UseGuards(AdminCrmGuard, AdminOnlyGuard)
   @HttpCode(HttpStatus.OK)
-  async deleteForAdmin(
-    @Headers('x-admin-internal-key') adminKey: string | undefined,
-    @Param('id') id: string,
-  ) {
-    if (!adminInternalKeyOk(adminKey)) {
-      throw new UnauthorizedException('Unauthorized');
-    }
+  async deleteForAdmin(@Param('id') id: string) {
     const ok = await this.contactService.deleteById(id);
     if (!ok) {
       throw new NotFoundException('Contact not found or delete failed');

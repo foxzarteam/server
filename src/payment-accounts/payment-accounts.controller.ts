@@ -14,7 +14,7 @@ import {
 import { SupabaseClient } from '@supabase/supabase-js';
 import { IsIn, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
 import { adminInternalKeyOk } from '../common/admin-internal';
-import { assertMobileAccess, extractIdToken } from '../common/phone-access';
+import { assertStrictMobileAccess, extractIdToken } from '../common/phone-access';
 import { SUPABASE_CLIENT } from '../config/supabase';
 import { TABLE_PAYMENT_ACCOUNTS, getCurrentIsoTime } from '../common/constants';
 import { OtpService } from '../otp/otp.service';
@@ -43,7 +43,7 @@ export class PaymentAccountsController {
     const user = await this.usersService.getById(userId);
     const mobile = String(user?.mobile_number ?? '').trim();
     if (!mobile) throw new UnauthorizedException('Unauthorized');
-    await assertMobileAccess(this.otpService, mobile, {
+    await assertStrictMobileAccess(this.otpService, mobile, {
       adminKey,
       idToken: extractIdToken(headers, bodyToken),
     });

@@ -13,13 +13,22 @@ import {
   Patch,
   Post,
   Put,
+  Req,
   UnauthorizedException,
+  UseGuards,
 } from '@nestjs/common';
-import { adminInternalKeyOk } from '../common/admin-internal';
+import type { Request } from 'express';
+import { AdminCrmGuard, AdminOnlyGuard } from '../common/admin-crm.guard';
+import { extractClientIp } from '../common/client-ip';
 import { sanitizeUserPublic } from '../common/mpin';
-import { assertMobileAccess, extractIdToken } from '../common/phone-access';
+import { assertMobileAccess, assertStrictMobileAccess, extractIdToken } from '../common/phone-access';
 import { MSG_USER_CREATE_FAILED } from '../common/constants';
 import { allowRateLimitedAction } from '../security/rate-limit';
+import {
+  clearMpinFailures,
+  isMpinLocked,
+  recordMpinFailure,
+} from '../security/mpin-lockout';
 import { OtpService } from '../otp/otp.service';
 import {
   AgentLoginDto,
@@ -48,29 +57,64 @@ export class UsersController {
     return extractIdToken(headers, bodyToken);
   }
 
+  private clientIp(req: Request): string | null {
+    return extractClientIp(
+      req.headers as Record<string, string | string[] | undefined>,
+      req.ip ?? req.socket?.remoteAddress,
+    );
+  }
+
   @Post('agent/login')
   @HttpCode(HttpStatus.OK)
-  async agentLogin(@Body() dto: AgentLoginDto) {
-    if (!allowRateLimitedAction(`agent-login:${dto.mobileNumber}`, 8, 60_000)) {
+  async agentLogin(@Body() dto: AgentLoginDto, @Req() req: Request) {
+    const mobile = dto.mobileNumber.trim();
+    if (!allowRateLimitedAction(`agent-login:${mobile}`, 5, 60_000)) {
       throw new BadRequestException('Too many attempts. Try again in a minute.');
     }
-    const user = await this.usersService.loginAgent(dto.mobileNumber, dto.mpin);
+    const ip = this.clientIp(req);
+    if (ip && !allowRateLimitedAction(`agent-login-ip:${ip}`, 5, 60_000)) {
+      throw new BadRequestException('Too many attempts. Try again in a minute.');
+    }
+
+    const lock = isMpinLocked(mobile);
+    if (lock.locked) {
+      throw new UnauthorizedException(
+        `Too many failed attempts. Try again in ${lock.retryAfterSec} seconds.`,
+      );
+    }
+
+    const user = await this.usersService.loginAgent(mobile, dto.mpin);
     if (!user) {
+      const after = recordMpinFailure(mobile);
+      if (after.locked) {
+        throw new UnauthorizedException(
+          `Too many failed attempts. Try again in ${after.retryAfterSec} seconds.`,
+        );
+      }
       throw new UnauthorizedException('Invalid phone or PIN');
     }
+    clearMpinFailures(mobile);
     return { success: true, data: user };
   }
 
   @Post('agent/register')
   @HttpCode(HttpStatus.CREATED)
-  async agentRegister(@Body() dto: AdminCreateUserDto) {
-    if (!allowRateLimitedAction(`agent-register:${dto.mobileNumber}`, 4, 60_000)) {
+  async agentRegister(
+    @Body() dto: AdminCreateUserDto,
+    @Headers() headers: Record<string, string | string[] | undefined>,
+  ) {
+    if (!allowRateLimitedAction(`agent-register:${dto.mobileNumber}`, 3, 60_000)) {
       throw new BadRequestException('Too many attempts. Try again in a minute.');
+    }
+    // Optional Firebase: when idToken present, verify it; never auto-grant CRM session here.
+    const idToken = this.idTokenFrom(headers, dto.idToken);
+    if (idToken) {
+      await assertStrictMobileAccess(this.otpService, dto.mobileNumber, { idToken });
     }
     const result = await this.usersService.createForAdmin(dto);
     if (!result.ok) {
       if (result.duplicate) {
-        throw new ConflictException('This phone is already registered. Please log in.');
+        throw new BadRequestException('Unable to complete registration');
       }
       throw new BadRequestException(result.message);
     }
@@ -78,24 +122,17 @@ export class UsersController {
   }
 
   @Get('admin/all')
+  @UseGuards(AdminCrmGuard)
   @HttpCode(HttpStatus.OK)
-  async getAllForAdmin(@Headers('x-admin-internal-key') adminKey: string | undefined) {
-    if (!adminInternalKeyOk(adminKey)) {
-      throw new UnauthorizedException('Unauthorized');
-    }
+  async getAllForAdmin() {
     const users = await this.usersService.getAll();
     return { success: true, data: users };
   }
 
   @Post('admin')
+  @UseGuards(AdminCrmGuard)
   @HttpCode(HttpStatus.CREATED)
-  async createForAdmin(
-    @Headers('x-admin-internal-key') adminKey: string | undefined,
-    @Body() dto: AdminCreateUserDto,
-  ) {
-    if (!adminInternalKeyOk(adminKey)) {
-      throw new UnauthorizedException('Unauthorized');
-    }
+  async createForAdmin(@Body() dto: AdminCreateUserDto) {
     const result = await this.usersService.createForAdmin(dto);
     if (!result.ok) {
       if (result.duplicate) {
@@ -107,15 +144,9 @@ export class UsersController {
   }
 
   @Patch('admin/:id')
+  @UseGuards(AdminCrmGuard)
   @HttpCode(HttpStatus.OK)
-  async updateForAdmin(
-    @Headers('x-admin-internal-key') adminKey: string | undefined,
-    @Param('id') id: string,
-    @Body() dto: AdminUpdateUserDto,
-  ) {
-    if (!adminInternalKeyOk(adminKey)) {
-      throw new UnauthorizedException('Unauthorized');
-    }
+  async updateForAdmin(@Param('id') id: string, @Body() dto: AdminUpdateUserDto) {
     const user = await this.usersService.updateById(id, dto);
     if (!user) {
       throw new NotFoundException('User not found or update failed');
@@ -124,14 +155,9 @@ export class UsersController {
   }
 
   @Delete('admin/:id')
+  @UseGuards(AdminCrmGuard, AdminOnlyGuard)
   @HttpCode(HttpStatus.OK)
-  async deleteForAdmin(
-    @Headers('x-admin-internal-key') adminKey: string | undefined,
-    @Param('id') id: string,
-  ) {
-    if (!adminInternalKeyOk(adminKey)) {
-      throw new UnauthorizedException('Unauthorized');
-    }
+  async deleteForAdmin(@Param('id') id: string) {
     const ok = await this.usersService.deleteById(id);
     if (!ok) {
       throw new NotFoundException('User not found or delete failed');
@@ -146,7 +172,7 @@ export class UsersController {
     @Headers() headers: Record<string, string | string[] | undefined>,
     @Headers('x-admin-internal-key') adminKey: string | undefined,
   ) {
-    await assertMobileAccess(this.otpService, mobile, {
+    await assertStrictMobileAccess(this.otpService, mobile, {
       adminKey,
       idToken: this.idTokenFrom(headers),
     });
@@ -179,12 +205,28 @@ export class UsersController {
     @Headers() headers: Record<string, string | string[] | undefined>,
     @Headers('x-admin-internal-key') adminKey: string | undefined,
   ) {
-    await assertMobileAccess(this.otpService, mobile, {
+    if (!allowRateLimitedAction(`verify-mpin:${mobile.trim()}`, 5, 60_000)) {
+      throw new BadRequestException('Too many attempts. Try again in a minute.');
+    }
+    await assertStrictMobileAccess(this.otpService, mobile, {
       adminKey,
       idToken: this.idTokenFrom(headers, dto.idToken),
     });
+    const lock = isMpinLocked(mobile);
+    if (lock.locked) {
+      return { success: false, locked: true, retryAfterSec: lock.retryAfterSec };
+    }
     const ok = await this.usersService.verifyMpin(mobile, dto.mpin);
-    return { success: ok };
+    if (!ok) {
+      const after = recordMpinFailure(mobile);
+      return {
+        success: false,
+        locked: after.locked,
+        retryAfterSec: after.retryAfterSec || undefined,
+      };
+    }
+    clearMpinFailures(mobile);
+    return { success: true };
   }
 
   @Patch('mobile/:mobile/mpin')
@@ -195,7 +237,7 @@ export class UsersController {
     @Headers() headers: Record<string, string | string[] | undefined>,
     @Headers('x-admin-internal-key') adminKey: string | undefined,
   ) {
-    await assertMobileAccess(this.otpService, mobile, {
+    await assertStrictMobileAccess(this.otpService, mobile, {
       adminKey,
       idToken: this.idTokenFrom(headers, dto.idToken),
     });
@@ -211,7 +253,7 @@ export class UsersController {
     @Headers() headers: Record<string, string | string[] | undefined>,
     @Headers('x-admin-internal-key') adminKey: string | undefined,
   ) {
-    await assertMobileAccess(this.otpService, mobile, {
+    await assertStrictMobileAccess(this.otpService, mobile, {
       adminKey,
       idToken: this.idTokenFrom(headers, dto.idToken),
     });
@@ -227,7 +269,7 @@ export class UsersController {
     @Headers() headers: Record<string, string | string[] | undefined>,
     @Headers('x-admin-internal-key') adminKey: string | undefined,
   ) {
-    await assertMobileAccess(this.otpService, mobile, {
+    await assertStrictMobileAccess(this.otpService, mobile, {
       adminKey,
       idToken: this.idTokenFrom(headers, dto.idToken),
     });
@@ -242,7 +284,10 @@ export class UsersController {
     @Headers() headers: Record<string, string | string[] | undefined>,
     @Headers('x-admin-internal-key') adminKey: string | undefined,
   ) {
-    await assertMobileAccess(this.otpService, dto.mobileNumber, {
+    const access = dto.mpin
+      ? assertStrictMobileAccess
+      : assertMobileAccess;
+    await access(this.otpService, dto.mobileNumber, {
       adminKey,
       idToken: this.idTokenFrom(headers, dto.idToken),
     });

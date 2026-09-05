@@ -2,6 +2,8 @@ import { UnauthorizedException } from '@nestjs/common';
 import { adminInternalKeyOk } from './admin-internal';
 import type { OtpService } from '../otp/otp.service';
 
+export type MobileAccessOpts = { adminKey?: string; idToken?: string };
+
 /**
  * Allow access when:
  * 1) valid x-admin-internal-key, OR
@@ -11,7 +13,7 @@ import type { OtpService } from '../otp/otp.service';
 export async function assertMobileAccess(
   otpService: OtpService,
   mobileNumber: string,
-  opts: { adminKey?: string; idToken?: string } = {},
+  opts: MobileAccessOpts = {},
 ): Promise<void> {
   if (adminInternalKeyOk(opts.adminKey)) return;
 
@@ -20,18 +22,70 @@ export async function assertMobileAccess(
     throw new UnauthorizedException('Unauthorized');
   }
 
-  const idToken = opts.idToken?.trim();
-  if (idToken) {
-    const verified = await otpService.verifyFirebaseToken({
-      mobileNumber: mobile,
-      idToken,
-    });
-    if (verified.success) return;
-  }
+  if (await firebaseTokenMatchesMobile(otpService, mobile, opts.idToken)) return;
 
   if (await otpService.hasRecentPhoneVerification(mobile)) return;
 
   throw new UnauthorizedException('Unauthorized');
+}
+
+/**
+ * Stricter gate for account-takeover sensitive mutations (e.g. MPIN reset).
+ * Requires admin key OR a live Firebase idToken — not the OTP time-window alone.
+ */
+export async function assertStrictMobileAccess(
+  otpService: OtpService,
+  mobileNumber: string,
+  opts: MobileAccessOpts = {},
+): Promise<void> {
+  if (adminInternalKeyOk(opts.adminKey)) return;
+
+  const mobile = mobileNumber.trim();
+  if (!/^[6-9]\d{9}$/.test(mobile)) {
+    throw new UnauthorizedException('Unauthorized');
+  }
+
+  if (await firebaseTokenMatchesMobile(otpService, mobile, opts.idToken)) return;
+
+  throw new UnauthorizedException('Phone verification required. Sign in with OTP again.');
+}
+
+/**
+ * Lead apply / PAN submission only: admin key OR Firebase idToken OR recent OTP
+ * for this mobile. OTP window is intentional here (verify before storing PAN),
+ * but must not be reused as a general login session on wallet/payment/mpin routes.
+ */
+export async function assertLeadPiiAccess(
+  otpService: OtpService,
+  mobileNumber: string,
+  opts: MobileAccessOpts = {},
+): Promise<void> {
+  if (adminInternalKeyOk(opts.adminKey)) return;
+
+  const mobile = mobileNumber.trim();
+  if (!/^[6-9]\d{9}$/.test(mobile)) {
+    throw new UnauthorizedException('Unauthorized');
+  }
+
+  if (await firebaseTokenMatchesMobile(otpService, mobile, opts.idToken)) return;
+
+  if (await otpService.hasRecentPhoneVerification(mobile)) return;
+
+  throw new UnauthorizedException('Phone verification required before submitting details.');
+}
+
+async function firebaseTokenMatchesMobile(
+  otpService: OtpService,
+  mobile: string,
+  idToken?: string,
+): Promise<boolean> {
+  const token = idToken?.trim();
+  if (!token) return false;
+  const verified = await otpService.verifyFirebaseToken({
+    mobileNumber: mobile,
+    idToken: token,
+  });
+  return verified.success === true;
 }
 
 /** Read Firebase id token from common header names / Authorization Bearer. */

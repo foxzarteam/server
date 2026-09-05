@@ -6,6 +6,7 @@ import {
   Length,
   Matches,
   Min,
+  MinLength,
   ValidateIf,
 } from 'class-validator';
 import { isMaskedPan, PAN_FORMAT_REGEX } from '../security/pan-crypto';
@@ -185,6 +186,11 @@ export class CreateLeadDto {
   @Length(6, 12)
   @Matches(/^[A-Za-z0-9]+$/, { message: 'Invalid referral code' })
   referralCode?: string;
+
+  @IsOptional()
+  @IsString()
+  @MinLength(20)
+  idToken?: string;
 }
 
 export class UpdateLeadDto {

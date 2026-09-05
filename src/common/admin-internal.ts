@@ -1,6 +1,7 @@
 import { timingSafeEqual } from 'crypto';
 
-const DEV_ADMIN_INTERNAL_KEY = 'az-admin-internal-dev-key';
+/** Local-only — must match az_web DEV placeholder. Set ADMIN_INTERNAL_KEY in env. */
+const DEV_ADMIN_INTERNAL_KEY = 'local-dev-admin-internal-not-for-prod';
 
 function safeEqualString(a: string, b: string): boolean {
   const bufA = Buffer.from(a);

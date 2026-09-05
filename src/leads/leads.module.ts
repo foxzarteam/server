@@ -1,5 +1,5 @@
 import { Module } from '@nestjs/common';
-import { AdminInternalGuard } from '../common/admin-internal.guard';
+import { AdminCrmGuard, AdminOnlyGuard } from '../common/admin-crm.guard';
 import { MobileAccessGuard } from '../common/mobile-access.guard';
 import { OtpModule } from '../otp/otp.module';
 import { UsersModule } from '../users/users.module';
@@ -13,7 +13,8 @@ import { LeadsService } from './leads.service';
   providers: [
     LeadsService,
     PanAuditService,
-    AdminInternalGuard,
+    AdminCrmGuard,
+    AdminOnlyGuard,
     MobileAccessGuard,
   ],
   exports: [LeadsService],

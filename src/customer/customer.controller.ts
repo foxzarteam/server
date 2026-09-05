@@ -5,18 +5,18 @@ import {
   Headers,
   HttpCode,
   HttpStatus,
-  Injectable,
   NotFoundException,
   Param,
   Patch,
   Post,
+  Req,
   UnauthorizedException,
+  BadRequestException,
 } from '@nestjs/common';
-import { IsOptional, IsString, Length, Matches, MinLength } from 'class-validator';
+import type { Request } from 'express';
 import { adminInternalKeyOk } from '../common/admin-internal';
-import { LeadsService } from '../leads/leads.service';
-import { OtpService } from '../otp/otp.service';
-import { isMaskedPan, isValidPanFormat, maskPan, normalizePan } from '../security/pan-crypto';
+import { extractClientIp } from '../common/client-ip';
+import { allowRateLimitedAction } from '../security/rate-limit';
 
 import {
   CheckMobileDto,
@@ -33,8 +33,17 @@ export class CustomerController {
   /** Public: does this mobile have any active loan application? */
   @Post('check-mobile')
   @HttpCode(HttpStatus.OK)
-  async checkMobile(@Body() dto: CheckMobileDto) {
-    const exists = await this.customerService.mobileHasApplication(dto.mobileNumber);
+  async checkMobile(@Body() dto: CheckMobileDto, @Req() req: Request) {
+    const mobile = dto.mobileNumber.trim();
+    const ip =
+      extractClientIp(
+        req.headers as Record<string, string | string[] | undefined>,
+        req.ip ?? req.socket?.remoteAddress,
+      ) ?? 'unknown';
+    if (!allowRateLimitedAction(`check-mobile:${mobile}:${ip}`, 5, 60_000)) {
+      throw new BadRequestException('Too many attempts. Try again in a minute.');
+    }
+    const exists = await this.customerService.mobileHasApplication(mobile);
     return { success: true, exists };
   }
 

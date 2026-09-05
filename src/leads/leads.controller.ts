@@ -17,16 +17,27 @@ import {
   Req,
 } from '@nestjs/common';
 import type { Request } from 'express';
+import type { AdminActor } from '../common/admin-actor';
+import {
+  extractAdminActorToken,
+  isCrmAdminActor,
+  verifyAdminActor,
+} from '../common/admin-actor';
+import { AdminCrmGuard, AdminOnlyGuard } from '../common/admin-crm.guard';
 import { adminInternalKeyOk } from '../common/admin-internal';
-import { AdminInternalGuard } from '../common/admin-internal.guard';
 import { MobileAccessGuard } from '../common/mobile-access.guard';
-import { assertMobileAccess, extractIdToken } from '../common/phone-access';
+import {
+  assertLeadPiiAccess,
+  assertMobileAccess,
+  extractIdToken,
+} from '../common/phone-access';
 import { MSG_OTP_PHONE_NOT_VERIFIED } from '../common/constants';
 import { OtpService } from '../otp/otp.service';
 import { UsersService } from '../users/users.service';
 import { sanitizePublicLead } from '../security/pan-crypto';
 import { allowRateLimitedAction } from '../security/rate-limit';
 import { extractClientIp } from '../common/client-ip';
+import { toPublicErrorMessage } from '../common/public-error';
 import {
   AdminCreateLeadDto,
   CompleteLeadDto,
@@ -105,16 +116,26 @@ export class LeadsController {
   }
 
   /**
-   * Public apply: save lead BEFORE OTP.
+   * Public apply: require phone verification (Firebase or recent OTP) before storing PAN.
    * Same mobile/PAN allowed once per product category.
    */
   @Post('apply')
   @HttpCode(HttpStatus.CREATED)
-  async apply(@Body() dto: CreateLeadDto, @Req() req: Request) {
+  async apply(
+    @Body() dto: CreateLeadDto,
+    @Headers() headers: Record<string, string | string[] | undefined>,
+    @Headers('x-admin-internal-key') adminKey: string | undefined,
+    @Req() req: Request,
+  ) {
     const mobile = dto.mobileNumber?.trim() ?? '';
     if (mobile && !allowRateLimitedAction(`lead-apply:${mobile}`, 8, 60_000)) {
       throw new BadRequestException('Too many applications. Please try again in a minute.');
     }
+
+    await assertLeadPiiAccess(this.otpService, mobile, {
+      adminKey,
+      idToken: extractIdToken(headers, dto.idToken),
+    });
 
     const result = await this.leadsService.applyLead(dto, {
       clientIp: this.clientIp(req),
@@ -146,7 +167,7 @@ export class LeadsController {
       return { success: false, message: 'Lead not found.' };
     }
     const mobile = String(existing.mobile_number ?? '').trim();
-    await assertMobileAccess(this.otpService, mobile, {
+    await assertLeadPiiAccess(this.otpService, mobile, {
       adminKey,
       idToken: extractIdToken(headers),
     });
@@ -209,7 +230,9 @@ export class LeadsController {
       }
       return {
         success: false,
-        message: error instanceof Error ? error.message : 'Failed to create lead',
+        message: error instanceof Error
+          ? toPublicErrorMessage(error.message, 'Failed to create lead')
+          : 'Failed to create lead',
       };
     }
   }
@@ -256,7 +279,7 @@ export class LeadsController {
   }
 
   @Get('admin/all')
-  @UseGuards(AdminInternalGuard)
+  @UseGuards(AdminCrmGuard)
   @HttpCode(HttpStatus.OK)
   async getAllForAdmin() {
     const leads = await this.leadsService.getAll();
@@ -264,16 +287,30 @@ export class LeadsController {
   }
 
   @Get('admin/by-agent/:agentId')
-  @UseGuards(AdminInternalGuard)
   @HttpCode(HttpStatus.OK)
-  async getByAgentForAdmin(@Param('agentId') agentId: string) {
+  async getByAgentForAdmin(
+    @Param('agentId') agentId: string,
+    @Headers() headers: Record<string, string | string[] | undefined>,
+    @Headers('x-admin-internal-key') adminKey: string | undefined,
+  ) {
+    if (!adminInternalKeyOk(adminKey)) {
+      throw new UnauthorizedException('Unauthorized');
+    }
+    const actor = verifyAdminActor(extractAdminActorToken(headers));
+    const allowed =
+      isCrmAdminActor(actor) ||
+      (actor?.role === 'agent' && actor.sub === agentId.trim());
+    if (!allowed) {
+      throw new UnauthorizedException('Unauthorized');
+    }
+
     const leads = await this.leadsService.getByAgentId(agentId);
     return { success: true, data: leads.map((l) => this.sanitizePublicLead(l)) };
   }
 
   /** Always insert a new lead (admin CRM). Does not upsert by mobile. */
   @Post('admin')
-  @UseGuards(AdminInternalGuard)
+  @UseGuards(AdminCrmGuard)
   @HttpCode(HttpStatus.CREATED)
   async createForAdmin(@Body() dto: AdminCreateLeadDto) {
     const category = dto.category || 'personal_loan';
@@ -334,7 +371,7 @@ export class LeadsController {
   }
 
   @Patch('admin/:id')
-  @UseGuards(AdminInternalGuard)
+  @UseGuards(AdminCrmGuard)
   @HttpCode(HttpStatus.OK)
   async updateForAdmin(@Param('id') id: string, @Body() dto: UpdateLeadDto) {
     const lead = await this.leadsService.updateById(id, dto);
@@ -345,30 +382,31 @@ export class LeadsController {
   }
 
   /**
-   * Reveal full PAN for a lead. Requires admin internal key.
-   * Every call is written to pan_access_audit with admin identity + timestamp.
+   * Reveal full PAN for a lead. Actor identity comes from signed x-admin-actor
+   * (AdminCrmGuard), never from the request body.
    */
   @Post('admin/:id/pan/reveal')
-  @UseGuards(AdminInternalGuard)
+  @UseGuards(AdminCrmGuard)
   @HttpCode(HttpStatus.OK)
-  async revealPanForAdmin(@Param('id') id: string, @Body() dto: RevealPanDto) {
-    if (!dto.adminEmail?.trim() && !dto.adminId?.trim()) {
-      throw new BadRequestException('Admin identity is required for PAN reveal');
-    }
-    const role = String(dto.adminRole ?? '').trim().toLowerCase();
-    if (role !== 'admin' && role !== 'staff') {
-      throw new UnauthorizedException('Insufficient role for PAN reveal');
+  async revealPanForAdmin(
+    @Param('id') id: string,
+    @Body() dto: RevealPanDto,
+    @Req() req: { adminActor?: AdminActor },
+  ) {
+    const actor = req.adminActor;
+    if (!actor) {
+      throw new UnauthorizedException('Unauthorized');
     }
 
-    const rateKey = `pan-reveal:${dto.adminEmail || dto.adminId}`;
+    const rateKey = `pan-reveal:${actor.email || actor.sub}`;
     if (!allowRateLimitedAction(rateKey, 10, 60_000)) {
       throw new BadRequestException('Too many PAN reveals. Try again in a minute.');
     }
 
     const result = await this.leadsService.revealPan(id, {
-      adminId: dto.adminId,
-      adminEmail: dto.adminEmail,
-      adminRole: dto.adminRole,
+      adminId: actor.sub,
+      adminEmail: actor.email,
+      adminRole: actor.role,
       ipAddress: dto.ipAddress,
       userAgent: dto.userAgent,
       reason: dto.reason ?? 'admin_panel_reveal',
@@ -387,7 +425,7 @@ export class LeadsController {
   }
 
   @Delete('admin/:id')
-  @UseGuards(AdminInternalGuard)
+  @UseGuards(AdminCrmGuard, AdminOnlyGuard)
   @HttpCode(HttpStatus.OK)
   async deleteForAdmin(@Param('id') id: string) {
     const ok = await this.leadsService.deleteById(id);

@@ -1,6 +1,7 @@
 /**
- * Simple in-memory rate limiter for sensitive admin actions (PAN reveal).
+ * Simple in-memory rate limiter for sensitive actions (PAN reveal, login, etc.).
  * Per-process only — fine for single Nest instance / serverless warm isolate.
+ * Pair with Redis in multi-instance production when available.
  */
 const buckets = new Map<string, number[]>();
 
@@ -18,4 +19,13 @@ export function allowRateLimitedAction(
   recent.push(now);
   buckets.set(key, recent);
   return true;
+}
+
+/** Convenience: same as allowRateLimitedAction with a longer default window (15 min). */
+export function allowRateLimitedActionLong(
+  key: string,
+  maxPerWindow = 20,
+  windowMs = 15 * 60_000,
+): boolean {
+  return allowRateLimitedAction(key, maxPerWindow, windowMs);
 }

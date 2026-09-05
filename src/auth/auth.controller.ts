@@ -3,21 +3,11 @@ import {
   Controller,
   HttpCode,
   HttpStatus,
-  Inject,
-  Injectable,
   Post,
-  ServiceUnavailableException,
-  UnauthorizedException,
+  BadRequestException,
 } from '@nestjs/common';
-import { SupabaseClient } from '@supabase/supabase-js';
-import { IsEmail, IsString, MinLength } from 'class-validator';
-import * as bcrypt from 'bcryptjs';
-import { SUPABASE_CLIENT } from '../config/supabase';
-import { TABLE_AUTH } from '../common/constants';
-
-import {
-  AdminLoginDto,
-} from './auth.dto';
+import { allowRateLimitedAction } from '../security/rate-limit';
+import { AdminLoginDto } from './auth.dto';
 import { AuthService } from './auth.service';
 
 @Controller('auth')
@@ -27,6 +17,10 @@ export class AuthController {
   @Post('login')
   @HttpCode(HttpStatus.OK)
   async login(@Body() dto: AdminLoginDto) {
+    const emailKey = dto.email.trim().toLowerCase();
+    if (!allowRateLimitedAction(`admin-login:${emailKey}`, 8, 60_000)) {
+      throw new BadRequestException('Too many login attempts. Try again in a minute.');
+    }
     const user = await this.authService.verifyAdminLogin(dto.email, dto.password);
     return { ok: true, user };
   }

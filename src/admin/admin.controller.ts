@@ -1,18 +1,11 @@
 import {
   Controller,
   Get,
-  Headers,
   HttpCode,
   HttpStatus,
-  Inject,
-  Injectable,
-  UnauthorizedException,
+  UseGuards,
 } from '@nestjs/common';
-import { SupabaseClient } from '@supabase/supabase-js';
-import { adminInternalKeyOk } from '../common/admin-internal';
-import { TABLE_LEADS, TABLE_PARTNER, TABLE_USERS } from '../common/constants';
-import { SUPABASE_CLIENT } from '../config/supabase';
-
+import { AdminCrmGuard } from '../common/admin-crm.guard';
 import { AdminStatsService } from './admin.service';
 
 @Controller('admin')
@@ -20,11 +13,9 @@ export class AdminController {
   constructor(private readonly adminStatsService: AdminStatsService) {}
 
   @Get('stats')
+  @UseGuards(AdminCrmGuard)
   @HttpCode(HttpStatus.OK)
-  async getStats(@Headers('x-admin-internal-key') adminKey: string | undefined) {
-    if (!adminInternalKeyOk(adminKey)) {
-      throw new UnauthorizedException('Unauthorized');
-    }
+  async getStats() {
     const data = await this.adminStatsService.getDashboardStats();
     return { success: true, data };
   }
