@@ -11,11 +11,24 @@ import {
   Post,
   BadRequestException,
   UseGuards,
+  Req,
 } from '@nestjs/common';
+import type { Request } from 'express';
 import { AdminCrmGuard, AdminOnlyGuard } from '../common/admin-crm.guard';
 import { allowRateLimitedAction } from '../security/rate-limit';
-import { CreateContactDto, UpdateContactDto } from './contact.dto';
+import { CreateContactDto, TaxCalculatorLeadDto, UpdateContactDto } from './contact.dto';
 import { ContactService } from './contact.service';
+
+function clientIp(req: Request): string {
+  const forwarded = req.headers['x-forwarded-for'];
+  if (typeof forwarded === 'string' && forwarded.trim()) {
+    return forwarded.split(',')[0]?.trim() || 'unknown';
+  }
+  if (Array.isArray(forwarded) && forwarded[0]) {
+    return String(forwarded[0]).split(',')[0]?.trim() || 'unknown';
+  }
+  return req.ip || 'unknown';
+}
 
 @Controller('contact')
 export class ContactController {
@@ -34,6 +47,32 @@ export class ContactController {
       throw new BadRequestException('Could not save your message.');
     }
     return { success: true, id: row.id };
+  }
+
+  /**
+   * Tax saving calculator lead (name + phone).
+   * Message hardcoded on server. Same phone never inserts twice.
+   * Always returns success after valid input (silent UX on frontend).
+   */
+  @Post('tax-calculator-lead')
+  @HttpCode(HttpStatus.OK)
+  async createTaxCalculatorLead(@Body() dto: TaxCalculatorLeadDto, @Req() req: Request) {
+    const phoneKey = dto.phone.replace(/\D/g, '').slice(0, 10);
+    const ip = clientIp(req);
+
+    // Silent throttle — still return success so the UI reveals nothing
+    if (
+      !allowRateLimitedAction(`tax-calc-lead:${phoneKey}`, 3, 60_000) ||
+      !allowRateLimitedAction(`tax-calc-lead-ip:${ip}`, 20, 60_000)
+    ) {
+      return { success: true };
+    }
+
+    await this.contactService.createTaxCalculatorLead({
+      name: dto.name,
+      phone: phoneKey,
+    });
+    return { success: true };
   }
 
   @Get('admin/all')

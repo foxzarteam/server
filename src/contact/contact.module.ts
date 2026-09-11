@@ -14,5 +14,6 @@ export { ContactService } from './contact.service';
 export { ContactController } from './contact.controller';
 export {
   CreateContactDto,
+  TaxCalculatorLeadDto,
   UpdateContactDto,
 } from './contact.dto';

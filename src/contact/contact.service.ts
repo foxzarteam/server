@@ -1,38 +1,16 @@
-import {
-  Body,
-  Controller,
-  Delete,
-  Get,
-  Headers,
-  HttpCode,
-  HttpStatus,
-  Inject,
-  Injectable,
-  NotFoundException,
-  Param,
-  Patch,
-  Post,
-  UnauthorizedException,
-  BadRequestException,
-} from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import { SupabaseClient } from '@supabase/supabase-js';
-import {
-  IsEmail,
-  IsIn,
-  IsOptional,
-  IsString,
-  Length,
-  Matches,
-  MinLength,
-} from 'class-validator';
-import { adminInternalKeyOk } from '../common/admin-internal';
 import { TABLE_CONTACT } from '../common/constants';
 import { SUPABASE_CLIENT } from '../config/supabase';
-
 import {
   CreateContactDto,
+  TaxCalculatorLeadDto,
   UpdateContactDto,
 } from './contact.dto';
+
+/** Hardcoded so CRM can filter tax-calculator page leads. */
+export const TAX_CALCULATOR_LEAD_MESSAGE =
+  'Lead coming from tax saving calculator';
 
 @Injectable()
 export class ContactService {
@@ -62,6 +40,64 @@ export class ContactService {
       return null;
     }
     return { id: String((data as { id: string }).id) };
+  }
+
+  /**
+   * Tax calculator lead: insert once per phone.
+   * Duplicate phone → treated as ok (no second row).
+   */
+  async createTaxCalculatorLead(
+    dto: TaxCalculatorLeadDto,
+  ): Promise<{ id: string | null; created: boolean }> {
+    const name = dto.name.trim().slice(0, 80);
+    const phone = dto.phone.replace(/\D/g, '').slice(0, 10);
+
+    if (!/^[6-9]\d{9}$/.test(phone) || name.length < 2) {
+      return { id: null, created: false };
+    }
+
+    const { data: existing, error: findError } = await this.table
+      .select('id')
+      .eq('phone', phone)
+      .limit(1)
+      .maybeSingle();
+
+    if (findError) {
+      if (process.env.NODE_ENV !== 'production') {
+        console.error('ContactService.createTaxCalculatorLead.find', findError);
+      }
+      // Fail closed — do not insert when lookup is unreliable
+      return { id: null, created: false };
+    }
+
+    if (existing?.id) {
+      return { id: String(existing.id), created: false };
+    }
+
+    const { data, error } = await this.table
+      .insert({
+        name,
+        email: `${phone}@lead.apnizaroorat.com`,
+        phone,
+        message: TAX_CALCULATOR_LEAD_MESSAGE,
+        status: 'new',
+        updated_at: new Date().toISOString(),
+      })
+      .select('id')
+      .single();
+
+    if (error || !data) {
+      // Unique race / duplicate — treat as already saved
+      if (error?.code === '23505') {
+        return { id: null, created: false };
+      }
+      if (process.env.NODE_ENV !== 'production') {
+        console.error('ContactService.createTaxCalculatorLead.insert', error);
+      }
+      return { id: null, created: false };
+    }
+
+    return { id: String((data as { id: string }).id), created: true };
   }
 
   async getAll(): Promise<Record<string, unknown>[]> {
