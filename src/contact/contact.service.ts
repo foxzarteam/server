@@ -77,7 +77,7 @@ export class ContactService {
     const { data, error } = await this.table
       .insert({
         name,
-        email: `${phone}@lead.apnizaroorat.com`,
+        email: '',
         phone,
         message: TAX_CALCULATOR_LEAD_MESSAGE,
         status: 'new',
