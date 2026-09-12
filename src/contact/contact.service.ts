@@ -77,7 +77,7 @@ export class ContactService {
     const { data, error } = await this.table
       .insert({
         name,
-        email: '',
+        email: null,
         phone,
         message: TAX_CALCULATOR_LEAD_MESSAGE,
         status: 'new',
@@ -91,9 +91,8 @@ export class ContactService {
       if (error?.code === '23505') {
         return { id: null, created: false };
       }
-      if (process.env.NODE_ENV !== 'production') {
-        console.error('ContactService.createTaxCalculatorLead.insert', error);
-      }
+      // Always log insert failures — silent UI must not hide DB errors in server logs
+      console.error('ContactService.createTaxCalculatorLead.insert', error);
       return { id: null, created: false };
     }
 
@@ -120,7 +119,10 @@ export class ContactService {
   ): Promise<Record<string, unknown> | null> {
     const payload: Record<string, unknown> = { updated_at: new Date().toISOString() };
     if (dto.name != null) payload.name = dto.name.trim();
-    if (dto.email != null) payload.email = dto.email.trim().toLowerCase();
+    if (dto.email !== undefined) {
+      const e = dto.email?.trim().toLowerCase() ?? '';
+      payload.email = e.length > 0 ? e : null;
+    }
     if (dto.phone != null) payload.phone = dto.phone.trim();
     if (dto.message != null) payload.message = dto.message.trim();
     if (dto.status != null) payload.status = dto.status;
