@@ -136,6 +136,7 @@ export class LeadsController {
       mobileNumber: mobile,
       pan: dto.pan,
       category: dto.category,
+      insType: dto.insType,
     });
 
     return {
@@ -146,6 +147,7 @@ export class LeadsController {
       statusLabel: result.statusLabel,
       category: result.category,
       categoryLabel: result.categoryLabel,
+      insType: result.insType,
     };
   }
 
@@ -353,9 +355,10 @@ export class LeadsController {
     const actor = req.adminActor;
     const isAgent = String(actor?.role ?? '').toLowerCase() === 'agent';
     const category = dto.category || 'personal_loan';
+    const insType = category === 'insurance' ? dto.insType ?? null : null;
     const [byMobile, byPan] = await Promise.all([
-      this.leadsService.getByMobileAndCategory(dto.mobileNumber, category),
-      this.leadsService.getByPanAndCategory(dto.pan, category),
+      this.leadsService.getByMobileAndCategory(dto.mobileNumber, category, insType),
+      this.leadsService.getByPanAndCategory(dto.pan, category, insType),
     ]);
     if (
       byMobile &&

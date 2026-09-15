@@ -12,7 +12,7 @@ export function mapLeadWriteError(message: string | undefined | null): string {
     m.includes('leads_pan_hash') ||
     m.includes('23505')
   ) {
-    return 'You already have an application for this product.';
+    return 'You already have an open application for this product. Check status or wait until it is Approved before applying again.';
   }
 
   if (m.includes('check constraint') || m.includes('23514')) {

@@ -236,6 +236,24 @@ export class LeadsService {
     return c.replace(/_/g, ' ').replace(/\b\w/g, (ch) => ch.toUpperCase());
   }
 
+  insTypeLabel(insType: unknown): string {
+    const t = String(insType ?? '')
+      .trim()
+      .toLowerCase();
+    if (t === 'life_insurance') return 'Life Insurance';
+    if (t === 'health_insurance') return 'Health Insurance';
+    if (t === 'motor_insurance') return 'Motor Insurance';
+    if (!t) return 'Insurance';
+    return t.replace(/_/g, ' ').replace(/\b\w/g, (ch) => ch.toUpperCase());
+  }
+
+  /** Personal Loan, or Life/Health/Motor Insurance. */
+  productLabel(lead: { category?: unknown; ins_type?: unknown }): string {
+    const cat = this.normalizeCategory(String(lead.category ?? ''));
+    if (cat === 'insurance') return this.insTypeLabel(lead.ins_type);
+    return this.categoryLabel(cat);
+  }
+
   statusLabel(status: unknown): string {
     const s = String(status ?? '')
       .trim()
@@ -247,19 +265,34 @@ export class LeadsService {
     return 'Under Review';
   }
 
+  private normalizeInsType(
+    category: string,
+    insType?: string | null,
+  ): string | null {
+    if (this.normalizeCategory(category) !== 'insurance') return null;
+    const t = String(insType ?? '')
+      .trim()
+      .toLowerCase();
+    return t || null;
+  }
+
   /**
-   * Same phone OR PAN + same product category:
-   * block unless existing real lead is approved (then a new application is allowed).
+   * Same phone OR PAN + same product:
+   * - personal_loan vs personal_loan
+   * - insurance + same ins_type (life / health / motor)
+   * Different insurance types are allowed. Block unless prior lead is approved.
    */
   async findBlockingSameCategoryLead(
     mobileNumber: string,
     pan: string | null | undefined,
     category?: string | null,
+    insType?: string | null,
   ): Promise<Record<string, unknown> | null> {
     const cat = this.normalizeCategory(category);
     const mobile = mobileNumber.trim();
+    const ins = this.normalizeInsType(cat, insType);
 
-    const byMobile = await this.getByMobileAndCategory(mobile, cat);
+    const byMobile = await this.getByMobileAndCategory(mobile, cat, ins);
     if (
       byMobile &&
       !this.isDraftLead(byMobile) &&
@@ -270,7 +303,7 @@ export class LeadsService {
 
     const panUpper = pan ? normalizePan(pan) : '';
     if (panUpper && isValidPanFormat(panUpper)) {
-      const byPan = await this.getByPanAndCategory(panUpper, cat);
+      const byPan = await this.getByPanAndCategory(panUpper, cat, ins);
       if (
         byPan &&
         !this.isDraftLead(byPan) &&
@@ -284,7 +317,7 @@ export class LeadsService {
   }
 
   blockingApplicationMessage(lead: Record<string, unknown>): string {
-    const product = this.categoryLabel(lead.category);
+    const product = this.productLabel(lead);
     const status = this.statusLabel(lead.status);
     return `Your ${product} application is already ${status}. You can apply again for this product only after it is Approved.`;
   }
@@ -293,6 +326,7 @@ export class LeadsService {
     mobileNumber: string;
     pan: string;
     category?: string | null;
+    insType?: string | null;
   }): Promise<{
     allowed: boolean;
     message?: string;
@@ -300,16 +334,28 @@ export class LeadsService {
     statusLabel?: string;
     category?: string;
     categoryLabel?: string;
+    insType?: string | null;
   }> {
+    const category = this.normalizeCategory(input.category);
+    const ins = this.normalizeInsType(category, input.insType);
+    if (category === 'insurance' && !ins) {
+      return {
+        allowed: false,
+        message: 'Please select insurance type (Life, Health, or Motor).',
+        category,
+        categoryLabel: this.categoryLabel(category),
+      };
+    }
+
     const blocking = await this.findBlockingSameCategoryLead(
       input.mobileNumber,
       input.pan,
-      input.category,
+      category,
+      ins,
     );
     if (!blocking) {
       return { allowed: true };
     }
-    const category = this.normalizeCategory(String(blocking.category ?? input.category));
     const status = String(blocking.status ?? 'pending').trim().toLowerCase() || 'pending';
     return {
       allowed: false,
@@ -317,7 +363,8 @@ export class LeadsService {
       status,
       statusLabel: this.statusLabel(status),
       category,
-      categoryLabel: this.categoryLabel(category),
+      categoryLabel: this.productLabel(blocking),
+      insType: this.normalizeInsType(category, String(blocking.ins_type ?? ins ?? '')),
     };
   }
 
@@ -424,18 +471,24 @@ export class LeadsService {
     return c || 'personal_loan';
   }
 
-  /** Active lead for this mobile + product category (newest first). */
+  /** Active lead for this mobile + product (+ insurance subtype when set). */
   async getByMobileAndCategory(
     mobileNumber: string,
     category: string,
+    insType?: string | null,
   ): Promise<Record<string, unknown> | null> {
     const mobile = mobileNumber.trim();
     const cat = this.normalizeCategory(category);
-    const { data, error } = await this.leads
+    const ins = this.normalizeInsType(cat, insType);
+    let q = this.leads
       .select()
       .eq('mobile_number', mobile)
       .eq('category', cat)
-      .eq('is_active', true)
+      .eq('is_active', true);
+    if (cat === 'insurance' && ins) {
+      q = q.eq('ins_type', ins);
+    }
+    const { data, error } = await q
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle();
@@ -450,34 +503,44 @@ export class LeadsService {
     return (data as Record<string, unknown>) ?? null;
   }
 
-  /** Active lead for this PAN + product category (newest first). */
+  /** Active lead for this PAN + product (+ insurance subtype when set). */
   async getByPanAndCategory(
     pan: string,
     category: string,
+    insType?: string | null,
   ): Promise<Record<string, unknown> | null> {
     const panUpper = normalizePan(pan);
     if (!isValidPanFormat(panUpper)) return null;
     const cat = this.normalizeCategory(category);
-
+    const ins = this.normalizeInsType(cat, insType);
     const digest = hashPan(panUpper);
-    const byHash = await this.leads
+
+    let byHash = this.leads
       .select()
       .eq('pan_hash', digest)
       .eq('category', cat)
-      .eq('is_active', true)
+      .eq('is_active', true);
+    if (cat === 'insurance' && ins) {
+      byHash = byHash.eq('ins_type', ins);
+    }
+    const hashed = await byHash
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle();
 
-    if (!byHash.error && byHash.data) {
-      return byHash.data as Record<string, unknown>;
+    if (!hashed.error && hashed.data) {
+      return hashed.data as Record<string, unknown>;
     }
 
-    const { data, error } = await this.leads
+    let byPan = this.leads
       .select()
       .eq('pan', panUpper)
       .eq('category', cat)
-      .eq('is_active', true)
+      .eq('is_active', true);
+    if (cat === 'insurance' && ins) {
+      byPan = byPan.eq('ins_type', ins);
+    }
+    const { data, error } = await byPan
       .order('created_at', { ascending: false })
       .limit(1)
       .maybeSingle();
@@ -508,12 +571,30 @@ export class LeadsService {
 
     const mobile = dto.mobileNumber.trim();
     const category = this.normalizeCategory(dto.category);
+    const ins = this.normalizeInsType(category, dto.insType);
     if (category === 'personal_loan') {
       const empErr = this.personalLoanEmploymentError(dto);
       if (empErr) return { ok: false, message: empErr };
     }
-    const byMobile = await this.getByMobileAndCategory(mobile, category);
-    const blocking = await this.findBlockingSameCategoryLead(mobile, panUpper, category);
+    if (category === 'insurance' && !ins) {
+      return { ok: false, message: 'Please select insurance type (Life, Health, or Motor).' };
+    }
+
+    // Prefer exact product match; fall back to untyped insurance draft for upgrade.
+    let byMobile = await this.getByMobileAndCategory(mobile, category, ins);
+    if ((!byMobile || !this.isDraftLead(byMobile)) && category === 'insurance' && ins) {
+      const draftAny = await this.getByMobileAndCategory(mobile, category, null);
+      if (draftAny && this.isDraftLead(draftAny)) {
+        byMobile = draftAny;
+      }
+    }
+
+    const blocking = await this.findBlockingSameCategoryLead(
+      mobile,
+      panUpper,
+      category,
+      ins,
+    );
     if (blocking) {
       return {
         ok: false,
@@ -553,7 +634,7 @@ export class LeadsService {
     if (category === 'insurance') {
       payload.required_amount = null;
       payload.loan_amt = null;
-      if (dto.insType) payload.ins_type = dto.insType;
+      payload.ins_type = ins;
     }
 
     // Upgrade OTP/start draft for this category only — never overwrite another product.
@@ -568,7 +649,7 @@ export class LeadsService {
         category,
         status: 'pending',
         loanAmt: category === 'personal_loan' ? null : undefined,
-        insType: category === 'insurance' ? dto.insType ?? null : null,
+        insType: category === 'insurance' ? ins : null,
         employmentType:
           category === 'personal_loan' ? dto.employmentType ?? null : null,
         netMonthlyIncome:
@@ -662,8 +743,13 @@ export class LeadsService {
     const agentId = await this.usersService.getIdByReferralCode(referralCode);
 
     if (existing) {
-      // Chat OTP → start: block open (non-approved) apps; allow drafts + approved (new apply later).
-      if (!this.isDraftLead(existing) && !this.isApprovedStatus(existing.status)) {
+      // Chat OTP → start: reuse drafts; for personal_loan block open non-approved.
+      // Insurance subtypes are checked later on complete/apply with insType.
+      if (
+        cat !== 'insurance' &&
+        !this.isDraftLead(existing) &&
+        !this.isApprovedStatus(existing.status)
+      ) {
         return {
           ok: false,
           message: this.blockingApplicationMessage(existing),
@@ -684,7 +770,7 @@ export class LeadsService {
           isDraft: true,
         };
       }
-      // Prior approved application — create a fresh draft for the next apply.
+      // Prior approved (or insurance without subtype) — create a fresh draft for the next apply.
     }
 
     const created = await this.createDraft(mobileNumber, cat, clientIp, agentId);
@@ -716,11 +802,20 @@ export class LeadsService {
     const category = this.normalizeCategory(
       dto.category?.trim() || String(row['category'] ?? ''),
     );
+    const ins = this.normalizeInsType(category, dto.insType ?? String(row['ins_type'] ?? ''));
     if (category === 'personal_loan') {
       const empErr = this.personalLoanEmploymentError(dto);
       if (empErr) return { ok: false, message: empErr };
     }
-    const blocking = await this.findBlockingSameCategoryLead(mobile, panUpper, category);
+    if (category === 'insurance' && !ins) {
+      return { ok: false, message: 'Please select insurance type (Life, Health, or Motor).' };
+    }
+    const blocking = await this.findBlockingSameCategoryLead(
+      mobile,
+      panUpper,
+      category,
+      ins,
+    );
     if (blocking && String(blocking['id']) !== id) {
       return {
         ok: false,
@@ -753,7 +848,7 @@ export class LeadsService {
       update.employmentType = dto.employmentType;
       update.netMonthlyIncome = dto.netMonthlyIncome;
     } else if (category === 'insurance') {
-      update.insType = dto.insType ?? null;
+      update.insType = ins;
       update.loanAmt = null;
       update.requiredAmount = null;
       update.employmentType = null;
@@ -960,7 +1055,11 @@ export class LeadsService {
       const category = this.normalizeCategory(
         dto.category ?? String(existing['category'] ?? ''),
       );
-      const otherMobile = await this.getByMobileAndCategory(mobile, category);
+      const ins = this.normalizeInsType(
+        category,
+        dto.insType ?? String(existing['ins_type'] ?? ''),
+      );
+      const otherMobile = await this.getByMobileAndCategory(mobile, category, ins);
       if (
         otherMobile &&
         String(otherMobile.id) !== id &&
@@ -1009,7 +1108,13 @@ export class LeadsService {
             (payload.category as string | undefined) ??
             String(existing['category'] ?? ''),
         );
-        const other = await this.getByPanAndCategory(panUpper, category);
+        const ins = this.normalizeInsType(
+          category,
+          dto.insType ??
+            (payload.ins_type as string | undefined) ??
+            String(existing['ins_type'] ?? ''),
+        );
+        const other = await this.getByPanAndCategory(panUpper, category, ins);
         if (
           other &&
           String(other.id) !== id &&

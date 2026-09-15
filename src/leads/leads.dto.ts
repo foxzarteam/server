@@ -61,7 +61,7 @@ export class StartLeadDto {
   referralCode?: string;
 }
 
-/** Pre-OTP gate: same phone/PAN may apply again only if prior same-category lead is approved. */
+/** Pre-OTP gate: same phone/PAN may apply again only if prior same product is approved. */
 export class CheckApplicationDto {
   @IsString()
   @Length(10, 10, { message: 'mobileNumber must be 10 digits' })
@@ -77,6 +77,12 @@ export class CheckApplicationDto {
   @IsString()
   @Matches(LEAD_CATEGORY_PATTERN, { message: 'Invalid category' })
   category?: string;
+
+  /** Required when category is insurance — life / health / motor are separate products. */
+  @ValidateIf((o) => (o.category ?? '') === 'insurance')
+  @IsString({ message: 'Insurance type is required' })
+  @IsIn([...INS_TYPE_VALUES], { message: 'Invalid insurance type' })
+  insType?: string;
 }
 
 export class CompleteLeadDto {
