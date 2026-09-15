@@ -61,6 +61,24 @@ export class StartLeadDto {
   referralCode?: string;
 }
 
+/** Pre-OTP gate: same phone/PAN may apply again only if prior same-category lead is approved. */
+export class CheckApplicationDto {
+  @IsString()
+  @Length(10, 10, { message: 'mobileNumber must be 10 digits' })
+  @Matches(/^[6-9]\d{9}$/, { message: 'Invalid Indian mobile number' })
+  mobileNumber: string;
+
+  @IsString()
+  @Length(10, 10, { message: 'PAN must be 10 characters' })
+  @Matches(PAN_FORMAT_REGEX, { message: 'Invalid PAN format (e.g. ABCDE1234F)' })
+  pan: string;
+
+  @IsOptional()
+  @IsString()
+  @Matches(LEAD_CATEGORY_PATTERN, { message: 'Invalid category' })
+  category?: string;
+}
+
 export class CompleteLeadDto {
   @IsString()
   @Length(10, 10, { message: 'PAN must be 10 characters' })

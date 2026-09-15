@@ -40,6 +40,7 @@ import { extractClientIp } from '../common/client-ip';
 import { toPublicErrorMessage } from '../common/public-error';
 import {
   AdminCreateLeadDto,
+  CheckApplicationDto,
   CompleteLeadDto,
   CreateLeadDto,
   RevealPanDto,
@@ -116,8 +117,41 @@ export class LeadsController {
   }
 
   /**
+   * Public pre-OTP check: block same phone/PAN for same category unless status is approved.
+   * Does not require Firebase/OTP — only rate-limited.
+   */
+  @Post('check-application')
+  @HttpCode(HttpStatus.OK)
+  async checkApplication(@Body() dto: CheckApplicationDto, @Req() req: Request) {
+    const mobile = dto.mobileNumber.trim();
+    const ip = this.clientIp(req) || 'unknown';
+    if (
+      !allowRateLimitedAction(`lead-check:${mobile}`, 12, 60_000) ||
+      !allowRateLimitedAction(`lead-check-ip:${ip}`, 30, 60_000)
+    ) {
+      throw new BadRequestException('Too many checks. Please try again in a minute.');
+    }
+
+    const result = await this.leadsService.checkApplicationAllowed({
+      mobileNumber: mobile,
+      pan: dto.pan,
+      category: dto.category,
+    });
+
+    return {
+      success: true,
+      allowed: result.allowed,
+      message: result.message,
+      status: result.status,
+      statusLabel: result.statusLabel,
+      category: result.category,
+      categoryLabel: result.categoryLabel,
+    };
+  }
+
+  /**
    * Public apply: require phone verification (Firebase or recent OTP) before storing PAN.
-   * Same mobile/PAN allowed once per product category.
+   * Same mobile/PAN allowed once per product category unless prior lead is approved.
    */
   @Post('apply')
   @HttpCode(HttpStatus.CREATED)
@@ -323,7 +357,11 @@ export class LeadsController {
       this.leadsService.getByMobileAndCategory(dto.mobileNumber, category),
       this.leadsService.getByPanAndCategory(dto.pan, category),
     ]);
-    if (byMobile && !this.leadsService.isDraftLead(byMobile)) {
+    if (
+      byMobile &&
+      !this.leadsService.isDraftLead(byMobile) &&
+      String(byMobile.status ?? '').trim().toLowerCase() !== 'approved'
+    ) {
       return {
         success: false,
         field: 'mobileNumber',
@@ -333,7 +371,8 @@ export class LeadsController {
     if (
       byPan &&
       !this.leadsService.isDraftLead(byPan) &&
-      String(byPan.id) !== String(byMobile?.id ?? '')
+      String(byPan.id) !== String(byMobile?.id ?? '') &&
+      String(byPan.status ?? '').trim().toLowerCase() !== 'approved'
     ) {
       return {
         success: false,

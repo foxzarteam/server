@@ -229,6 +229,98 @@ export class LeadsService {
     return name === LEAD_DRAFT_FULL_NAME.toLowerCase() || pan === LEAD_DRAFT_PAN;
   }
 
+  categoryLabel(category: unknown): string {
+    const c = this.normalizeCategory(String(category ?? ''));
+    if (c === 'personal_loan') return 'Personal Loan';
+    if (c === 'insurance') return 'Insurance';
+    return c.replace(/_/g, ' ').replace(/\b\w/g, (ch) => ch.toUpperCase());
+  }
+
+  statusLabel(status: unknown): string {
+    const s = String(status ?? '')
+      .trim()
+      .toLowerCase();
+    if (s === 'approved') return 'Approved';
+    if (s === 'rejected') return 'Not Approved';
+    if (s === 'in_process') return 'In Process';
+    if (s === 'action_required') return 'Action Required';
+    return 'Under Review';
+  }
+
+  /**
+   * Same phone OR PAN + same product category:
+   * block unless existing real lead is approved (then a new application is allowed).
+   */
+  async findBlockingSameCategoryLead(
+    mobileNumber: string,
+    pan: string | null | undefined,
+    category?: string | null,
+  ): Promise<Record<string, unknown> | null> {
+    const cat = this.normalizeCategory(category);
+    const mobile = mobileNumber.trim();
+
+    const byMobile = await this.getByMobileAndCategory(mobile, cat);
+    if (
+      byMobile &&
+      !this.isDraftLead(byMobile) &&
+      !this.isApprovedStatus(byMobile.status)
+    ) {
+      return byMobile;
+    }
+
+    const panUpper = pan ? normalizePan(pan) : '';
+    if (panUpper && isValidPanFormat(panUpper)) {
+      const byPan = await this.getByPanAndCategory(panUpper, cat);
+      if (
+        byPan &&
+        !this.isDraftLead(byPan) &&
+        !this.isApprovedStatus(byPan.status)
+      ) {
+        return byPan;
+      }
+    }
+
+    return null;
+  }
+
+  blockingApplicationMessage(lead: Record<string, unknown>): string {
+    const product = this.categoryLabel(lead.category);
+    const status = this.statusLabel(lead.status);
+    return `Your ${product} application is already ${status}. You can apply again for this product only after it is Approved.`;
+  }
+
+  async checkApplicationAllowed(input: {
+    mobileNumber: string;
+    pan: string;
+    category?: string | null;
+  }): Promise<{
+    allowed: boolean;
+    message?: string;
+    status?: string;
+    statusLabel?: string;
+    category?: string;
+    categoryLabel?: string;
+  }> {
+    const blocking = await this.findBlockingSameCategoryLead(
+      input.mobileNumber,
+      input.pan,
+      input.category,
+    );
+    if (!blocking) {
+      return { allowed: true };
+    }
+    const category = this.normalizeCategory(String(blocking.category ?? input.category));
+    const status = String(blocking.status ?? 'pending').trim().toLowerCase() || 'pending';
+    return {
+      allowed: false,
+      message: this.blockingApplicationMessage(blocking),
+      status,
+      statusLabel: this.statusLabel(status),
+      category,
+      categoryLabel: this.categoryLabel(category),
+    };
+  }
+
   async getByMobile(mobileNumber: string): Promise<Record<string, unknown> | null> {
     const mobile = mobileNumber.trim();
     const { data, error } = await this.leads
@@ -401,8 +493,8 @@ export class LeadsService {
   }
 
   /**
-   * Create lead BEFORE OTP.
-   * Same mobile/PAN may apply once per category (e.g. personal_loan + insurance).
+   * Create lead after OTP.
+   * Same mobile/PAN may apply once per category unless the prior lead is approved.
    */
   async applyLead(dto: CreateLeadDto, meta?: { clientIp?: string | null }): Promise<{
     ok: boolean;
@@ -421,23 +513,11 @@ export class LeadsService {
       if (empErr) return { ok: false, message: empErr };
     }
     const byMobile = await this.getByMobileAndCategory(mobile, category);
-    if (byMobile && !this.isDraftLead(byMobile)) {
+    const blocking = await this.findBlockingSameCategoryLead(mobile, panUpper, category);
+    if (blocking) {
       return {
         ok: false,
-        message:
-          'You already have an application for this product with this mobile number.',
-      };
-    }
-
-    const byPan = await this.getByPanAndCategory(panUpper, category);
-    if (
-      byPan &&
-      !this.isDraftLead(byPan) &&
-      String(byPan.id) !== String(byMobile?.id ?? '')
-    ) {
-      return {
-        ok: false,
-        message: 'You already have an application for this product with this PAN.',
+        message: this.blockingApplicationMessage(blocking),
       };
     }
 
@@ -477,6 +557,7 @@ export class LeadsService {
     }
 
     // Upgrade OTP/start draft for this category only — never overwrite another product.
+    // Approved prior lead stays; only drafts are upgraded.
     if (byMobile && this.isDraftLead(byMobile) && byMobile.id) {
       const updated = await this.updateById(String(byMobile.id), {
         pan: panUpper,
@@ -581,27 +662,29 @@ export class LeadsService {
     const agentId = await this.usersService.getIdByReferralCode(referralCode);
 
     if (existing) {
-      // Chat OTP → start: only block when this product already has a real application.
-      if (!this.isDraftLead(existing)) {
+      // Chat OTP → start: block open (non-approved) apps; allow drafts + approved (new apply later).
+      if (!this.isDraftLead(existing) && !this.isApprovedStatus(existing.status)) {
         return {
           ok: false,
-          message:
-            'You already have an application for this product with this mobile number.',
+          message: this.blockingApplicationMessage(existing),
         };
       }
-      if (agentId && !existing.agent_id && existing.id) {
-        const updated = await this.updateById(String(existing.id), { agentId });
+      if (this.isDraftLead(existing)) {
+        if (agentId && !existing.agent_id && existing.id) {
+          const updated = await this.updateById(String(existing.id), { agentId });
+          return {
+            ok: true,
+            lead: this.safeLead(updated ?? existing)!,
+            isDraft: true,
+          };
+        }
         return {
           ok: true,
-          lead: this.safeLead(updated ?? existing)!,
+          lead: this.safeLead(existing)!,
           isDraft: true,
         };
       }
-      return {
-        ok: true,
-        lead: this.safeLead(existing)!,
-        isDraft: true,
-      };
+      // Prior approved application — create a fresh draft for the next apply.
     }
 
     const created = await this.createDraft(mobileNumber, cat, clientIp, agentId);
@@ -637,28 +720,11 @@ export class LeadsService {
       const empErr = this.personalLoanEmploymentError(dto);
       if (empErr) return { ok: false, message: empErr };
     }
-    const other = await this.getByMobileAndCategory(mobile, category);
-    if (
-      other &&
-      String(other['id']) !== id &&
-      !this.isDraftLead(other)
-    ) {
+    const blocking = await this.findBlockingSameCategoryLead(mobile, panUpper, category);
+    if (blocking && String(blocking['id']) !== id) {
       return {
         ok: false,
-        message:
-          'You already have an application for this product with this mobile number.',
-      };
-    }
-
-    const duplicatePan = await this.getByPanAndCategory(panUpper, category);
-    if (
-      duplicatePan &&
-      String(duplicatePan.id) !== id &&
-      !this.isDraftLead(duplicatePan)
-    ) {
-      return {
-        ok: false,
-        message: 'You already have an application for this product with this PAN.',
+        message: this.blockingApplicationMessage(blocking),
       };
     }
 
@@ -895,7 +961,12 @@ export class LeadsService {
         dto.category ?? String(existing['category'] ?? ''),
       );
       const otherMobile = await this.getByMobileAndCategory(mobile, category);
-      if (otherMobile && String(otherMobile.id) !== id && !this.isDraftLead(otherMobile)) {
+      if (
+        otherMobile &&
+        String(otherMobile.id) !== id &&
+        !this.isDraftLead(otherMobile) &&
+        !this.isApprovedStatus(otherMobile.status)
+      ) {
         return null;
       }
       payload.mobile_number = mobile;
@@ -939,7 +1010,14 @@ export class LeadsService {
             String(existing['category'] ?? ''),
         );
         const other = await this.getByPanAndCategory(panUpper, category);
-        if (other && String(other.id) !== id && !this.isDraftLead(other)) return null;
+        if (
+          other &&
+          String(other.id) !== id &&
+          !this.isDraftLead(other) &&
+          !this.isApprovedStatus(other.status)
+        ) {
+          return null;
+        }
         try {
           const fields = panStorageFields(panUpper);
           Object.assign(payload, fields);
