@@ -1,7 +1,5 @@
-import { Controller, Get, HttpCode, HttpStatus, Inject, Injectable, Param } from '@nestjs/common';
-import { SupabaseClient } from '@supabase/supabase-js';
-import { SUPABASE_CLIENT } from '../config/supabase';
-import { TABLE_BANNERS } from '../common/constants';
+import { Controller, Get, HttpCode, HttpStatus, Param, UseGuards } from '@nestjs/common';
+import { AdminCrmGuard } from '../common/admin-crm.guard';
 
 import { BannersService } from './banners.service';
 
@@ -25,6 +23,7 @@ export class BannersController {
   }
 
   @Get('all')
+  @UseGuards(AdminCrmGuard)
   @HttpCode(HttpStatus.OK)
   async getAll() {
     const banners = await this.bannersService.getAll();

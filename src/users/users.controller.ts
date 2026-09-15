@@ -106,11 +106,11 @@ export class UsersController {
     if (!allowRateLimitedAction(`agent-register:${dto.mobileNumber}`, 3, 60_000)) {
       throw new BadRequestException('Too many attempts. Try again in a minute.');
     }
-    // Optional Firebase: when idToken present, verify it; never auto-grant CRM session here.
     const idToken = this.idTokenFrom(headers, dto.idToken);
-    if (idToken) {
-      await assertStrictMobileAccess(this.otpService, dto.mobileNumber, { idToken });
+    if (!idToken) {
+      throw new UnauthorizedException('Phone verification required');
     }
+    await assertStrictMobileAccess(this.otpService, dto.mobileNumber, { idToken });
     const result = await this.usersService.createForAdmin(dto);
     if (!result.ok) {
       if (result.duplicate) {
