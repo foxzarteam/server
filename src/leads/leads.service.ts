@@ -979,7 +979,56 @@ export class LeadsService {
     const leads = (data as Record<string, unknown>[]) || [];
     const withOtp = await this.withOtpVerified(leads);
     const safe = this.safeLeads(withOtp);
-    return this.enrichMissingIpLocations(safe);
+    const withGeo = await this.enrichMissingIpLocations(safe);
+    return this.enrichWithPartnerSource(withGeo);
+  }
+
+  /** Attach partner name / Direct for admin CRM view. */
+  private async enrichWithPartnerSource(
+    rows: Record<string, unknown>[],
+  ): Promise<Record<string, unknown>[]> {
+    const agentIds = [
+      ...new Set(
+        rows
+          .map((r) => String(r.agent_id ?? '').trim())
+          .filter(Boolean),
+      ),
+    ];
+    const nameById = new Map<string, string>();
+    if (agentIds.length > 0) {
+      const { data, error } = await this.supabase
+        .from('users')
+        .select('id, user_name')
+        .in('id', agentIds);
+      if (error) {
+        if (process.env.NODE_ENV !== 'production') {
+          console.error('LeadsService.enrichWithPartnerSource', error.message);
+        }
+      } else {
+        for (const u of data ?? []) {
+          const id = String((u as { id?: unknown }).id ?? '').trim();
+          const name = String((u as { user_name?: unknown }).user_name ?? '').trim();
+          if (id) nameById.set(id, name || 'Partner');
+        }
+      }
+    }
+
+    return rows.map((row) => {
+      const agentId = String(row.agent_id ?? '').trim();
+      if (!agentId) {
+        return {
+          ...row,
+          lead_source: 'Direct',
+          partner_name: null,
+        };
+      }
+      const partnerName = nameById.get(agentId) || 'Partner';
+      return {
+        ...row,
+        lead_source: `Partner: ${partnerName}`,
+        partner_name: partnerName,
+      };
+    });
   }
 
   async getByAgentId(agentId: string): Promise<Record<string, unknown>[]> {
