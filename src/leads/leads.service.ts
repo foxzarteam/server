@@ -4,6 +4,7 @@ import { SUPABASE_CLIENT } from '../config/supabase';
 import {
   TABLE_LEAD_MOBILE_PAN_SLOTS,
   TABLE_LEADS,
+  TABLE_PAN_ACCESS_AUDIT,
 } from '../common/constants';
 import { resolveIpLocation, resolveIpLocationsBatch } from '../common/ip-geo';
 import { OtpService } from '../otp/otp.service';
@@ -212,16 +213,63 @@ export class LeadsService {
     return checkPersonalLoanEmployment(dto);
   }
 
+  private storedOtpVerified(lead: Record<string, unknown>): boolean {
+    const v = lead.otp_verified;
+    return v === true || v === 1 || v === 'true';
+  }
+
+  /** Admin/partner CRM create — customer OTP is not required. */
+  private async portalCreatedLeadIds(ids: string[]): Promise<Set<string>> {
+    const unique = [...new Set(ids.map((id) => id.trim()).filter(Boolean))];
+    const out = new Set<string>();
+    if (!unique.length) return out;
+
+    const { data, error } = await this.supabase
+      .from(TABLE_PAN_ACCESS_AUDIT)
+      .select('lead_id')
+      .in('lead_id', unique)
+      .eq('action', 'create')
+      .eq('reason', 'admin_or_api_create');
+
+    if (error) {
+      if (process.env.NODE_ENV !== 'production') {
+        console.error('LeadsService.portalCreatedLeadIds', error.message);
+      }
+      return out;
+    }
+
+    for (const row of data ?? []) {
+      const id = String((row as { lead_id?: string }).lead_id ?? '').trim();
+      if (id) out.add(id);
+    }
+    return out;
+  }
+
   private async withOtpVerified(
     leads: Record<string, unknown>[],
   ): Promise<Record<string, unknown>[]> {
     if (!leads.length) return [];
-    const mobiles = leads.map((l) => String(l.mobile_number ?? ''));
-    const verifiedAtByMobile = await this.otpService.getVerifiedAtByMobiles(mobiles);
+
+    const unverified = leads.filter((l) => !this.storedOtpVerified(l));
+    const mobiles = unverified.map((l) => String(l.mobile_number ?? ''));
+    const unverifiedIds = unverified.map((l) => String(l.id ?? ''));
+
+    const [verifiedAtByMobile, portalIds] = await Promise.all([
+      mobiles.length
+        ? this.otpService.getVerifiedAtByMobiles(mobiles)
+        : Promise.resolve(new Map<string, string[]>()),
+      this.portalCreatedLeadIds(unverifiedIds),
+    ]);
     // Allow 2 minutes skew so OTP completed just before lead insert still counts.
     const SKEW_MS = 2 * 60 * 1000;
 
     return leads.map((lead) => {
+      if (this.storedOtpVerified(lead)) {
+        return { ...lead, otp_verified: true };
+      }
+      if (portalIds.has(String(lead.id ?? '').trim())) {
+        return { ...lead, otp_verified: true };
+      }
       const mobile = String(lead.mobile_number ?? '').trim();
       const createdRaw = String(lead.created_at ?? '').trim();
       const createdMs = createdRaw ? Date.parse(createdRaw) : NaN;
@@ -1069,6 +1117,8 @@ export class LeadsService {
       category,
       status: 'pending',
       is_active: true,
+      // Admin/partner portal create, or OTP-gated public POST /leads.
+      otp_verified: true,
     };
 
     // Public/admin insert: never trust client-supplied userId (commission IDOR).
@@ -1111,7 +1161,7 @@ export class LeadsService {
       });
     }
 
-    return this.safeLead(data);
+    return this.safeLead({ ...data, otp_verified: true });
   }
 
   async getByUserId(userId: string): Promise<Record<string, unknown>[]> {

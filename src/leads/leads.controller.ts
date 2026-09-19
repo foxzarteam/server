@@ -394,7 +394,8 @@ export class LeadsController {
     }
 
     const leads = await this.leadsService.getByAgentId(agentId);
-    return { success: true, data: leads.map((l) => this.sanitizePublicLead(l)) };
+    // Masked PAN only (ABCDE****F). Never strip the field — partners need it in view.
+    return { success: true, data: leads };
   }
 
   /** Always insert a new lead (admin CRM / partner panel). Does not upsert by mobile. */
@@ -504,7 +505,7 @@ export class LeadsController {
       }
     }
 
-    return { success: true, data: lead };
+    return { success: true, data: { ...lead, otp_verified: true } };
   }
 
   @Patch('admin/:id')
