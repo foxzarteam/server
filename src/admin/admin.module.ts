@@ -9,6 +9,3 @@ import { AdminStatsService } from './admin.service';
   exports: [AdminStatsService],
 })
 export class AdminModule {}
-
-export { AdminStatsService } from './admin.service';
-export { AdminController } from './admin.controller';

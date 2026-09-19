@@ -53,7 +53,19 @@ export class CustomerController {
    */
   @Post('login')
   @HttpCode(HttpStatus.OK)
-  async login(@Body() dto: CustomerLoginDto) {
+  async login(@Body() dto: CustomerLoginDto, @Req() req: Request) {
+    const mobile = dto.mobileNumber.trim();
+    const ip =
+      extractClientIp(
+        req.headers as Record<string, string | string[] | undefined>,
+        req.ip ?? req.socket?.remoteAddress,
+      ) ?? 'unknown';
+    if (
+      !allowRateLimitedAction(`customer-login:${mobile}:${ip}`, 5, 60_000) ||
+      !allowRateLimitedAction(`customer-login-ip:${ip}`, 20, 60_000)
+    ) {
+      throw new BadRequestException('Too many attempts. Try again in a minute.');
+    }
     const result = await this.customerService.login(dto.mobileNumber, dto.idToken);
     if (!result.ok) {
       const msg = result.message || 'Login failed.';

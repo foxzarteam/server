@@ -61,7 +61,7 @@ export class StartLeadDto {
   referralCode?: string;
 }
 
-/** Pre-OTP gate: same phone/PAN may apply again only if prior same product is approved. */
+/** Pre-OTP gate: max 4 unique PANs per mobile, then same PAN + product unless approved. */
 export class CheckApplicationDto {
   @IsString()
   @Length(10, 10, { message: 'mobileNumber must be 10 digits' })
@@ -143,6 +143,7 @@ export class CompleteLeadDto {
 }
 
 export class CreateLeadDto {
+  /** Ignored on public create (referralCode only). Kept so old clients are not rejected. */
   @IsOptional()
   @IsString()
   userId?: string;

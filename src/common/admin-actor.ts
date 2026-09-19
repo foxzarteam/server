@@ -11,14 +11,17 @@ export type AdminActor = {
 const DEV_FALLBACK = 'local-dev-admin-actor-not-for-prod';
 
 function actorSecret(): string {
-  const fromEnv = (
-    process.env.ADMIN_ACTOR_SECRET ??
-    process.env.ADMIN_INTERNAL_KEY ??
-    ''
-  ).trim();
+  const dedicated = (process.env.ADMIN_ACTOR_SECRET ?? '').trim();
+  const fallback = (process.env.ADMIN_INTERNAL_KEY ?? '').trim();
+  const fromEnv = dedicated || fallback;
   if (fromEnv) {
     if (fromEnv.length < 16 && process.env.NODE_ENV === 'production') {
       throw new Error('ADMIN_ACTOR_SECRET / ADMIN_INTERNAL_KEY must be at least 16 characters');
+    }
+    if (process.env.NODE_ENV === 'production' && !dedicated) {
+      console.warn(
+        'WARN: ADMIN_ACTOR_SECRET is unset; falling back to ADMIN_INTERNAL_KEY. Set a distinct actor secret.',
+      );
     }
     return fromEnv;
   }

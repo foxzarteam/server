@@ -394,8 +394,30 @@ export class UsersService {
     return sanitizeUserPublic(data as Record<string, unknown>);
   }
 
+  /**
+   * Drop wallet earning/redeem/balance for this partner.
+   * wallet.user_id has no FK cascade, so a user delete would otherwise leave the row.
+   */
+  private async deleteWalletForUser(userId: string): Promise<boolean> {
+    const { error } = await this.supabase.from(TABLE_WALLET).delete().eq('user_id', userId);
+    if (error) {
+      if (process.env.NODE_ENV !== 'production') {
+        console.error('UsersService.deleteWalletForUser', error);
+      }
+      return false;
+    }
+    return true;
+  }
+
   async deleteById(id: string): Promise<boolean> {
-    const { error } = await this.users.delete().eq('id', id);
+    const uid = id.trim();
+    if (!uid) return false;
+
+    // Clear wallet first so leftover earning cannot outlive the partner.
+    const walletCleared = await this.deleteWalletForUser(uid);
+    if (!walletCleared) return false;
+
+    const { error } = await this.users.delete().eq('id', uid);
 
     if (error) {
       if (process.env.NODE_ENV !== 'production') {

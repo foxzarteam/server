@@ -11,12 +11,3 @@ import { CustomerService } from './customer.service';
   exports: [CustomerService],
 })
 export class CustomerModule {}
-
-export { CustomerService } from './customer.service';
-export { CustomerController } from './customer.controller';
-export {
-  CheckMobileDto,
-  CustomerLoginDto,
-  ApplicationsDto,
-  UpdateProfileDto,
-} from './customer.dto';

@@ -91,10 +91,9 @@ export default async function handler(req: Request, res: Response) {
   } catch (error) {
     console.error('Handler error:', error);
     res.status(500).json({
+      success: false,
       error: 'Internal Server Error',
-      message: process.env.NODE_ENV === 'production' 
-        ? 'An error occurred' 
-        : error instanceof Error ? error.message : 'Unknown error',
+      message: 'Something went wrong. Please try again.',
     });
   }
 }

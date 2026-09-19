@@ -11,8 +11,8 @@ import {
   Delete,
   UnauthorizedException,
   NotFoundException,
-  ConflictException,
   BadRequestException,
+  HttpException,
   UseGuards,
   Req,
 } from '@nestjs/common';
@@ -48,6 +48,16 @@ import {
   UpdateLeadDto,
 } from './leads.dto';
 import { LeadsService } from './leads.service';
+import {
+  CODE_MOBILE_PAN_LIMIT_REACHED,
+  LeadRuleError,
+} from './mobile-pan-limit';
+import {
+  CODE_APPROVE_ADMIN_ONLY,
+  MSG_APPROVE_ADMIN_ONLY,
+  WalletSyncError,
+} from '../wallet/wallet-sync';
+import { CODE_LOAN_AMOUNT_REQUIRED } from '../wallet/loan-amount';
 
 @Controller('leads')
 export class LeadsController {
@@ -56,6 +66,54 @@ export class LeadsController {
     private readonly otpService: OtpService,
     private readonly usersService: UsersService,
   ) {}
+
+  private throwLeadWriteFailure(message: string, code?: string): never {
+    const body = {
+      success: false,
+      message,
+      ...(code ? { code } : {}),
+    };
+    const conflict =
+      code === CODE_MOBILE_PAN_LIMIT_REACHED ||
+      message.toLowerCase().includes('already');
+    throw new HttpException(
+      body,
+      conflict ? HttpStatus.CONFLICT : HttpStatus.BAD_REQUEST,
+    );
+  }
+
+  private rethrowLeadMutation(err: unknown): never {
+    if (err instanceof WalletSyncError) {
+      throw new HttpException(
+        {
+          success: false,
+          message: err.message,
+          code: err.code,
+          leadStatusSaved: err.leadStatusSaved,
+        },
+        err.leadStatusSaved
+          ? HttpStatus.INTERNAL_SERVER_ERROR
+          : HttpStatus.SERVICE_UNAVAILABLE,
+      );
+    }
+    if (err instanceof LeadRuleError) {
+      const status =
+        err.code === CODE_APPROVE_ADMIN_ONLY
+          ? HttpStatus.FORBIDDEN
+          : err.code === CODE_LOAN_AMOUNT_REQUIRED
+            ? HttpStatus.BAD_REQUEST
+            : HttpStatus.CONFLICT;
+      throw new HttpException(
+        {
+          success: false,
+          message: err.message,
+          code: err.code,
+        },
+        status,
+      );
+    }
+    throw err;
+  }
 
   private sanitizePublicLead(lead: Record<string, unknown>): Record<string, unknown> {
     return sanitizePublicLead(lead);
@@ -117,7 +175,7 @@ export class LeadsController {
   }
 
   /**
-   * Public pre-OTP check: block same phone/PAN for same category unless status is approved.
+   * Public pre-OTP check: Gate 1 max 4 unique PANs per mobile, then same PAN + product.
    * Does not require Firebase/OTP — only rate-limited.
    */
   @Post('check-application')
@@ -143,6 +201,7 @@ export class LeadsController {
       success: true,
       allowed: result.allowed,
       message: result.message,
+      code: result.code,
       status: result.status,
       statusLabel: result.statusLabel,
       category: result.category,
@@ -153,7 +212,7 @@ export class LeadsController {
 
   /**
    * Public apply: require phone verification (Firebase or recent OTP) before storing PAN.
-   * Same mobile/PAN allowed once per product category unless prior lead is approved.
+   * Gate 1: max 4 unique PANs per mobile. Gate 2: same PAN + product unless approved.
    */
   @Post('apply')
   @HttpCode(HttpStatus.CREATED)
@@ -177,14 +236,7 @@ export class LeadsController {
       clientIp: this.clientIp(req),
     });
     if (!result.ok || !result.lead) {
-      const message = result.message || 'Failed to create lead';
-      if (
-        message.toLowerCase().includes('already') ||
-        message.toLowerCase().includes('already have')
-      ) {
-        throw new ConflictException(message);
-      }
-      throw new BadRequestException(message);
+      this.throwLeadWriteFailure(result.message || 'Failed to create lead', result.code);
     }
     return { success: true, data: this.sanitizePublicLead(result.lead) };
   }
@@ -212,14 +264,7 @@ export class LeadsController {
       clientIp: this.clientIp(req),
     });
     if (!result.ok) {
-      const message = result.message || 'Failed to update details.';
-      if (
-        message.toLowerCase().includes('already') ||
-        message.toLowerCase().includes('already have')
-      ) {
-        throw new ConflictException(message);
-      }
-      throw new BadRequestException(message);
+      this.throwLeadWriteFailure(result.message || 'Failed to update details.', result.code);
     }
     return { success: true, data: this.sanitizePublicLead(result.lead) };
   }
@@ -232,8 +277,9 @@ export class LeadsController {
       const existing = await this.leadsService.getByMobileAndCategory(
         dto.mobileNumber,
         dto.category || 'personal_loan',
+        dto.category === 'insurance' ? dto.insType ?? null : null,
       );
-      if (existing) {
+      if (existing && this.leadsService.isDraftLead(existing)) {
         const updated = await this.leadsService.updateById(String(existing['id']), {
           pan: dto.pan,
           fullName: dto.fullName,
@@ -261,6 +307,13 @@ export class LeadsController {
       }
       return { success: true, data: this.sanitizePublicLead(lead) };
     } catch (error) {
+      if (error instanceof LeadRuleError) {
+        return {
+          success: false,
+          message: error.message,
+          code: error.code,
+        };
+      }
       if (process.env.NODE_ENV !== 'production') {
         console.error('LeadsController.create', error);
       }
@@ -356,47 +409,64 @@ export class LeadsController {
     const isAgent = String(actor?.role ?? '').toLowerCase() === 'agent';
     const category = dto.category || 'personal_loan';
     const insType = category === 'insurance' ? dto.insType ?? null : null;
-    const [byMobile, byPan] = await Promise.all([
-      this.leadsService.getByMobileAndCategory(dto.mobileNumber, category, insType),
-      this.leadsService.getByPanAndCategory(dto.pan, category, insType),
-    ]);
-    if (
-      byMobile &&
-      !this.leadsService.isDraftLead(byMobile) &&
-      String(byMobile.status ?? '').trim().toLowerCase() !== 'approved'
-    ) {
+    const gates = await this.leadsService.evaluateApplicationGates({
+      mobileNumber: dto.mobileNumber,
+      pan: dto.pan,
+      category,
+      insType,
+    });
+    if (!gates.allowed) {
+      const isLimit = gates.code === CODE_MOBILE_PAN_LIMIT_REACHED;
       return {
         success: false,
-        field: 'mobileNumber',
-        message: 'A lead with this phone number already exists for this product',
-      };
-    }
-    if (
-      byPan &&
-      !this.leadsService.isDraftLead(byPan) &&
-      String(byPan.id) !== String(byMobile?.id ?? '') &&
-      String(byPan.status ?? '').trim().toLowerCase() !== 'approved'
-    ) {
-      return {
-        success: false,
-        field: 'pan',
-        message: 'A lead with this PAN already exists for this product',
+        field: isLimit ? 'mobileNumber' : 'pan',
+        message: gates.message,
+        code: gates.code,
       };
     }
 
-    const created = await this.leadsService.create({
-      pan: dto.pan,
-      mobileNumber: dto.mobileNumber,
-      fullName: dto.fullName,
-      email: dto.email,
-      pincode: dto.pincode,
-      requiredAmount: dto.requiredAmount,
-      category: dto.category,
-      loanAmt: dto.loanAmt,
-      insType: dto.insType,
-      employmentType: dto.employmentType,
-      netMonthlyIncome: dto.netMonthlyIncome,
-    });
+    const actorRole = String(actor?.role ?? '').toLowerCase();
+    if (
+      !isAgent &&
+      String(dto.status ?? '').trim().toLowerCase() === 'approved' &&
+      actorRole !== 'admin'
+    ) {
+      throw new HttpException(
+        {
+          success: false,
+          message: MSG_APPROVE_ADMIN_ONLY,
+          code: CODE_APPROVE_ADMIN_ONLY,
+        },
+        HttpStatus.FORBIDDEN,
+      );
+    }
+
+    let created: Record<string, unknown> | null;
+    try {
+      created = await this.leadsService.create({
+        pan: dto.pan,
+        mobileNumber: dto.mobileNumber,
+        fullName: dto.fullName,
+        email: dto.email,
+        pincode: dto.pincode,
+        requiredAmount: dto.requiredAmount,
+        category: dto.category,
+        loanAmt: dto.loanAmt,
+        insType: dto.insType,
+        employmentType: dto.employmentType,
+        netMonthlyIncome: dto.netMonthlyIncome,
+      });
+    } catch (err) {
+      if (err instanceof LeadRuleError) {
+        return {
+          success: false,
+          field: err.code === CODE_MOBILE_PAN_LIMIT_REACHED ? 'mobileNumber' : 'pan',
+          message: err.message,
+          code: err.code,
+        };
+      }
+      throw err;
+    }
 
     if (!created?.id) {
       return {
@@ -422,8 +492,16 @@ export class LeadsController {
     }
 
     if (Object.keys(patch).length > 0) {
-      const updated = await this.leadsService.updateById(String(created.id), patch);
-      if (updated) lead = updated;
+      try {
+        const updated = await this.leadsService.updateById(
+          String(created.id),
+          patch,
+          actor,
+        );
+        if (updated) lead = updated;
+      } catch (err) {
+        this.rethrowLeadMutation(err);
+      }
     }
 
     return { success: true, data: lead };
@@ -432,12 +510,21 @@ export class LeadsController {
   @Patch('admin/:id')
   @UseGuards(AdminCrmGuard)
   @HttpCode(HttpStatus.OK)
-  async updateForAdmin(@Param('id') id: string, @Body() dto: UpdateLeadDto) {
-    const lead = await this.leadsService.updateById(id, dto);
-    if (!lead) {
-      throw new NotFoundException('Lead not found or update failed');
+  async updateForAdmin(
+    @Param('id') id: string,
+    @Body() dto: UpdateLeadDto,
+    @Req() req: { adminActor?: AdminActor },
+  ) {
+    try {
+      const lead = await this.leadsService.updateById(id, dto, req.adminActor);
+      if (!lead) {
+        throw new NotFoundException('Lead not found or update failed');
+      }
+      return { success: true, data: lead };
+    } catch (err) {
+      if (err instanceof NotFoundException) throw err;
+      this.rethrowLeadMutation(err);
     }
-    return { success: true, data: lead };
   }
 
   /**
@@ -487,10 +574,15 @@ export class LeadsController {
   @UseGuards(AdminCrmGuard, AdminOnlyGuard)
   @HttpCode(HttpStatus.OK)
   async deleteForAdmin(@Param('id') id: string) {
-    const ok = await this.leadsService.deleteById(id);
-    if (!ok) {
-      throw new NotFoundException('Lead not found or delete failed');
+    try {
+      const ok = await this.leadsService.deleteById(id);
+      if (!ok) {
+        throw new NotFoundException('Lead not found or delete failed');
+      }
+      return { success: true };
+    } catch (err) {
+      if (err instanceof NotFoundException) throw err;
+      this.rethrowLeadMutation(err);
     }
-    return { success: true };
   }
 }

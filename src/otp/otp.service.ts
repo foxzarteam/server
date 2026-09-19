@@ -90,34 +90,9 @@ export class OtpService {
     };
   }
 
-  /** Same as requestSend (legacy /api/otp/send). */
+  /** Same as requestSend (legacy /api/otp/send — used by az_app). */
   async send(dto: SendOtpDto): Promise<OtpResult> {
     return this.requestSend(dto);
-  }
-
-  async getLatestOtpSessions(
-    limit = 10,
-  ): Promise<
-    Array<{
-      mobile_number: string;
-      is_verified: boolean;
-      created_at: string;
-      verified_at: string | null;
-    }>
-  > {
-    const { data, error } = await this.otpSessions
-      .select('mobile_number, is_verified, created_at, verified_at')
-      .order('created_at', { ascending: false })
-      .limit(limit);
-
-    if (error || !Array.isArray(data)) return [];
-
-    return data.map((row: Record<string, unknown>) => ({
-      mobile_number: String(row.mobile_number ?? ''),
-      is_verified: Boolean(row.is_verified),
-      created_at: String(row.created_at ?? ''),
-      verified_at: row.verified_at != null ? String(row.verified_at) : null,
-    }));
   }
 
   /**

@@ -9,9 +9,3 @@ import { ServicesService } from './services.service';
   exports: [ServicesService],
 })
 export class ServicesModule {}
-
-export { ServicesService } from './services.service';
-export { ServicesController } from './services.controller';
-export {
-  AdminUpdateServiceDto,
-} from './services.dto';

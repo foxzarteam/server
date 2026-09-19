@@ -1,23 +1,21 @@
 import {
   Body,
   Controller,
-  Get,
   HttpCode,
   HttpStatus,
   Post,
-  Res,
+  Req,
+  BadRequestException,
 } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
-import { Response } from 'express';
+import type { Request } from 'express';
+import { extractClientIp } from '../common/client-ip';
+import { allowRateLimitedAction } from '../security/rate-limit';
 import { SendOtpDto, VerifyFirebaseOtpDto } from './otp.dto';
 import { OtpService } from './otp.service';
 
 @Controller('otp')
 export class OtpController {
-  constructor(
-    private readonly otpService: OtpService,
-    private readonly config: ConfigService,
-  ) {}
+  constructor(private readonly otpService: OtpService) {}
 
   /** Dev / legacy: create OTP session row before or after client SMS. */
   @Post('send')
@@ -29,7 +27,15 @@ export class OtpController {
   /** Prefer this: rate-limit check + insert send row before Firebase SMS. */
   @Post('request-send')
   @HttpCode(HttpStatus.OK)
-  async requestSend(@Body() dto: SendOtpDto) {
+  async requestSend(@Body() dto: SendOtpDto, @Req() req: Request) {
+    const ip =
+      extractClientIp(
+        req.headers as Record<string, string | string[] | undefined>,
+        req.ip ?? req.socket?.remoteAddress,
+      ) ?? 'unknown';
+    if (!allowRateLimitedAction(`otp-request-ip:${ip}`, 12, 60_000)) {
+      throw new BadRequestException('Too many OTP requests. Please try again in a minute.');
+    }
     return this.otpService.requestSend(dto);
   }
 
@@ -37,18 +43,5 @@ export class OtpController {
   @HttpCode(HttpStatus.OK)
   async verifyFirebase(@Body() dto: VerifyFirebaseOtpDto) {
     return this.otpService.verifyFirebaseToken(dto);
-  }
-
-  /** Optional HTML debug page in non-production. */
-  @Get('status-page')
-  async statusPage(@Res() res: Response) {
-    if (this.config.get<string>('NODE_ENV') === 'production') {
-      return res.status(404).send('Not found');
-    }
-    return res
-      .type('html')
-      .send(
-        '<!doctype html><html><body><h1>OTP API</h1><p>OK</p></body></html>',
-      );
   }
 }

@@ -54,7 +54,11 @@ assert.strictEqual(
 // —— write errors ——
 assert.strictEqual(
   mapLeadWriteError('duplicate key value violates unique constraint'),
-  'You already have an application for this product.',
+  'You already have an open application for this product. Check status or wait until it is Approved before applying again.',
+);
+assert.strictEqual(
+  mapLeadWriteError('MOBILE_PAN_LIMIT_REACHED'),
+  'This mobile number has already been used for multiple applications. Please use a different mobile number.',
 );
 assert.ok(mapLeadWriteError("Could not find the 'ip_location' column of 'leads' in the schema cache").includes('updating'));
 assert.strictEqual(

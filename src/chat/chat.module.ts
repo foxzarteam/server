@@ -10,10 +10,3 @@ import { ChatService } from './chat.service';
   exports: [ChatService],
 })
 export class ChatModule {}
-
-export { ChatService } from './chat.service';
-export { ChatController } from './chat.controller';
-export {
-  CreateChatDto,
-  UpdateChatDto,
-} from './chat.dto';

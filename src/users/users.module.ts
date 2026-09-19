@@ -11,16 +11,3 @@ import { UsersService } from './users.service';
   exports: [UsersService],
 })
 export class UsersModule {}
-
-export { UsersService } from './users.service';
-export { UsersController } from './users.controller';
-export {
-  CreateUserDto,
-  UpsertUserDto,
-  UpdateProfileDto,
-  UpdateMpinDto,
-  VerifyMpinDto,
-  UpdateLoginStatusDto,
-  AdminUpdateUserDto,
-  AdminCreateUserDto,
-} from './users.dto';

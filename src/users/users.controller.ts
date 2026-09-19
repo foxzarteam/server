@@ -106,7 +106,7 @@ export class UsersController {
     if (!allowRateLimitedAction(`agent-register:${dto.mobileNumber}`, 3, 60_000)) {
       throw new BadRequestException('Too many attempts. Try again in a minute.');
     }
-    // OTP optional — only block duplicate mobile already in DB.
+    // Partner signup is PIN-only (no OTP). Optional idToken is verified if sent.
     const idToken = this.idTokenFrom(headers, dto.idToken);
     if (idToken) {
       await assertStrictMobileAccess(this.otpService, dto.mobileNumber, { idToken });

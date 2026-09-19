@@ -9,11 +9,3 @@ import { ContactService } from './contact.service';
   exports: [ContactService],
 })
 export class ContactModule {}
-
-export { ContactService } from './contact.service';
-export { ContactController } from './contact.controller';
-export {
-  CreateContactDto,
-  TaxCalculatorLeadDto,
-  UpdateContactDto,
-} from './contact.dto';

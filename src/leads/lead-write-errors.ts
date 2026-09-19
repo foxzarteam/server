@@ -1,10 +1,30 @@
+import {
+  CODE_MOBILE_PAN_LIMIT_REACHED,
+  isMobilePanLimitText,
+  MSG_MOBILE_PAN_LIMIT_REACHED,
+} from './mobile-pan-limit';
+
 /**
  * Map Supabase / PostgREST write failures to applicant-safe messages.
  * Keeps raw DB text out of production responses while aiding logs.
  */
+export function leadWriteErrorCode(
+  message: string | undefined | null,
+): string | undefined {
+  const m = String(message ?? '').toLowerCase();
+  if (isMobilePanLimitText(message) || m.includes('lead_mobile_pan_slots')) {
+    return CODE_MOBILE_PAN_LIMIT_REACHED;
+  }
+  return undefined;
+}
+
 export function mapLeadWriteError(message: string | undefined | null): string {
   const m = String(message ?? '').toLowerCase();
   if (!m) return 'Failed to create lead. Please try again.';
+
+  if (isMobilePanLimitText(message) || m.includes('lead_mobile_pan_slots')) {
+    return MSG_MOBILE_PAN_LIMIT_REACHED;
+  }
 
   if (
     m.includes('duplicate') ||

@@ -8,9 +8,3 @@ import { AuthService } from './auth.service';
   exports: [AuthService],
 })
 export class AuthModule {}
-
-export { AuthService } from './auth.service';
-export { AuthController } from './auth.controller';
-export {
-  AdminLoginDto,
-} from './auth.dto';

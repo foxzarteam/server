@@ -9,10 +9,3 @@ import { PartnerService } from './partner.service';
   exports: [PartnerService],
 })
 export class PartnerModule {}
-
-export { PartnerService } from './partner.service';
-export { PartnerController } from './partner.controller';
-export {
-  AdminCreatePartnerDto,
-  AdminUpdatePartnerDto,
-} from './partner.dto';

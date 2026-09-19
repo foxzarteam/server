@@ -12,6 +12,8 @@ export const TABLE_CONTACT = 'contact';
 export const TABLE_CHAT = 'chat';
 /** PAN reveal / partner-send audit trail. */
 export const TABLE_PAN_ACCESS_AUDIT = 'pan_access_audit';
+/** Max 4 unique PAN fingerprints per mobile. */
+export const TABLE_LEAD_MOBILE_PAN_SLOTS = 'lead_mobile_pan_slots';
 
 /** Max OTP sends per mobile per calendar day (IST). */
 export const OTP_MAX_SENDS_PER_DAY = 5;

@@ -2,6 +2,8 @@
 
 Backend for **Apni Zaroorat** app. Uses Supabase as database. All app flows use REST APIs only.
 
+**Schema:** do not keep SQL in this folder. The only dump is `az_web/db/supabase_backup.sql` — paste that in SQL Editor (or `psql -f`) to migrate a new database.
+
 ## Setup
 
 1. **Install**

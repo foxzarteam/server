@@ -8,6 +8,3 @@ import { BannersService } from './banners.service';
   exports: [BannersService],
 })
 export class BannersModule {}
-
-export { BannersService } from './banners.service';
-export { BannersController } from './banners.controller';

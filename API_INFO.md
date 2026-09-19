@@ -8,7 +8,11 @@ Nest app **`server/`** folder se build hoti hai; global prefix **`api`** (`API_P
 
 Base URL (local paths doc): `http://localhost:3000/api` — prefix `api`, port `PORT` (default 3000).
 
-- **POST** `/auth/login` — Admin/staff: body `{ "email", "password" }` → Supabase `public.auth`. **Browser** az_web se seedha is URL pe `POST` karta hai (`NEXT_PUBLIC_API_URL` + `/api/auth/login`); pass hone par same site **`POST` az_web** `/api/admin/session` cookie set karta hai (server dubara verify karta hai).
+- **GET** `/openapi.json` — OpenAPI 3 spec (third-party integrations). az_web browsers call same-origin `/api/*` BFF; Nest remains the system of record.
+
+- **POST** `/auth/login` — Admin/staff: body `{ "email", "password" }` → Supabase `public.auth`. az_web verifies **only** via `/api/admin/session` (server-side Nest call). Do not call this from the browser.
+
+- **POST** `/users/agent/register` — Public partner signup (name + mobile + 4-digit PIN, no OTP). Admin CRM create is `POST /users/admin`.
 
 - **GET** `/users/mobile/:mobile` — Auth required (OTP / Firebase idToken / admin key). Returns user **without** `mpin` (`has_mpin` flag).
 - **POST** `/users` — Auth required. New user create.
@@ -27,7 +31,7 @@ Base URL (local paths doc): `http://localhost:3000/api` — prefix `api`, port `
 - **GET** `/leads` — API info / related routes ka short meta (DB list nahi).
 - **POST** `/leads/apply` — Public apply (az_web form). Duplicate mobile/PAN block.
 - **POST** `/leads/start` — Requires recent OTP verification.
-- **POST** `/leads` — Auth required (OTP / idToken / admin key).
+- **POST** `/leads` — Auth required (OTP / idToken / admin key). **Ignores `userId`**; partner credit via `referralCode` only. Prefer `POST /leads/apply`.
 - **PATCH** `/leads/:id/complete` — Auth required for that lead’s mobile.
 - **GET** `/leads/user/:userId` — Auth required (owner OTP or admin key). PAN/notes stripped.
 - **GET** `/leads/user/:userId/category/:category` — Same auth as above.

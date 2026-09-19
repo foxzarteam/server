@@ -11,6 +11,3 @@ import { WalletService } from './wallet.service';
   exports: [WalletService],
 })
 export class WalletModule {}
-
-export { WalletService } from './wallet.service';
-export { WalletController } from './wallet.controller';

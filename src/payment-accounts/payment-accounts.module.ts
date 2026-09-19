@@ -11,9 +11,3 @@ import { PaymentAccountsService } from './payment-accounts.service';
   exports: [PaymentAccountsService],
 })
 export class PaymentAccountsModule {}
-
-export { PaymentAccountsService } from './payment-accounts.service';
-export { PaymentAccountsController } from './payment-accounts.controller';
-export {
-  UpsertPaymentAccountDto,
-} from './payment-accounts.dto';

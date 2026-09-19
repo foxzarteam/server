@@ -7,9 +7,12 @@ import {
   Param,
   Patch,
   Post,
+  Req,
   BadRequestException,
   NotFoundException,
 } from '@nestjs/common';
+import type { Request } from 'express';
+import { extractClientIp } from '../common/client-ip';
 import { assertMobileAccess, extractIdToken } from '../common/phone-access';
 import { allowRateLimitedAction } from '../security/rate-limit';
 import { OtpService } from '../otp/otp.service';
@@ -29,9 +32,17 @@ export class ChatController {
 
   @Post()
   @HttpCode(HttpStatus.CREATED)
-  async create(@Body() dto: CreateChatDto) {
+  async create(@Body() dto: CreateChatDto, @Req() req: Request) {
     const mobile = String(dto.mobileNumber ?? '').trim();
-    if (mobile && !allowRateLimitedAction(`chat-create:${mobile}`, 6, 60_000)) {
+    const ip =
+      extractClientIp(
+        req.headers as Record<string, string | string[] | undefined>,
+        req.ip ?? req.socket?.remoteAddress,
+      ) ?? 'unknown';
+    if (
+      (mobile && !allowRateLimitedAction(`chat-create:${mobile}`, 6, 60_000)) ||
+      !allowRateLimitedAction(`chat-create-ip:${ip}`, 20, 60_000)
+    ) {
       throw new BadRequestException('Too many chat sessions. Please try again in a minute.');
     }
     const answers = parseAnswers(dto.answers);
