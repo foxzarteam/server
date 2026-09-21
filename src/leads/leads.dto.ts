@@ -62,6 +62,12 @@ export class StartLeadDto {
   @Length(6, 12)
   @Matches(/^[A-Za-z0-9]+$/, { message: 'Invalid referral code' })
   referralCode?: string;
+
+  /** Set by Next BFF from the visitor IP. */
+  @IsOptional()
+  @IsString()
+  @Length(3, 45)
+  clientIp?: string;
 }
 
 /** Pre-OTP gate: max 4 unique PANs per mobile, then same PAN + product unless approved. */
@@ -148,6 +154,12 @@ export class CompleteLeadDto {
   @Length(6, 12)
   @Matches(/^[A-Za-z0-9]+$/, { message: 'Invalid referral code' })
   referralCode?: string;
+
+  /** Set by Next BFF from the visitor IP. */
+  @IsOptional()
+  @IsString()
+  @Length(3, 45)
+  clientIp?: string;
 }
 
 export class CreateLeadDto {
@@ -229,6 +241,12 @@ export class CreateLeadDto {
   @IsString()
   @MinLength(20)
   idToken?: string;
+
+  /** Set by Next BFF from the visitor IP. */
+  @IsOptional()
+  @IsString()
+  @Length(3, 45)
+  clientIp?: string;
 }
 
 export class UpdateLeadDto {

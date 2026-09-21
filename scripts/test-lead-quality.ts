@@ -24,6 +24,21 @@ assert.strictEqual(
 );
 assert.strictEqual(extractClientIp({}, '::ffff:192.0.2.1'), '192.0.2.1');
 assert.strictEqual(extractClientIp({}), null);
+assert.strictEqual(
+  extractClientIp({
+    'x-az-client-ip': '203.0.113.10',
+    'x-forwarded-for': '8.8.8.8',
+  }),
+  '203.0.113.10',
+);
+assert.strictEqual(
+  extractClientIp({ 'x-forwarded-for': '10.0.0.1, 203.0.113.10' }),
+  '203.0.113.10',
+);
+assert.strictEqual(
+  extractClientIp({ 'x-forwarded-for': '8.8.8.8' }, null, '203.0.113.99'),
+  '203.0.113.99',
+);
 
 // —— private ranges ——
 assert.strictEqual(isPrivateOrLocalIp('127.0.0.1'), true);

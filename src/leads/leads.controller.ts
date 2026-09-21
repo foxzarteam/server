@@ -119,10 +119,11 @@ export class LeadsController {
     return sanitizePublicLead(lead);
   }
 
-  private clientIp(req: Request): string | null {
+  private clientIp(req: Request, bodyIp?: string | null): string | null {
     return extractClientIp(
       req.headers as Record<string, string | string[] | undefined>,
       req.ip ?? req.socket?.remoteAddress,
+      bodyIp,
     );
   }
 
@@ -156,7 +157,7 @@ export class LeadsController {
     const result = await this.leadsService.startLead(
       dto.mobileNumber,
       dto.category,
-      this.clientIp(req),
+      this.clientIp(req, dto.clientIp),
       dto.referralCode,
     );
 
@@ -222,7 +223,7 @@ export class LeadsController {
     @Req() req: Request,
   ) {
     const mobile = dto.mobileNumber?.trim() ?? '';
-    const ip = this.clientIp(req) || 'unknown';
+    const ip = this.clientIp(req, dto.clientIp) || 'unknown';
     if (
       (mobile && !allowRateLimitedAction(`lead-apply:${mobile}`, 8, 60_000)) ||
       !allowRateLimitedAction(`lead-apply-ip:${ip}`, 20, 60_000)
@@ -231,7 +232,7 @@ export class LeadsController {
     }
 
     const result = await this.leadsService.applyLead(dto, {
-      clientIp: this.clientIp(req),
+      clientIp: this.clientIp(req, dto.clientIp),
     });
     if (!result.ok || !result.lead) {
       this.throwLeadWriteFailure(result.message || 'Failed to create lead', result.code);
@@ -259,7 +260,7 @@ export class LeadsController {
     });
 
     const result = await this.leadsService.completeLead(id, dto, {
-      clientIp: this.clientIp(req),
+      clientIp: this.clientIp(req, dto.clientIp),
     });
     if (!result.ok) {
       this.throwLeadWriteFailure(result.message || 'Failed to update details.', result.code);
@@ -291,7 +292,7 @@ export class LeadsController {
             dto.category === 'personal_loan' ? dto.employmentType ?? null : null,
           netMonthlyIncome:
             dto.category === 'personal_loan' ? dto.netMonthlyIncome ?? null : null,
-          clientIp: this.clientIp(req),
+          clientIp: this.clientIp(req, dto.clientIp),
         });
         if (!updated) {
           return { success: false, message: 'Failed to update lead' };
@@ -299,7 +300,7 @@ export class LeadsController {
         return { success: true, data: this.sanitizePublicLead(updated) };
       }
 
-      const lead = await this.leadsService.create(dto, { clientIp: this.clientIp(req) });
+      const lead = await this.leadsService.create(dto, { clientIp: this.clientIp(req, dto.clientIp) });
       if (!lead) {
         return { success: false, message: 'Failed to create lead' };
       }

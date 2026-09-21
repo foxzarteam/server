@@ -129,7 +129,7 @@ export class LeadsService {
     return ip ? { ip } : {};
   }
 
-  /** Background geo fill — never throws into apply/start. */
+  /** Background geo fill from the saved visitor IP — never throws into apply/start. */
   private scheduleIpLocationFill(leadId: string | undefined | null, clientIp?: string | null): void {
     const id = leadId != null ? String(leadId).trim() : '';
     const ip = String(clientIp ?? '').trim().slice(0, 45);
@@ -1372,7 +1372,6 @@ export class LeadsService {
       return { ...row, ip_location: location };
     });
 
-    // Persist best-effort so next load is free of geo API calls
     void Promise.all(
       updates.slice(0, 25).map(({ id, location }) =>
         this.leads.update({ ip_location: location }).eq('id', id).then(() => undefined),
