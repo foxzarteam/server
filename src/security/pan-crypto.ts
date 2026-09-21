@@ -1,4 +1,4 @@
-import { createCipheriv, createDecipheriv, createHmac, randomBytes, timingSafeEqual } from 'crypto';
+import { createCipheriv, createDecipheriv, createHmac, randomBytes } from 'crypto';
 
 /** Indian PAN: 5 letters + 4 digits + 1 letter. */
 export const PAN_FORMAT_REGEX = /^[A-Z]{5}[0-9]{4}[A-Z]$/;
@@ -177,15 +177,4 @@ export function sanitizePublicLead(row: Record<string, unknown>): Record<string,
     ...rest
   } = safe;
   return rest;
-}
-
-export function timingSafeEqualHex(a: string, b: string): boolean {
-  try {
-    const ba = Buffer.from(a, 'hex');
-    const bb = Buffer.from(b, 'hex');
-    if (ba.length !== bb.length) return false;
-    return timingSafeEqual(ba, bb);
-  } catch {
-    return false;
-  }
 }

@@ -20,12 +20,3 @@ export function allowRateLimitedAction(
   buckets.set(key, recent);
   return true;
 }
-
-/** Convenience: same as allowRateLimitedAction with a longer default window (15 min). */
-export function allowRateLimitedActionLong(
-  key: string,
-  maxPerWindow = 20,
-  windowMs = 15 * 60_000,
-): boolean {
-  return allowRateLimitedAction(key, maxPerWindow, windowMs);
-}
