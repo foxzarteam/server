@@ -352,6 +352,8 @@ export class LeadsService {
    * - insurance + same ins_type (life / health / motor)
    * Different insurance types are allowed. Block unless prior lead is approved.
    * Does NOT block a different PAN merely because the mobile already has this product.
+   * Scans open (non-approved) rows — not only the newest — so an older pending
+   * still blocks after a later lead was approved.
    */
   async findBlockingSameCategoryLead(
     _mobileNumber: string,
@@ -361,20 +363,53 @@ export class LeadsService {
   ): Promise<Record<string, unknown> | null> {
     const cat = this.normalizeCategory(category);
     const ins = this.normalizeInsType(cat, insType);
-
     const panUpper = pan ? normalizePan(pan) : '';
-    if (panUpper && isValidPanFormat(panUpper)) {
-      const byPan = await this.getByPanAndCategory(panUpper, cat, ins);
-      if (
-        byPan &&
-        !this.isDraftLead(byPan) &&
-        !this.isApprovedStatus(byPan.status)
-      ) {
-        return byPan;
+    if (!panUpper || !isValidPanFormat(panUpper)) return null;
+
+    const pickOpen = (rows: Record<string, unknown>[] | null) => {
+      for (const row of rows ?? []) {
+        if (!this.isDraftLead(row) && !this.isApprovedStatus(row.status)) {
+          return row;
+        }
       }
+      return null;
+    };
+
+    const digest = hashPan(panUpper);
+    let byHash = this.leads
+      .select()
+      .eq('pan_hash', digest)
+      .eq('category', cat)
+      .eq('is_active', true)
+      .neq('status', 'approved');
+    if (cat === 'insurance' && ins) {
+      byHash = byHash.eq('ins_type', ins);
+    }
+    const hashed = await byHash.order('created_at', { ascending: false }).limit(20);
+    if (!hashed.error) {
+      const hit = pickOpen((hashed.data as Record<string, unknown>[]) || []);
+      if (hit) return hit;
     }
 
-    return null;
+    let byPan = this.leads
+      .select()
+      .eq('pan', panUpper)
+      .eq('category', cat)
+      .eq('is_active', true)
+      .neq('status', 'approved');
+    if (cat === 'insurance' && ins) {
+      byPan = byPan.eq('ins_type', ins);
+    }
+    const { data, error } = await byPan
+      .order('created_at', { ascending: false })
+      .limit(20);
+    if (error) {
+      if (process.env.NODE_ENV !== 'production') {
+        console.error('LeadsService.findBlockingSameCategoryLead', error.message);
+      }
+      return null;
+    }
+    return pickOpen((data as Record<string, unknown>[]) || []);
   }
 
   blockingApplicationMessage(lead: Record<string, unknown>): string {
@@ -1468,13 +1503,13 @@ export class LeadsService {
             (payload.ins_type as string | undefined) ??
             String(existing['ins_type'] ?? ''),
         );
-        const other = await this.getByPanAndCategory(panUpper, category, ins);
-        if (
-          other &&
-          String(other.id) !== id &&
-          !this.isDraftLead(other) &&
-          !this.isApprovedStatus(other.status)
-        ) {
+        const other = await this.findBlockingSameCategoryLead(
+          '',
+          panUpper,
+          category,
+          ins,
+        );
+        if (other && String(other.id) !== id) {
           return null;
         }
         try {
