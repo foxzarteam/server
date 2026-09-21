@@ -68,6 +68,14 @@ export class OtpService {
       };
     }
 
+    if (dto.checkOnly === true) {
+      return {
+        success: true,
+        message: MSG_OTP_SENT,
+        remainingSends: Math.max(0, OTP_MAX_SENDS_PER_DAY - used),
+      };
+    }
+
     const { data, error } = await this.otpSessions
       .insert({
         mobile_number: mobile,
