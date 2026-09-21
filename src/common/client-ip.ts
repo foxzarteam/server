@@ -14,7 +14,9 @@ export function extractClientIp(
     headers['cf-connecting-ip'] ??
     headers['CF-Connecting-IP'] ??
     headers['true-client-ip'] ??
-    headers['True-Client-Ip'];
+    headers['True-Client-Ip'] ??
+    headers['x-vercel-forwarded-for'] ??
+    headers['X-Vercel-Forwarded-For'];
 
   const headerVal = Array.isArray(raw) ? raw[0] : raw;
   if (typeof headerVal === 'string' && headerVal.trim()) {
