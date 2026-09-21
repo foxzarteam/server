@@ -58,8 +58,43 @@ export const OPENAPI_SPEC = {
     },
     '/leads/apply': {
       post: {
-        summary: 'Public apply after phone verification. Ignores client userId; referralCode only.',
-        responses: { '201': { description: 'Lead created' }, '409': { description: 'PAN/product conflict' } },
+        summary:
+          'Public apply (loan + insurance, one endpoint). Saves lead Verified=No. OTP later sets Verified=Yes. Ignores client userId; referralCode only.',
+        requestBody: {
+          required: true,
+          content: {
+            'application/json': {
+              schema: {
+                type: 'object',
+                required: ['pan', 'mobileNumber', 'fullName', 'category', 'pincode'],
+                properties: {
+                  pan: { type: 'string', example: 'ABCDE1234F' },
+                  mobileNumber: { type: 'string', example: '9876543210' },
+                  fullName: { type: 'string', example: 'Rahul Sharma' },
+                  pincode: { type: 'string', example: '302002' },
+                  category: {
+                    type: 'string',
+                    enum: ['personal_loan', 'insurance'],
+                    example: 'personal_loan',
+                  },
+                  requiredAmount: { type: 'number', example: 500000, description: 'PL only, ₹25,000–₹10,00,000' },
+                  employmentType: { type: 'string', enum: ['salaried', 'self_employed'] },
+                  netMonthlyIncome: { type: 'number', example: 45000 },
+                  insType: {
+                    type: 'string',
+                    enum: ['life_insurance', 'health_insurance', 'motor_insurance'],
+                    description: 'Required when category=insurance',
+                  },
+                  referralCode: { type: 'string', description: 'Partner referral code (optional)' },
+                },
+              },
+            },
+          },
+        },
+        responses: {
+          '201': { description: 'Lead created (otp_verified false)' },
+          '409': { description: 'PAN/product conflict or 4-PAN mobile limit' },
+        },
       },
     },
     '/leads/start': {

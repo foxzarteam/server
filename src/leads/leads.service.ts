@@ -26,6 +26,7 @@ import {
   CODE_LOAN_AMOUNT_REQUIRED,
   leadLoanAmount,
   MSG_LOAN_AMOUNT_REQUIRED,
+  personalLoanAmountError,
   resolvePersonalLoanAmounts,
 } from '../wallet/loan-amount';
 import {
@@ -50,7 +51,10 @@ import {
   LeadRuleError,
   MSG_MOBILE_PAN_LIMIT_REACHED,
 } from './mobile-pan-limit';
-import { personalLoanEmploymentError as checkPersonalLoanEmployment } from './personal-loan-employment';
+import {
+  leadFullNameError,
+  personalLoanEmploymentError as checkPersonalLoanEmployment,
+} from './personal-loan-employment';
 
 /** Placeholder until user completes the second-step form */
 export const LEAD_DRAFT_FULL_NAME = 'Unknown';
@@ -750,6 +754,14 @@ export class LeadsService {
       return { ok: false, message: 'Invalid PAN format.' };
     }
 
+    const nameErr = leadFullNameError(dto.fullName);
+    if (nameErr) return { ok: false, message: nameErr };
+
+    const pin = String(dto.pincode ?? '').replace(/\D/g, '');
+    if (!/^[1-9][0-9]{5}$/.test(pin)) {
+      return { ok: false, message: 'Enter a valid 6-digit Indian pincode.' };
+    }
+
     const mobile = dto.mobileNumber.trim();
     const category = this.normalizeCategory(dto.category);
     const ins = this.normalizeInsType(category, dto.insType);
@@ -800,11 +812,12 @@ export class LeadsService {
       mobile_number: mobile,
       full_name: dto.fullName.trim(),
       email: dto.email?.trim() || null,
-      pincode: dto.pincode?.trim() || null,
+      pincode: pin,
       required_amount: dto.requiredAmount || null,
       category,
       status: 'pending',
       is_active: true,
+      otp_verified: false,
     };
 
     // Public apply: never trust client-supplied userId (referral via code only).
@@ -816,6 +829,8 @@ export class LeadsService {
         requiredAmount: dto.requiredAmount,
         loanAmt: dto.loanAmt,
       });
+      const amtErr = personalLoanAmountError(amounts.requiredAmount);
+      if (amtErr) return { ok: false, message: amtErr };
       payload.required_amount = amounts.requiredAmount;
       payload.loan_amt = amounts.loanAmt;
       payload.employment_type = dto.employmentType;
@@ -1027,6 +1042,7 @@ export class LeadsService {
       fullName: dto.fullName.trim(),
       category: dto.category ?? category,
       status: 'pending',
+      otpVerified: true,
     };
 
     if (dto.pincode?.trim()) {
@@ -1084,8 +1100,14 @@ export class LeadsService {
 
     const category = this.normalizeCategory(dto.category || 'personal_loan');
     if (category === 'personal_loan') {
-      if (this.personalLoanEmploymentError(dto)) return null;
+      const empErr = this.personalLoanEmploymentError(dto);
+      if (empErr) {
+        throw new LeadRuleError(empErr);
+      }
     }
+
+    const nameErr = leadFullNameError(dto.fullName);
+    if (nameErr) throw new LeadRuleError(nameErr);
 
     const gates = await this.evaluateApplicationGates({
       mobileNumber: dto.mobileNumber,
@@ -1132,6 +1154,8 @@ export class LeadsService {
         requiredAmount: dto.requiredAmount,
         loanAmt: dto.loanAmt,
       });
+      const amtErr = personalLoanAmountError(amounts.requiredAmount);
+      if (amtErr) throw new LeadRuleError(amtErr);
       payload.required_amount = amounts.requiredAmount;
       payload.loan_amt = amounts.loanAmt;
       payload.employment_type = dto.employmentType;
@@ -1363,6 +1387,7 @@ export class LeadsService {
       payload.net_monthly_income = dto.netMonthlyIncome ?? null;
     }
     if (dto.agentId) payload.agent_id = dto.agentId.trim();
+    if (dto.otpVerified === true) payload.otp_verified = true;
 
     const nextStatus = String(payload.status ?? existing.status ?? '').trim();
     const nextAgent = String(payload.agent_id ?? existing.agent_id ?? '').trim();

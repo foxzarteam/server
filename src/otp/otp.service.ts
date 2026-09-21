@@ -13,6 +13,7 @@ import {
   MSG_OTP_VERIFY_FAILED,
   OTP_MAX_SENDS_PER_DAY,
   PHONE_VERIFICATION_WINDOW_MINUTES,
+  TABLE_LEADS,
   TABLE_OTP_SESSIONS,
   getCurrentIsoTime,
   startOfTodayIstIso,
@@ -134,6 +135,7 @@ export class OtpService {
         return { success: false, message: MSG_OTP_VERIFY_FAILED };
       }
 
+      await this.markLeadsVerifiedForMobile(mobile);
       return { success: true, message: MSG_OTP_VERIFIED };
     }
 
@@ -151,7 +153,21 @@ export class OtpService {
       return { success: false, message: MSG_OTP_SESSION_FAILED };
     }
 
+    await this.markLeadsVerifiedForMobile(mobile);
     return { success: true, message: MSG_OTP_VERIFIED };
+  }
+
+  /** Form-submit leads start as Verified No; OTP flips them to Yes. */
+  private async markLeadsVerifiedForMobile(mobile: string): Promise<void> {
+    const { error } = await this.supabase
+      .from(TABLE_LEADS)
+      .update({ otp_verified: true, updated_at: getCurrentIsoTime() })
+      .eq('mobile_number', mobile)
+      .eq('is_active', true);
+
+    if (error && process.env.NODE_ENV !== 'production') {
+      console.error('OtpService.markLeadsVerifiedForMobile', error.message);
+    }
   }
 
   async verifyFirebaseToken(dto: VerifyFirebaseOtpDto): Promise<OtpResult> {

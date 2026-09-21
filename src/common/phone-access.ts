@@ -51,9 +51,9 @@ export async function assertStrictMobileAccess(
 }
 
 /**
- * Lead apply / PAN submission only: admin key OR Firebase idToken OR recent OTP
- * for this mobile. OTP window is intentional here (verify before storing PAN),
- * but must not be reused as a general login session on wallet/payment/mpin routes.
+ * Lead complete / PAN upgrade: admin key OR Firebase idToken OR recent OTP
+ * for this mobile. Public form apply no longer uses this (lead is saved first).
+ * Must not be reused as a general login session on wallet/payment/mpin routes.
  */
 export async function assertLeadPiiAccess(
   otpService: OtpService,

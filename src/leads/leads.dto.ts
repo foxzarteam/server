@@ -1,4 +1,6 @@
+import { Transform } from 'class-transformer';
 import {
+  IsBoolean,
   IsIn,
   IsNumber,
   IsOptional,
@@ -10,6 +12,7 @@ import {
   ValidateIf,
 } from 'class-validator';
 import { isMaskedPan, PAN_FORMAT_REGEX } from '../security/pan-crypto';
+import { LEAD_FULL_NAME_REGEX } from './personal-loan-employment';
 
 /** Matches active service slugs stored as lead category (e.g. personal-loan → personal_loan). */
 export const LEAD_CATEGORY_PATTERN = /^[a-z][a-z0-9_]{0,63}$/;
@@ -91,7 +94,12 @@ export class CompleteLeadDto {
   @Matches(PAN_FORMAT_REGEX, { message: 'Invalid PAN format (e.g. ABCDE1234F)' })
   pan: string;
 
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @IsString()
+  @Length(2, 255, { message: 'Full name must be 2–255 characters' })
+  @Matches(LEAD_FULL_NAME_REGEX, {
+    message: 'Name should not contain special characters or numbers',
+  })
   fullName: string;
 
   @IsOptional()
@@ -158,7 +166,12 @@ export class CreateLeadDto {
   @Matches(/^[6-9]\d{9}$/, { message: 'Invalid Indian mobile number' })
   mobileNumber: string;
 
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @IsString()
+  @Length(2, 255, { message: 'Full name must be 2–255 characters' })
+  @Matches(LEAD_FULL_NAME_REGEX, {
+    message: 'Name should not contain special characters or numbers',
+  })
   fullName: string;
 
   @IsOptional()
@@ -190,8 +203,8 @@ export class CreateLeadDto {
   @IsIn([...LOAN_AMT_VALUES], { message: 'Invalid loan amount range' })
   loanAmt?: string;
 
-  @IsOptional()
-  @IsString()
+  @ValidateIf((o) => o.category === 'insurance')
+  @IsString({ message: 'Insurance type is required' })
   @IsIn([...INS_TYPE_VALUES], { message: 'Invalid insurance type' })
   insType?: string;
 
@@ -299,6 +312,11 @@ export class UpdateLeadDto {
   @IsOptional()
   @IsString()
   agentId?: string;
+
+  /** Internal: set after customer OTP (chat complete) or CRM. Not shown on public forms. */
+  @IsOptional()
+  @IsBoolean()
+  otpVerified?: boolean;
 }
 
 /** Admin CRM — create lead with optional status/notes. */
@@ -313,7 +331,12 @@ export class AdminCreateLeadDto {
   @Matches(/^[6-9]\d{9}$/, { message: 'Invalid Indian mobile number' })
   mobileNumber: string;
 
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @IsString()
+  @Length(2, 255, { message: 'Full name must be 2–255 characters' })
+  @Matches(LEAD_FULL_NAME_REGEX, {
+    message: 'Name should not contain special characters or numbers',
+  })
   fullName: string;
 
   @IsOptional()

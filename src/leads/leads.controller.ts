@@ -211,26 +211,24 @@ export class LeadsController {
   }
 
   /**
-   * Public apply: require phone verification (Firebase or recent OTP) before storing PAN.
+   * Public apply: persist the lead on form submit (Verified = No).
+   * OTP is a later step — verify-firebase marks Verified = Yes.
    * Gate 1: max 4 unique PANs per mobile. Gate 2: same PAN + product unless approved.
    */
   @Post('apply')
   @HttpCode(HttpStatus.CREATED)
   async apply(
     @Body() dto: CreateLeadDto,
-    @Headers() headers: Record<string, string | string[] | undefined>,
-    @Headers('x-admin-internal-key') adminKey: string | undefined,
     @Req() req: Request,
   ) {
     const mobile = dto.mobileNumber?.trim() ?? '';
-    if (mobile && !allowRateLimitedAction(`lead-apply:${mobile}`, 8, 60_000)) {
+    const ip = this.clientIp(req) || 'unknown';
+    if (
+      (mobile && !allowRateLimitedAction(`lead-apply:${mobile}`, 8, 60_000)) ||
+      !allowRateLimitedAction(`lead-apply-ip:${ip}`, 20, 60_000)
+    ) {
       throw new BadRequestException('Too many applications. Please try again in a minute.');
     }
-
-    await assertLeadPiiAccess(this.otpService, mobile, {
-      adminKey,
-      idToken: extractIdToken(headers, dto.idToken),
-    });
 
     const result = await this.leadsService.applyLead(dto, {
       clientIp: this.clientIp(req),

@@ -9,7 +9,8 @@ import {
   isPrivateOrLocalIp,
 } from '../src/common/ip-geo';
 import { mapLeadWriteError } from '../src/leads/lead-write-errors';
-import { personalLoanEmploymentError } from '../src/leads/personal-loan-employment';
+import { leadFullNameError, personalLoanEmploymentError } from '../src/leads/personal-loan-employment';
+import { personalLoanAmountError } from '../src/wallet/loan-amount';
 import { sanitizePublicLead } from '../src/security/pan-crypto';
 
 // —— client IP ——
@@ -50,6 +51,14 @@ assert.strictEqual(
   personalLoanEmploymentError({ employmentType: 'salaried', netMonthlyIncome: 50000 }),
   null,
 );
+
+assert.strictEqual(leadFullNameError('Rahul Sharma'), null);
+assert.ok(leadFullNameError('A')?.includes('required'));
+assert.ok(leadFullNameError('Rahul123')?.includes('special'));
+
+assert.strictEqual(personalLoanAmountError(500000), null);
+assert.ok(personalLoanAmountError(1000));
+assert.ok(personalLoanAmountError(20_00_000));
 
 // —— write errors ——
 assert.strictEqual(
