@@ -82,7 +82,7 @@ export const OPENAPI_SPEC = {
                   netMonthlyIncome: { type: 'number', example: 45000 },
                   insType: {
                     type: 'string',
-                    enum: ['life_insurance', 'health_insurance', 'motor_insurance'],
+                    enum: ['life_insurance', 'health_insurance', 'motor_insurance', 'cyber_insurance'],
                     description: 'Required when category=insurance',
                   },
                   referralCode: { type: 'string', description: 'Partner referral code (optional)' },

@@ -34,6 +34,7 @@ export const INS_TYPE_VALUES = [
   'life_insurance',
   'health_insurance',
   'motor_insurance',
+  'cyber_insurance',
 ] as const;
 
 export const EMPLOYMENT_TYPE_VALUES = ['salaried', 'self_employed'] as const;
@@ -87,7 +88,7 @@ export class CheckApplicationDto {
   @Matches(LEAD_CATEGORY_PATTERN, { message: 'Invalid category' })
   category?: string;
 
-  /** Required when category is insurance — life / health / motor are separate products. */
+  /** Required when category is insurance — life / health / motor / cyber are separate products. */
   @ValidateIf((o) => (o.category ?? '') === 'insurance')
   @IsString({ message: 'Insurance type is required' })
   @IsIn([...INS_TYPE_VALUES], { message: 'Invalid insurance type' })

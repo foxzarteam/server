@@ -313,11 +313,12 @@ export class LeadsService {
     if (t === 'life_insurance') return 'Life Insurance';
     if (t === 'health_insurance') return 'Health Insurance';
     if (t === 'motor_insurance') return 'Motor Insurance';
+    if (t === 'cyber_insurance') return 'Cyber Insurance';
     if (!t) return 'Insurance';
     return t.replace(/_/g, ' ').replace(/\b\w/g, (ch) => ch.toUpperCase());
   }
 
-  /** Personal Loan, or Life/Health/Motor Insurance. */
+  /** Personal Loan, or Life/Health/Motor/Cyber Insurance. */
   productLabel(lead: { category?: unknown; ins_type?: unknown }): string {
     const cat = this.normalizeCategory(String(lead.category ?? ''));
     if (cat === 'insurance') return this.insTypeLabel(lead.ins_type);
@@ -349,7 +350,7 @@ export class LeadsService {
   /**
    * Gate 2 — same PAN + same product (any mobile):
    * - personal_loan vs personal_loan
-   * - insurance + same ins_type (life / health / motor)
+   * - insurance + same ins_type (life / health / motor / cyber)
    * Different insurance types are allowed. Block unless prior lead is approved.
    * Does NOT block a different PAN merely because the mobile already has this product.
    * Scans open (non-approved) rows — not only the newest — so an older pending
@@ -528,7 +529,7 @@ export class LeadsService {
     if (category === 'insurance' && !ins) {
       return {
         allowed: false,
-        message: 'Please select insurance type (Life, Health, or Motor).',
+        message: 'Please select insurance type (Life, Health, Motor, or Cyber).',
         category,
         categoryLabel: this.categoryLabel(category),
       };
@@ -805,7 +806,7 @@ export class LeadsService {
       if (empErr) return { ok: false, message: empErr };
     }
     if (category === 'insurance' && !ins) {
-      return { ok: false, message: 'Please select insurance type (Life, Health, or Motor).' };
+      return { ok: false, message: 'Please select insurance type (Life, Health, Motor, or Cyber).' };
     }
 
     // Prefer exact product match; fall back to untyped insurance draft for upgrade.
@@ -1055,7 +1056,7 @@ export class LeadsService {
       if (empErr) return { ok: false, message: empErr };
     }
     if (category === 'insurance' && !ins) {
-      return { ok: false, message: 'Please select insurance type (Life, Health, or Motor).' };
+      return { ok: false, message: 'Please select insurance type (Life, Health, Motor, or Cyber).' };
     }
     const gates = await this.evaluateApplicationGates({
       mobileNumber: mobile,
