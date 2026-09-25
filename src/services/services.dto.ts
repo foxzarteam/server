@@ -6,6 +6,9 @@ import {
   Min,
   MinLength,
 } from 'class-validator';
+import type { InsuranceTypePublic } from '../catalog/catalog';
+
+export type { InsuranceTypePublic } from '../catalog/catalog';
 
 export type ServicePublic = {
   id: string;
@@ -17,6 +20,11 @@ export type ServicePublic = {
   isActive: boolean;
   createdAt: string;
   updatedAt: string;
+};
+
+export type PublicCatalog = {
+  services: ServicePublic[];
+  insuranceTypes: InsuranceTypePublic[];
 };
 
 export class AdminUpdateServiceDto {

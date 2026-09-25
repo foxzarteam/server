@@ -22,6 +22,7 @@ import {
 import { PanAuditService } from '../security/pan-audit.service';
 import { UsersService } from '../users/users.service';
 import { WalletService } from '../wallet/wallet.service';
+import { ServicesService } from '../services/services.service';
 import {
   CODE_LOAN_AMOUNT_REQUIRED,
   leadLoanAmount,
@@ -76,6 +77,7 @@ export class LeadsService {
     private readonly panAudit: PanAuditService,
     private readonly usersService: UsersService,
     private readonly walletService: WalletService,
+    private readonly servicesService: ServicesService,
   ) {}
 
   private get leads() {
@@ -526,13 +528,24 @@ export class LeadsService {
   }> {
     const category = this.normalizeCategory(input.category);
     const ins = this.normalizeInsType(category, input.insType);
-    if (category === 'insurance' && !ins) {
-      return {
-        allowed: false,
-        message: 'Please select insurance type (Life, Health, Motor, or Cyber).',
-        category,
-        categoryLabel: this.categoryLabel(category),
-      };
+    if (category === 'insurance') {
+      if (!ins) {
+        return {
+          allowed: false,
+          message: 'Please select insurance type.',
+          category,
+          categoryLabel: this.categoryLabel(category),
+        };
+      }
+      const insOk = await this.servicesService.isAllowedInsuranceType(ins);
+      if (!insOk) {
+        return {
+          allowed: false,
+          message: 'Invalid insurance type.',
+          category,
+          categoryLabel: this.categoryLabel(category),
+        };
+      }
     }
 
     const limit = await this.checkMobilePanLimit(input.mobileNumber, input.pan);
@@ -687,7 +700,10 @@ export class LeadsService {
   }
 
   private normalizeCategory(category?: string | null): string {
-    const c = String(category ?? '').trim();
+    const c = String(category ?? '')
+      .trim()
+      .toLowerCase()
+      .replace(/-/g, '_');
     return c || 'personal_loan';
   }
 
@@ -806,7 +822,7 @@ export class LeadsService {
       if (empErr) return { ok: false, message: empErr };
     }
     if (category === 'insurance' && !ins) {
-      return { ok: false, message: 'Please select insurance type (Life, Health, Motor, or Cyber).' };
+      return { ok: false, message: 'Please select insurance type.' };
     }
 
     // Prefer exact product match; fall back to untyped insurance draft for upgrade.
@@ -1056,7 +1072,7 @@ export class LeadsService {
       if (empErr) return { ok: false, message: empErr };
     }
     if (category === 'insurance' && !ins) {
-      return { ok: false, message: 'Please select insurance type (Life, Health, Motor, or Cyber).' };
+      return { ok: false, message: 'Please select insurance type.' };
     }
     const gates = await this.evaluateApplicationGates({
       mobileNumber: mobile,

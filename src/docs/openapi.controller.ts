@@ -74,16 +74,18 @@ export const OPENAPI_SPEC = {
                   pincode: { type: 'string', example: '302002' },
                   category: {
                     type: 'string',
-                    enum: ['personal_loan', 'insurance'],
                     example: 'personal_loan',
+                    description:
+                      'Lead category = service slug with underscores (personal-loan → personal_loan). New products come from public.services.',
                   },
                   requiredAmount: { type: 'number', example: 500000, description: 'PL only, ₹25,000–₹10,00,000' },
                   employmentType: { type: 'string', enum: ['salaried', 'self_employed'] },
                   netMonthlyIncome: { type: 'number', example: 45000 },
                   insType: {
                     type: 'string',
-                    enum: ['life_insurance', 'health_insurance', 'motor_insurance', 'cyber_insurance'],
-                    description: 'Required when category=insurance',
+                    example: 'cyber_insurance',
+                    description:
+                      'Required when category=insurance. Allowed values from GET /api/services insuranceTypes (public.insurance_types).',
                   },
                   referralCode: { type: 'string', description: 'Partner referral code (optional)' },
                 },

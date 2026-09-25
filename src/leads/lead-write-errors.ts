@@ -49,6 +49,9 @@ export function mapLeadWriteError(message: string | undefined | null): string {
   }
 
   if (m.includes('foreign key') || m.includes('23503')) {
+    if (m.includes('ins_type') || m.includes('insurance_types')) {
+      return 'Invalid insurance type. Please try again.';
+    }
     return 'Linked account is invalid. Please sign in again and retry.';
   }
 

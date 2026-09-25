@@ -11,11 +11,13 @@ import {
   MinLength,
   ValidateIf,
 } from 'class-validator';
+import { FALLBACK_INSURANCE_TYPES, INS_TYPE_SLUG_PATTERN } from '../catalog/catalog';
 import { isMaskedPan, PAN_FORMAT_REGEX } from '../security/pan-crypto';
 import { LEAD_FULL_NAME_REGEX } from './personal-loan-employment';
 
 /** Matches active service slugs stored as lead category (e.g. personal-loan → personal_loan). */
 export const LEAD_CATEGORY_PATTERN = /^[a-z][a-z0-9_]{0,63}$/;
+export { INS_TYPE_SLUG_PATTERN };
 
 export const LOAN_AMT_VALUES = [
   '25000_100000',
@@ -30,12 +32,8 @@ export const LOAN_AMT_VALUES = [
   '900000_1000000',
 ] as const;
 
-export const INS_TYPE_VALUES = [
-  'life_insurance',
-  'health_insurance',
-  'motor_insurance',
-  'cyber_insurance',
-] as const;
+/** Fallback list when `insurance_types` is unavailable. New types come from DB. */
+export const INS_TYPE_VALUES = FALLBACK_INSURANCE_TYPES.map((t) => t.value);
 
 export const EMPLOYMENT_TYPE_VALUES = ['salaried', 'self_employed'] as const;
 
@@ -88,10 +86,10 @@ export class CheckApplicationDto {
   @Matches(LEAD_CATEGORY_PATTERN, { message: 'Invalid category' })
   category?: string;
 
-  /** Required when category is insurance — life / health / motor / cyber are separate products. */
+  /** Required when category is insurance. Allowed values come from `insurance_types`. */
   @ValidateIf((o) => (o.category ?? '') === 'insurance')
   @IsString({ message: 'Insurance type is required' })
-  @IsIn([...INS_TYPE_VALUES], { message: 'Invalid insurance type' })
+  @Matches(INS_TYPE_SLUG_PATTERN, { message: 'Invalid insurance type' })
   insType?: string;
 }
 
@@ -128,7 +126,8 @@ export class CompleteLeadDto {
 
   @IsOptional()
   @IsString()
-  @IsIn([...INS_TYPE_VALUES], { message: 'Invalid insurance type' })
+  @ValidateIf((o) => o.insType != null && o.insType !== '')
+  @Matches(INS_TYPE_SLUG_PATTERN, { message: 'Invalid insurance type' })
   insType?: string;
 
   /** Optional on complete; client apply forms always send it. */
@@ -218,7 +217,7 @@ export class CreateLeadDto {
 
   @ValidateIf((o) => o.category === 'insurance')
   @IsString({ message: 'Insurance type is required' })
-  @IsIn([...INS_TYPE_VALUES], { message: 'Invalid insurance type' })
+  @Matches(INS_TYPE_SLUG_PATTERN, { message: 'Invalid insurance type' })
   insType?: string;
 
   /** Required when category is personal_loan */
@@ -314,7 +313,8 @@ export class UpdateLeadDto {
 
   @IsOptional()
   @IsString()
-  @IsIn([...INS_TYPE_VALUES], { message: 'Invalid insurance type' })
+  @ValidateIf((o) => o.insType != null && o.insType !== '')
+  @Matches(INS_TYPE_SLUG_PATTERN, { message: 'Invalid insurance type' })
   insType?: string | null;
 
   @IsOptional()
@@ -399,7 +399,8 @@ export class AdminCreateLeadDto {
 
   @IsOptional()
   @IsString()
-  @IsIn([...INS_TYPE_VALUES], { message: 'Invalid insurance type' })
+  @ValidateIf((o) => o.insType != null && o.insType !== '')
+  @Matches(INS_TYPE_SLUG_PATTERN, { message: 'Invalid insurance type' })
   insType?: string;
 
   /** Required when category is personal_loan */

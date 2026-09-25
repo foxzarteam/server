@@ -1,16 +1,29 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { SupabaseClient } from '@supabase/supabase-js';
-import { TABLE_SERVICES } from '../common/constants';
+import {
+  FALLBACK_INSURANCE_TYPES,
+  INS_TYPE_SLUG_PATTERN,
+  type InsuranceTypePublic,
+} from '../catalog/catalog';
+import { TABLE_INSURANCE_TYPES, TABLE_SERVICES } from '../common/constants';
 import { SUPABASE_CLIENT } from '../config/supabase';
-import type { ServicePublic } from './services.dto';
+import type { PublicCatalog, ServicePublic } from './services.dto';
 import { AdminUpdateServiceDto } from './services.dto';
+
+const CATALOG_TTL_MS = 60_000;
 
 @Injectable()
 export class ServicesService {
+  private catalogCache: { at: number; value: PublicCatalog } | null = null;
+
   constructor(@Inject(SUPABASE_CLIENT) private readonly supabase: SupabaseClient) {}
 
   private get table() {
     return this.supabase.from(TABLE_SERVICES);
+  }
+
+  private invalidateCatalogCache() {
+    this.catalogCache = null;
   }
 
   private rowToPublic(item: Record<string, unknown>): ServicePublic {
@@ -36,6 +49,47 @@ export class ServicesService {
     if (error) return [];
 
     return (data ?? []).map((item) => this.rowToPublic(item as Record<string, unknown>));
+  }
+
+  private async fetchActiveInsuranceTypes(): Promise<InsuranceTypePublic[]> {
+    const { data, error } = await this.supabase
+      .from(TABLE_INSURANCE_TYPES)
+      .select('slug, label, sort_order, is_active')
+      .eq('is_active', true)
+      .order('sort_order', { ascending: true });
+
+    if (error || !data?.length) return FALLBACK_INSURANCE_TYPES.map((t) => ({ ...t }));
+
+    const types: InsuranceTypePublic[] = [];
+    for (const row of data) {
+      const value = String((row as { slug?: unknown }).slug ?? '')
+        .trim()
+        .toLowerCase();
+      const label = String((row as { label?: unknown }).label ?? '').trim();
+      if (!INS_TYPE_SLUG_PATTERN.test(value) || !label) continue;
+      types.push({ value, label });
+    }
+    return types.length > 0 ? types : FALLBACK_INSURANCE_TYPES.map((t) => ({ ...t }));
+  }
+
+  async getPublicCatalog(): Promise<PublicCatalog> {
+    if (this.catalogCache && Date.now() - this.catalogCache.at < CATALOG_TTL_MS) {
+      return this.catalogCache.value;
+    }
+    const [services, insuranceTypes] = await Promise.all([
+      this.getActivePublic(),
+      this.fetchActiveInsuranceTypes(),
+    ]);
+    const value = { services, insuranceTypes };
+    this.catalogCache = { at: Date.now(), value };
+    return value;
+  }
+
+  async isAllowedInsuranceType(slug: string): Promise<boolean> {
+    const t = slug.trim().toLowerCase();
+    if (!INS_TYPE_SLUG_PATTERN.test(t)) return false;
+    const types = await this.fetchActiveInsuranceTypes();
+    return types.some((x) => x.value === t);
   }
 
   async getAll(): Promise<Record<string, unknown>[]> {
@@ -64,6 +118,7 @@ export class ServicesService {
     if (Object.keys(payload).length === 1) return null;
 
     const { data, error } = await this.table.update(payload).eq('id', id).select().single();
+    this.invalidateCatalogCache();
 
     if (error) {
       if (process.env.NODE_ENV !== 'production') {
@@ -77,6 +132,7 @@ export class ServicesService {
 
   async deleteById(id: string): Promise<boolean> {
     const { error } = await this.table.delete().eq('id', id);
+    this.invalidateCatalogCache();
 
     if (error) {
       if (process.env.NODE_ENV !== 'production') {

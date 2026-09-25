@@ -12,6 +12,7 @@ import { mapLeadWriteError } from '../src/leads/lead-write-errors';
 import { leadFullNameError, personalLoanEmploymentError } from '../src/leads/personal-loan-employment';
 import { personalLoanAmountError } from '../src/wallet/loan-amount';
 import { sanitizePublicLead } from '../src/security/pan-crypto';
+import { slugToLeadCategory, isInsTypeSlug } from '../src/catalog/catalog';
 
 // —— client IP ——
 assert.strictEqual(
@@ -86,6 +87,10 @@ assert.strictEqual(
 );
 assert.ok(mapLeadWriteError("Could not find the 'ip_location' column of 'leads' in the schema cache").includes('updating'));
 assert.strictEqual(
+  mapLeadWriteError('insert or update on table "leads" violates foreign key constraint "leads_ins_type_fkey"'),
+  'Invalid insurance type. Please try again.',
+);
+assert.strictEqual(
   mapLeadWriteError('something random'),
   'Failed to create lead. Please try again.',
 );
@@ -103,5 +108,11 @@ assert.strictEqual('ip' in pub, false);
 assert.strictEqual('ip_location' in pub, false);
 assert.strictEqual('notes' in pub, false);
 assert.strictEqual('pan' in pub, false);
+
+assert.strictEqual(slugToLeadCategory('personal-loan'), 'personal_loan');
+assert.strictEqual(slugToLeadCategory('insurance'), 'insurance');
+assert.strictEqual(slugToLeadCategory('gold-loan'), 'gold_loan');
+assert.strictEqual(isInsTypeSlug('cyber_insurance'), true);
+assert.strictEqual(isInsTypeSlug('Travel Insurance'), false);
 
 console.log('test-lead-quality: all asserts passed');
