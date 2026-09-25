@@ -17,8 +17,8 @@ import { AdminModule } from './admin/admin.module';
 import { PartnerModule } from './partner/partner.module';
 import { CustomerModule } from './customer/customer.module';
 import { ContactModule } from './contact/contact.module';
-import { ChatModule } from './chat/chat.module';
 import { WhatsappModule } from './whatsapp/whatsapp.module';
+import { AgentModule } from './agent/agent.module';
 
 @Module({
   imports: [
@@ -41,8 +41,8 @@ import { WhatsappModule } from './whatsapp/whatsapp.module';
     PartnerModule,
     CustomerModule,
     ContactModule,
-    ChatModule,
     WhatsappModule,
+    AgentModule,
   ],
   providers: [{ provide: APP_FILTER, useClass: PublicExceptionFilter }],
 })

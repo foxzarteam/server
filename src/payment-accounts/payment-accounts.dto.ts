@@ -1,4 +1,4 @@
-import { IsIn, IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
+import { IsIn, IsOptional, IsString, MaxLength } from 'class-validator';
 
 export class UpsertPaymentAccountDto {
   @IsString()
@@ -19,9 +19,4 @@ export class UpsertPaymentAccountDto {
   @IsString()
   @MaxLength(20)
   ifscCode?: string;
-
-  @IsOptional()
-  @IsString()
-  @MinLength(20)
-  idToken?: string;
 }

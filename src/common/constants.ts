@@ -11,7 +11,6 @@ export const TABLE_WALLET = 'wallet';
 /** Admin/staff panel users (`public.auth`). */
 export const TABLE_AUTH = 'auth';
 export const TABLE_CONTACT = 'contact';
-export const TABLE_CHAT = 'chat';
 /** PAN reveal / partner-send audit trail. */
 export const TABLE_PAN_ACCESS_AUDIT = 'pan_access_audit';
 /** Max 4 unique PAN fingerprints per mobile. */
@@ -27,12 +26,9 @@ export const MSG_OTP_VERIFIED = 'OTP verified successfully.';
 export const MSG_OTP_FIREBASE_NOT_CONFIGURED =
   'Firebase verification is not configured on the server.';
 export const MSG_OTP_FIREBASE_MISMATCH = 'Mobile number does not match Firebase token.';
-export const MSG_OTP_PHONE_NOT_VERIFIED = 'Please verify your mobile number with OTP first.';
 export const MSG_OTP_DAILY_LIMIT =
   `Daily OTP limit reached for this mobile number (max ${OTP_MAX_SENDS_PER_DAY} OTPs per day). Please try again tomorrow.`;
 export const PHONE_VERIFICATION_WINDOW_MINUTES = 30;
-
-export const MSG_USER_CREATE_FAILED = 'Failed to create user';
 
 export function getCurrentIsoTime(): string {
   return new Date().toISOString();

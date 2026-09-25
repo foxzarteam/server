@@ -25,26 +25,13 @@ import {
 } from '../common/admin-actor';
 import { AdminCrmGuard, AdminOnlyGuard, AdminPanelGuard } from '../common/admin-crm.guard';
 import { adminInternalKeyOk } from '../common/admin-internal';
-import { MobileAccessGuard } from '../common/mobile-access.guard';
-import {
-  assertLeadPiiAccess,
-  assertMobileAccess,
-  extractIdToken,
-} from '../common/phone-access';
-import { MSG_OTP_PHONE_NOT_VERIFIED } from '../common/constants';
-import { OtpService } from '../otp/otp.service';
-import { UsersService } from '../users/users.service';
 import { sanitizePublicLead } from '../security/pan-crypto';
 import { allowRateLimitedAction } from '../security/rate-limit';
 import { extractClientIp } from '../common/client-ip';
-import { toPublicErrorMessage } from '../common/public-error';
 import {
   AdminCreateLeadDto,
-  CheckApplicationDto,
-  CompleteLeadDto,
   CreateLeadDto,
   RevealPanDto,
-  StartLeadDto,
   UpdateLeadDto,
 } from './leads.dto';
 import { LeadsService } from './leads.service';
@@ -61,11 +48,7 @@ import { CODE_LOAN_AMOUNT_REQUIRED } from '../wallet/loan-amount';
 
 @Controller('leads')
 export class LeadsController {
-  constructor(
-    private readonly leadsService: LeadsService,
-    private readonly otpService: OtpService,
-    private readonly usersService: UsersService,
-  ) {}
+  constructor(private readonly leadsService: LeadsService) {}
 
   private throwLeadWriteFailure(message: string, code?: string): never {
     const body = {
@@ -127,90 +110,6 @@ export class LeadsController {
     );
   }
 
-  @Get()
-  @HttpCode(HttpStatus.OK)
-  async getAll() {
-    return {
-      success: true,
-      message: 'Leads API is working! Prefer POST /api/leads/apply for new applications.',
-      endpoints: {
-        apply: 'POST /api/leads/apply',
-        start: 'POST /api/leads/start',
-        getByUser: 'GET /api/leads/user/:userId (auth required)',
-      },
-    };
-  }
-
-  @Post('start')
-  @HttpCode(HttpStatus.OK)
-  async start(@Body() dto: StartLeadDto, @Req() req: Request) {
-    const verified = await this.otpService.hasRecentPhoneVerification(
-      dto.mobileNumber,
-    );
-    if (!verified) {
-      return {
-        success: false,
-        message: MSG_OTP_PHONE_NOT_VERIFIED,
-      };
-    }
-
-    const result = await this.leadsService.startLead(
-      dto.mobileNumber,
-      dto.category,
-      this.clientIp(req, dto.clientIp),
-      dto.referralCode,
-    );
-
-    if (!result.ok || !result.lead) {
-      return {
-        success: false,
-        message: result.message || 'Failed to save mobile number. Please try again.',
-      };
-    }
-
-    return {
-      success: true,
-      data: this.sanitizePublicLead(result.lead),
-      isDraft: result.isDraft === true,
-    };
-  }
-
-  /**
-   * Public pre-OTP check: Gate 1 max 4 unique PANs per mobile, then same PAN + product.
-   * Does not require Firebase/OTP — only rate-limited.
-   */
-  @Post('check-application')
-  @HttpCode(HttpStatus.OK)
-  async checkApplication(@Body() dto: CheckApplicationDto, @Req() req: Request) {
-    const mobile = dto.mobileNumber.trim();
-    const ip = this.clientIp(req) || 'unknown';
-    if (
-      !allowRateLimitedAction(`lead-check:${mobile}`, 12, 60_000) ||
-      !allowRateLimitedAction(`lead-check-ip:${ip}`, 30, 60_000)
-    ) {
-      throw new BadRequestException('Too many checks. Please try again in a minute.');
-    }
-
-    const result = await this.leadsService.checkApplicationAllowed({
-      mobileNumber: mobile,
-      pan: dto.pan,
-      category: dto.category,
-      insType: dto.insType,
-    });
-
-    return {
-      success: true,
-      allowed: result.allowed,
-      message: result.message,
-      code: result.code,
-      status: result.status,
-      statusLabel: result.statusLabel,
-      category: result.category,
-      categoryLabel: result.categoryLabel,
-      insType: result.insType,
-    };
-  }
-
   /**
    * Public apply: persist the lead on form submit (Verified = No).
    * OTP is a later step — verify-firebase marks Verified = Yes.
@@ -238,132 +137,6 @@ export class LeadsController {
       this.throwLeadWriteFailure(result.message || 'Failed to create lead', result.code);
     }
     return { success: true, data: this.sanitizePublicLead(result.lead) };
-  }
-
-  @Patch(':id/complete')
-  @HttpCode(HttpStatus.OK)
-  async complete(
-    @Param('id') id: string,
-    @Body() dto: CompleteLeadDto,
-    @Headers() headers: Record<string, string | string[] | undefined>,
-    @Headers('x-admin-internal-key') adminKey: string | undefined,
-    @Req() req: Request,
-  ) {
-    const existing = await this.leadsService.getById(id);
-    if (!existing) {
-      return { success: false, message: 'Lead not found.' };
-    }
-    const mobile = String(existing.mobile_number ?? '').trim();
-    await assertLeadPiiAccess(this.otpService, mobile, {
-      adminKey,
-      idToken: extractIdToken(headers),
-    });
-
-    const result = await this.leadsService.completeLead(id, dto, {
-      clientIp: this.clientIp(req, dto.clientIp),
-    });
-    if (!result.ok) {
-      this.throwLeadWriteFailure(result.message || 'Failed to update details.', result.code);
-    }
-    return { success: true, data: this.sanitizePublicLead(result.lead) };
-  }
-
-  @Post()
-  @UseGuards(MobileAccessGuard)
-  @HttpCode(HttpStatus.CREATED)
-  async create(@Body() dto: CreateLeadDto, @Req() req: Request) {
-    try {
-      const existing = await this.leadsService.getByMobileAndCategory(
-        dto.mobileNumber,
-        dto.category || 'personal_loan',
-        dto.category === 'insurance' ? dto.insType ?? null : null,
-      );
-      if (existing && this.leadsService.isDraftLead(existing)) {
-        const updated = await this.leadsService.updateById(String(existing['id']), {
-          pan: dto.pan,
-          fullName: dto.fullName,
-          category: dto.category,
-          email: dto.email,
-          pincode: dto.pincode,
-          requiredAmount: dto.requiredAmount,
-          loanAmt: dto.category === 'personal_loan' ? dto.loanAmt ?? null : null,
-          insType: dto.category === 'insurance' ? dto.insType ?? null : null,
-          employmentType:
-            dto.category === 'personal_loan' ? dto.employmentType ?? null : null,
-          netMonthlyIncome:
-            dto.category === 'personal_loan' ? dto.netMonthlyIncome ?? null : null,
-          clientIp: this.clientIp(req, dto.clientIp),
-        });
-        if (!updated) {
-          return { success: false, message: 'Failed to update lead' };
-        }
-        return { success: true, data: this.sanitizePublicLead(updated) };
-      }
-
-      const lead = await this.leadsService.create(dto, { clientIp: this.clientIp(req, dto.clientIp) });
-      if (!lead) {
-        return { success: false, message: 'Failed to create lead' };
-      }
-      return { success: true, data: this.sanitizePublicLead(lead) };
-    } catch (error) {
-      if (error instanceof LeadRuleError) {
-        return {
-          success: false,
-          message: error.message,
-          code: error.code,
-        };
-      }
-      if (process.env.NODE_ENV !== 'production') {
-        console.error('LeadsController.create', error);
-      }
-      return {
-        success: false,
-        message: error instanceof Error
-          ? toPublicErrorMessage(error.message, 'Failed to create lead')
-          : 'Failed to create lead',
-      };
-    }
-  }
-
-  @Get('user/:userId')
-  @HttpCode(HttpStatus.OK)
-  async getByUserId(
-    @Param('userId') userId: string,
-    @Headers() headers: Record<string, string | string[] | undefined>,
-    @Headers('x-admin-internal-key') adminKey: string | undefined,
-  ) {
-    if (!adminInternalKeyOk(adminKey)) {
-      const user = await this.usersService.getById(userId);
-      const mobile = String(user?.mobile_number ?? '').trim();
-      if (!mobile) throw new UnauthorizedException('Unauthorized');
-      await assertMobileAccess(this.otpService, mobile, {
-        adminKey,
-        idToken: extractIdToken(headers),
-      });
-    }
-    const leads = await this.leadsService.getByUserId(userId);
-    return { success: true, data: leads.map((l) => this.sanitizePublicLead(l)) };
-  }
-
-  @Get('user/:userId/category/:category')
-  @HttpCode(HttpStatus.OK)
-  async getByCategory(
-    @Param('userId') userId: string,
-    @Param('category') category: string,
-    @Headers() headers: Record<string, string | string[] | undefined>,
-    @Headers('x-admin-internal-key') adminKey: string | undefined,
-  ) {
-    if (!adminInternalKeyOk(adminKey)) {
-      const user = await this.usersService.getById(userId);
-      const mobile = String(user?.mobile_number ?? '').trim();
-      if (!mobile) throw new UnauthorizedException('Unauthorized');
-      await assertMobileAccess(this.otpService, mobile, {
-        adminKey,
-        idToken: extractIdToken(headers),
-      });
-    }
-    const leads = await this.leadsService.getByCategory(userId, category);
-    return { success: true, data: leads.map((l) => this.sanitizePublicLead(l)) };
   }
 
   @Get('admin/all')

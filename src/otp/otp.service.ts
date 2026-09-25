@@ -91,11 +91,6 @@ export class OtpService {
     };
   }
 
-  /** Same as requestSend (legacy /api/otp/send — used by az_app). */
-  async send(dto: SendOtpDto): Promise<OtpResult> {
-    return this.requestSend(dto);
-  }
-
   /**
    * Mark latest unverified send for this mobile as verified.
    * Does NOT insert a second row.

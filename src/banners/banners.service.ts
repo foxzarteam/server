@@ -38,43 +38,4 @@ export class BannersService {
     if (error) return [];
     return this.mapToResponseDto(data || []);
   }
-
-  async getByCategory(category: string): Promise<BannerPublic[]> {
-    const normalizedCategory = category.toLowerCase().trim();
-
-    let { data, error } = await this.banners
-      .select()
-      .eq('is_active', true)
-      .eq('category', normalizedCategory)
-      .order('display_order', { ascending: true })
-      .order('created_at', { ascending: false });
-
-    if (!error && (!data || data.length === 0)) {
-      const { data: allData, error: allError } = await this.banners
-        .select()
-        .eq('is_active', true)
-        .order('display_order', { ascending: true })
-        .order('created_at', { ascending: false });
-
-      if (!allError && allData) {
-        data = allData.filter(
-          (row) => (row.category as string)?.toLowerCase() === normalizedCategory,
-        );
-        error = null;
-      }
-    }
-
-    if (error) return [];
-    return this.mapToResponseDto(data || []);
-  }
-
-  async getAll(): Promise<BannerPublic[]> {
-    const { data, error } = await this.banners
-      .select()
-      .order('display_order', { ascending: true })
-      .order('created_at', { ascending: false });
-
-    if (error) return [];
-    return this.mapToResponseDto(data || []);
-  }
 }

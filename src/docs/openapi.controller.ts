@@ -34,27 +34,34 @@ export const OPENAPI_SPEC = {
     },
     '/users/agent/login': {
       post: {
-        summary: 'Partner login (mobile + 4-digit PIN)',
-        responses: { '200': { description: 'Partner profile' }, '401': { description: 'Invalid' } },
+        summary: 'Partner login (mobile + 4-digit PIN). Returns profile + session token for az_app.',
+        responses: { '200': { description: 'Partner profile + token' }, '401': { description: 'Invalid' } },
       },
     },
     '/users/agent/register': {
       post: {
-        summary: 'Public partner register (name + mobile + 4-digit PIN, no OTP)',
+        summary: 'Public partner register (name + mobile + 4-digit PIN, no OTP). Returns token.',
         responses: {
-          '201': { description: 'Created' },
+          '201': { description: 'Created + token' },
           '409': { description: 'Mobile already registered' },
         },
       },
+    },
+    '/agent/me': {
+      get: { summary: 'Partner profile (Bearer token)', responses: { '200': { description: 'User' } } },
+    },
+    '/agent/leads': {
+      get: { summary: 'Leads attributed to this partner', responses: { '200': { description: 'List' } } },
+      post: { summary: 'Create lead as this partner (always pending)', responses: { '201': { description: 'Created' } } },
+    },
+    '/agent/wallet': {
+      get: { summary: 'Partner wallet', responses: { '200': { description: 'Wallet' } } },
     },
     '/otp/request-send': {
       post: { summary: 'Reserve OTP send slot (daily + IP limits)', responses: { '200': { description: 'Allowed or blocked' } } },
     },
     '/otp/verify-firebase': {
       post: { summary: 'Verify Firebase idToken against mobile', responses: { '200': { description: 'Verified' } } },
-    },
-    '/leads/check-application': {
-      post: { summary: 'Pre-OTP PAN/product gate', responses: { '200': { description: 'allowed + status' } } },
     },
     '/leads/apply': {
       post: {
@@ -98,12 +105,6 @@ export const OPENAPI_SPEC = {
           '409': { description: 'PAN/product conflict or 4-PAN mobile limit' },
         },
       },
-    },
-    '/leads/start': {
-      post: { summary: 'Create/reuse draft after OTP', responses: { '201': { description: 'Draft' } } },
-    },
-    '/leads/{id}/complete': {
-      patch: { summary: 'Complete draft (phone access required)', responses: { '200': { description: 'Updated' } } },
     },
     '/leads/admin': {
       post: { summary: 'CRM/partner manual lead create (signed actor)', responses: { '201': { description: 'Created' } } },

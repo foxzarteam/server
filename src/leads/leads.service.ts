@@ -42,7 +42,7 @@ import {
 import { withDecryptedPanForPartner } from '../security/pan-partner';
 import { allowRateLimitedAction } from '../security/rate-limit';
 import {
-  CompleteLeadDto,
+  AdminCreateLeadDto,
   CreateLeadDto,
   UpdateLeadDto,
 } from './leads.dto';
@@ -583,24 +583,6 @@ export class LeadsService {
     return { allowed: true, category, insType: ins };
   }
 
-  async checkApplicationAllowed(input: {
-    mobileNumber: string;
-    pan: string;
-    category?: string | null;
-    insType?: string | null;
-  }): Promise<{
-    allowed: boolean;
-    message?: string;
-    code?: string;
-    status?: string;
-    statusLabel?: string;
-    category?: string;
-    categoryLabel?: string;
-    insType?: string | null;
-  }> {
-    return this.evaluateApplicationGates(input);
-  }
-
   async getByMobile(mobileNumber: string): Promise<Record<string, unknown> | null> {
     const mobile = mobileNumber.trim();
     const { data, error } = await this.leads
@@ -963,188 +945,7 @@ export class LeadsService {
     return { ok: true, lead: this.safeLead(lead)! };
   }
 
-  async createDraft(
-    mobileNumber: string,
-    category: string,
-    clientIp?: string | null,
-    agentId?: string | null,
-  ): Promise<Record<string, unknown> | null> {
-    const payload: Record<string, unknown> = {
-      pan: LEAD_DRAFT_PAN,
-      pan_encrypted: null,
-      pan_hash: null,
-      mobile_number: mobileNumber.trim(),
-      full_name: LEAD_DRAFT_FULL_NAME,
-      email: null,
-      pincode: null,
-      required_amount: null,
-      category: category || 'personal_loan',
-      status: 'pending',
-      is_active: true,
-    };
-    if (clientIp) Object.assign(payload, this.ipFields(clientIp));
-    if (agentId) payload.agent_id = agentId;
-
-    const { data, errorMessage } = await this.insertLead(payload, 'LeadsService.createDraft');
-    if (!data) {
-      console.error('LeadsService.createDraft failed:', errorMessage);
-      return null;
-    }
-
-    this.scheduleIpLocationFill(data.id != null ? String(data.id) : null, clientIp);
-    return this.safeLead(data);
-  }
-
-  async startLead(
-    mobileNumber: string,
-    category?: string,
-    clientIp?: string | null,
-    referralCode?: string,
-  ): Promise<{
-    ok: boolean;
-    lead?: Record<string, unknown>;
-    isDraft?: boolean;
-    message?: string;
-  }> {
-    const cat = this.normalizeCategory(category);
-    const existing = await this.getByMobileAndCategory(mobileNumber, cat);
-    const agentId = await this.usersService.getIdByReferralCode(referralCode);
-
-    if (existing) {
-      // Reuse drafts. Do not block a new PAN merely because this mobile already
-      // has an open application for the same product — PAN is checked on complete/apply.
-      if (this.isDraftLead(existing)) {
-        if (agentId && !existing.agent_id && existing.id) {
-          const updated = await this.updateById(String(existing.id), { agentId });
-          return {
-            ok: true,
-            lead: this.safeLead(updated ?? existing)!,
-            isDraft: true,
-          };
-        }
-        return {
-          ok: true,
-          lead: this.safeLead(existing)!,
-          isDraft: true,
-        };
-      }
-      // Prior completed lead — create a fresh draft for the next apply.
-    }
-
-    const created = await this.createDraft(mobileNumber, cat, clientIp, agentId);
-    if (!created) return { ok: false, message: 'Failed to save mobile number.' };
-    return { ok: true, lead: created, isDraft: true };
-  }
-
-  async completeLead(
-    id: string,
-    dto: CompleteLeadDto,
-    meta?: { clientIp?: string | null },
-  ): Promise<
-    | { ok: true; lead: Record<string, unknown> }
-    | { ok: false; message: string; code?: string }
-  > {
-    const panUpper = normalizePan(dto.pan);
-    if (!isValidPanFormat(panUpper)) {
-      return { ok: false, message: 'Invalid PAN format.' };
-    }
-
-    const existing = await this.leads
-      .select()
-      .eq('id', id)
-      .eq('is_active', true)
-      .maybeSingle();
-    if (existing.error || !existing.data) {
-      return { ok: false, message: 'Application not found.' };
-    }
-
-    const row = existing.data as Record<string, unknown>;
-    if (this.isApprovedStatus(row.status)) {
-      return { ok: false, message: 'This application is already approved.' };
-    }
-    const mobile = String(row['mobile_number'] ?? '').trim();
-    const category = this.normalizeCategory(
-      dto.category?.trim() || String(row['category'] ?? ''),
-    );
-    const ins = this.normalizeInsType(category, dto.insType ?? String(row['ins_type'] ?? ''));
-    if (category === 'personal_loan') {
-      const empErr = this.personalLoanEmploymentError(dto);
-      if (empErr) return { ok: false, message: empErr };
-    }
-    if (category === 'insurance' && !ins) {
-      return { ok: false, message: 'Please select insurance type.' };
-    }
-    const gates = await this.evaluateApplicationGates({
-      mobileNumber: mobile,
-      pan: panUpper,
-      category,
-      insType: ins,
-      ignoreLeadId: id,
-    });
-    if (!gates.allowed) {
-      return {
-        ok: false,
-        message: gates.message || 'Application not allowed.',
-        code: gates.code,
-      };
-    }
-
-    const update: UpdateLeadDto = {
-      pan: panUpper,
-      fullName: dto.fullName.trim(),
-      category: dto.category ?? category,
-      status: 'pending',
-      otpVerified: true,
-    };
-
-    if (dto.pincode?.trim()) {
-      update.pincode = dto.pincode.trim();
-    }
-    if (meta?.clientIp) {
-      update.clientIp = meta.clientIp;
-    }
-    if (!row.agent_id) {
-      const agentId = await this.usersService.getIdByReferralCode(dto.referralCode);
-      if (agentId) update.agentId = agentId;
-    }
-
-    if (category === 'personal_loan') {
-      const amounts = resolvePersonalLoanAmounts({
-        requiredAmount: dto.requiredAmount,
-        loanAmt: dto.loanAmt,
-      });
-      update.requiredAmount = amounts.requiredAmount;
-      update.loanAmt = amounts.loanAmt;
-      update.insType = null;
-      update.employmentType = dto.employmentType;
-      update.netMonthlyIncome = dto.netMonthlyIncome;
-    } else if (category === 'insurance') {
-      update.insType = ins;
-      update.loanAmt = null;
-      update.requiredAmount = null;
-      update.employmentType = null;
-      update.netMonthlyIncome = null;
-    }
-
-    const lead = await this.updateById(id, update).catch((err) => {
-      if (err instanceof LeadRuleError) {
-        return err;
-      }
-      throw err;
-    });
-    if (lead instanceof LeadRuleError) {
-      return { ok: false, message: lead.message, code: lead.code };
-    }
-    if (!lead) {
-      return {
-        ok: false,
-        message: 'Failed to update details. Please check PAN and try again.',
-      };
-    }
-    return { ok: true, lead };
-  }
-
-  async create(dto: CreateLeadDto, meta?: { clientIp?: string | null }): Promise<Record<string, unknown> | null> {
+  async create(dto: CreateLeadDto, meta?: { clientIp?: string | null; agentId?: string | null }): Promise<Record<string, unknown> | null> {
     const panUpper = normalizePan(dto.pan);
     if (!isValidPanFormat(panUpper)) {
       return null;
@@ -1196,9 +997,14 @@ export class LeadsService {
     };
 
     // Public/admin insert: never trust client-supplied userId (commission IDOR).
-    // Partner attribution is referralCode (public) or a later admin/agent patch.
-    const agentId = await this.usersService.getIdByReferralCode(dto.referralCode);
-    if (agentId) payload.agent_id = agentId;
+    // Partner app passes agentId from the session token. Public apply uses referralCode.
+    const forcedAgent = meta?.agentId?.trim();
+    if (forcedAgent) {
+      payload.agent_id = forcedAgent;
+    } else {
+      const agentId = await this.usersService.getIdByReferralCode(dto.referralCode);
+      if (agentId) payload.agent_id = agentId;
+    }
     Object.assign(payload, this.ipFields(meta?.clientIp));
 
     if (category === 'personal_loan') {
@@ -1240,39 +1046,79 @@ export class LeadsService {
     return this.safeLead({ ...data, otp_verified: true });
   }
 
-  async getByUserId(userId: string): Promise<Record<string, unknown>[]> {
-    const { data, error } = await this.leads
-      .select()
-      .eq('user_id', userId)
-      .eq('is_active', true)
-      .order('created_at', { ascending: false });
-
-    if (error) {
-      if (process.env.NODE_ENV !== 'production') {
-        console.error('LeadsService.getByUserId', error);
-      }
-      return [];
+  /** Partner app / panel: always pending, always attributed to this agent. */
+  async createForPartner(
+    dto: AdminCreateLeadDto,
+    agentId: string,
+  ): Promise<{
+    ok: true;
+    lead: Record<string, unknown>;
+  } | {
+    ok: false;
+    message: string;
+    code?: string;
+    field?: string;
+  }> {
+    const uid = agentId.trim();
+    if (!uid) {
+      return { ok: false, message: 'Unauthorized' };
     }
 
-    return this.safeLeads((data as Record<string, unknown>[]) || []);
-  }
-
-  async getByCategory(userId: string, category: string): Promise<Record<string, unknown>[]> {
-    const { data, error } = await this.leads
-      .select()
-      .eq('user_id', userId)
-      .eq('category', category)
-      .eq('is_active', true)
-      .order('created_at', { ascending: false });
-
-    if (error) {
-      if (process.env.NODE_ENV !== 'production') {
-        console.error('LeadsService.getByCategory', error.message);
-      }
-      return [];
+    const category = this.normalizeCategory(dto.category || 'personal_loan');
+    const insType = category === 'insurance' ? dto.insType ?? null : null;
+    const gates = await this.evaluateApplicationGates({
+      mobileNumber: dto.mobileNumber,
+      pan: dto.pan,
+      category,
+      insType,
+    });
+    if (!gates.allowed) {
+      return {
+        ok: false,
+        field: gates.code === CODE_MOBILE_PAN_LIMIT_REACHED ? 'mobileNumber' : 'pan',
+        message: gates.message || MSG_MOBILE_PAN_LIMIT_REACHED,
+        code: gates.code,
+      };
     }
 
-    return this.safeLeads((data as Record<string, unknown>[]) || []);
+    let created: Record<string, unknown> | null;
+    try {
+      created = await this.create(
+        {
+          pan: dto.pan,
+          mobileNumber: dto.mobileNumber,
+          fullName: dto.fullName,
+          email: dto.email,
+          pincode: dto.pincode,
+          requiredAmount: dto.requiredAmount,
+          category: dto.category,
+          loanAmt: dto.loanAmt,
+          insType: dto.insType,
+          employmentType: dto.employmentType,
+          netMonthlyIncome: dto.netMonthlyIncome,
+        },
+        { agentId: uid },
+      );
+    } catch (err) {
+      if (err instanceof LeadRuleError) {
+        return {
+          ok: false,
+          field: err.code === CODE_MOBILE_PAN_LIMIT_REACHED ? 'mobileNumber' : 'pan',
+          message: err.message,
+          code: err.code,
+        };
+      }
+      throw err;
+    }
+
+    if (!created?.id) {
+      return {
+        ok: false,
+        message: 'Failed to create lead. Check PAN / mobile and try again.',
+      };
+    }
+
+    return { ok: true, lead: created };
   }
 
   async getAll(): Promise<Record<string, unknown>[]> {

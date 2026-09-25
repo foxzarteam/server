@@ -17,14 +17,7 @@ import { OtpService } from './otp.service';
 export class OtpController {
   constructor(private readonly otpService: OtpService) {}
 
-  /** Dev / legacy: create OTP session row before or after client SMS. */
-  @Post('send')
-  @HttpCode(HttpStatus.OK)
-  async send(@Body() dto: SendOtpDto) {
-    return this.otpService.send(dto);
-  }
-
-  /** Prefer this: rate-limit check + insert send row before Firebase SMS. */
+  /** Rate-limit check + insert send row before Firebase SMS. */
   @Post('request-send')
   @HttpCode(HttpStatus.OK)
   async requestSend(@Body() dto: SendOtpDto, @Req() req: Request) {
