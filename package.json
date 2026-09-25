@@ -13,8 +13,9 @@
     "test:mobile-pan": "npx ts-node --transpile-only scripts/test-mobile-pan-limit.ts",
     "test:wallet": "npx ts-node --transpile-only scripts/test-wallet-sync.ts",
     "test:public-error": "npx ts-node --transpile-only scripts/test-public-error.ts",
+    "test:whatsapp": "npx ts-node --transpile-only scripts/test-whatsapp-webhook.ts",
     "test:authz": "npx ts-node --transpile-only scripts/test-authz-gates.ts",
-    "test": "npm run test:pan && npm run test:leads && npm run test:mobile-pan && npm run test:wallet && npm run test:public-error && npm run test:authz",
+    "test": "npm run test:pan && npm run test:leads && npm run test:mobile-pan && npm run test:wallet && npm run test:public-error && npm run test:whatsapp && npm run test:authz",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
