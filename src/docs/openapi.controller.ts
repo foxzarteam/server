@@ -73,7 +73,7 @@ export const OPENAPI_SPEC = {
             'application/json': {
               schema: {
                 type: 'object',
-                required: ['pan', 'mobileNumber', 'fullName', 'category', 'pincode'],
+                required: ['pan', 'mobileNumber', 'fullName', 'category', 'pincode', 'consentAccepted'],
                 properties: {
                   pan: { type: 'string', example: 'ABCDE1234F' },
                   mobileNumber: { type: 'string', example: '9876543210' },
@@ -95,6 +95,12 @@ export const OPENAPI_SPEC = {
                       'Required when category=insurance. Allowed values from GET /api/services insuranceTypes (public.insurance_types).',
                   },
                   referralCode: { type: 'string', description: 'Partner referral code (optional)' },
+                  consentAccepted: {
+                    type: 'boolean',
+                    example: true,
+                    description:
+                      'Must be true. Applicant checked T&C, Privacy Policy, and contact consent.',
+                  },
                 },
               },
             },

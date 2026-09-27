@@ -169,6 +169,10 @@ export class LeadsService {
         return { data: (data as Record<string, unknown>) ?? null };
       }
       const col = this.missingColumnFromError(error.message);
+      if (col === 'consent_accepted') {
+        console.error(`${logLabel}: leads.consent_accepted column is missing`);
+        return { data: null, errorMessage: error.message };
+      }
       if (col && Object.prototype.hasOwnProperty.call(body, col)) {
         console.error(`${logLabel}: missing column "${col}", retrying without it`);
         const next = { ...body };
@@ -199,6 +203,10 @@ export class LeadsService {
         return { data: (data as Record<string, unknown>) ?? null };
       }
       const col = this.missingColumnFromError(error.message);
+      if (col === 'consent_accepted') {
+        console.error(`${logLabel}: leads.consent_accepted column is missing`);
+        return { data: null, errorMessage: error.message };
+      }
       if (col && Object.prototype.hasOwnProperty.call(body, col)) {
         console.error(`${logLabel}: missing column "${col}", retrying without it`);
         const next = { ...body };
@@ -797,6 +805,13 @@ export class LeadsService {
     }
 
     const mobile = dto.mobileNumber.trim();
+    if (dto.consentAccepted !== true) {
+      return {
+        ok: false,
+        message: 'Please agree to the T&C and Privacy Policy to continue.',
+      };
+    }
+
     const category = this.normalizeCategory(dto.category);
     const ins = this.normalizeInsType(category, dto.insType);
     if (category === 'personal_loan') {
@@ -852,6 +867,7 @@ export class LeadsService {
       status: 'pending',
       is_active: true,
       otp_verified: false,
+      consent_accepted: true,
     };
 
     // Public apply: never trust client-supplied userId (referral via code only).
@@ -903,6 +919,7 @@ export class LeadsService {
             category === 'personal_loan' ? dto.netMonthlyIncome ?? null : null,
           clientIp: meta?.clientIp ?? undefined,
           agentId: !byMobile.agent_id && agentId ? agentId : undefined,
+          consentAccepted: true,
         });
         if (!updated) {
           return {
@@ -943,6 +960,89 @@ export class LeadsService {
     }
 
     return { ok: true, lead: this.safeLead(lead)! };
+  }
+
+  /**
+   * Same PAN / mobile / product rules as create, without inserting a lead.
+   * Admin and partner must pass this before an OTP is sent.
+   */
+  async validateAdminCreate(dto: AdminCreateLeadDto): Promise<
+    | { ok: true }
+    | { ok: false; message: string; field?: string; code?: string }
+  > {
+    const panUpper = normalizePan(dto.pan);
+    if (!isValidPanFormat(panUpper)) {
+      return { ok: false, field: 'pan', message: 'Invalid PAN format.' };
+    }
+
+    const nameErr = leadFullNameError(dto.fullName);
+    if (nameErr) return { ok: false, message: nameErr };
+
+    const category = this.normalizeCategory(dto.category || 'personal_loan');
+    if (category === 'personal_loan') {
+      const empErr = this.personalLoanEmploymentError(dto);
+      if (empErr) return { ok: false, field: 'employmentType', message: empErr };
+      const amounts = resolvePersonalLoanAmounts({
+        requiredAmount: dto.requiredAmount,
+        loanAmt: dto.loanAmt,
+      });
+      const amtErr = personalLoanAmountError(amounts.requiredAmount);
+      if (amtErr) return { ok: false, message: amtErr };
+    }
+    if (category === 'insurance' && !this.normalizeInsType(category, dto.insType)) {
+      return { ok: false, message: 'Please select insurance type.' };
+    }
+
+    const pin = String(dto.pincode ?? '').replace(/\D/g, '');
+    if (pin && !/^[1-9][0-9]{5}$/.test(pin)) {
+      return { ok: false, field: 'pincode', message: 'Enter a valid 6-digit Indian pincode.' };
+    }
+
+    if (dto.consentAccepted !== true) {
+      return {
+        ok: false,
+        message: 'Please agree to the T&C and Privacy Policy to continue.',
+      };
+    }
+
+    const gates = await this.evaluateApplicationGates({
+      mobileNumber: dto.mobileNumber,
+      pan: panUpper,
+      category,
+      insType: category === 'insurance' ? dto.insType ?? null : null,
+    });
+    if (!gates.allowed) {
+      return {
+        ok: false,
+        field: gates.code === CODE_MOBILE_PAN_LIMIT_REACHED ? 'mobileNumber' : 'pan',
+        message: gates.message || MSG_MOBILE_PAN_LIMIT_REACHED,
+        code: gates.code,
+      };
+    }
+
+    return { ok: true };
+  }
+
+  /** Firebase OTP for this mobile must succeed before an admin/partner lead is saved. */
+  async assertPhoneOtp(
+    mobileNumber: string,
+    idToken: string | undefined,
+  ): Promise<{ ok: true } | { ok: false; message: string }> {
+    const token = idToken?.trim() ?? '';
+    if (token.length < 20) {
+      return {
+        ok: false,
+        message: 'Verify the OTP sent to this mobile number before adding the lead.',
+      };
+    }
+    const checked = await this.otpService.assertFirebaseIdToken(mobileNumber.trim(), token);
+    if (!checked.success) {
+      return {
+        ok: false,
+        message: checked.message || 'OTP verification failed. Please try again.',
+      };
+    }
+    return { ok: true };
   }
 
   async create(dto: CreateLeadDto, meta?: { clientIp?: string | null; agentId?: string | null }): Promise<Record<string, unknown> | null> {
@@ -994,6 +1094,7 @@ export class LeadsService {
       is_active: true,
       // Admin/partner portal create, or OTP-gated public POST /leads.
       otp_verified: true,
+      consent_accepted: dto.consentAccepted === true,
     };
 
     // Public/admin insert: never trust client-supplied userId (commission IDOR).
@@ -1096,6 +1197,7 @@ export class LeadsService {
           insType: dto.insType,
           employmentType: dto.employmentType,
           netMonthlyIncome: dto.netMonthlyIncome,
+          consentAccepted: dto.consentAccepted === true,
         },
         { agentId: uid },
       );
@@ -1285,6 +1387,7 @@ export class LeadsService {
     }
     if (dto.agentId) payload.agent_id = dto.agentId.trim();
     if (dto.otpVerified === true) payload.otp_verified = true;
+    if (dto.consentAccepted === true) payload.consent_accepted = true;
 
     const nextStatus = String(payload.status ?? existing.status ?? '').trim();
     const nextAgent = String(payload.agent_id ?? existing.agent_id ?? '').trim();

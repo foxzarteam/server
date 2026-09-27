@@ -170,6 +170,23 @@ export class LeadsController {
     return { success: true, data: leads };
   }
 
+  /** PAN, mobile, and product checks only. No lead row until OTP is verified. */
+  @Post('admin/precheck')
+  @UseGuards(AdminPanelGuard)
+  @HttpCode(HttpStatus.OK)
+  async precheckForAdmin(@Body() dto: AdminCreateLeadDto) {
+    const ready = await this.leadsService.validateAdminCreate(dto);
+    if (!ready.ok) {
+      return {
+        success: false,
+        field: ready.field,
+        message: ready.message,
+        code: ready.code,
+      };
+    }
+    return { success: true };
+  }
+
   /** Always insert a new lead (admin CRM / partner panel). Does not upsert by mobile. */
   @Post('admin')
   @UseGuards(AdminPanelGuard)
@@ -180,22 +197,19 @@ export class LeadsController {
   ) {
     const actor = req.adminActor;
     const isAgent = String(actor?.role ?? '').toLowerCase() === 'agent';
-    const category = dto.category || 'personal_loan';
-    const insType = category === 'insurance' ? dto.insType ?? null : null;
-    const gates = await this.leadsService.evaluateApplicationGates({
-      mobileNumber: dto.mobileNumber,
-      pan: dto.pan,
-      category,
-      insType,
-    });
-    if (!gates.allowed) {
-      const isLimit = gates.code === CODE_MOBILE_PAN_LIMIT_REACHED;
+    const ready = await this.leadsService.validateAdminCreate(dto);
+    if (!ready.ok) {
       return {
         success: false,
-        field: isLimit ? 'mobileNumber' : 'pan',
-        message: gates.message,
-        code: gates.code,
+        field: ready.field,
+        message: ready.message,
+        code: ready.code,
       };
+    }
+
+    const otp = await this.leadsService.assertPhoneOtp(dto.mobileNumber, dto.idToken);
+    if (!otp.ok) {
+      return { success: false, message: otp.message };
     }
 
     const actorRole = String(actor?.role ?? '').toLowerCase();
@@ -228,6 +242,7 @@ export class LeadsController {
         insType: dto.insType,
         employmentType: dto.employmentType,
         netMonthlyIncome: dto.netMonthlyIncome,
+        consentAccepted: dto.consentAccepted === true,
       });
     } catch (err) {
       if (err instanceof LeadRuleError) {

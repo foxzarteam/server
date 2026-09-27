@@ -1,5 +1,6 @@
 import { Transform } from 'class-transformer';
 import {
+  Equals,
   IsBoolean,
   IsIn,
   IsNumber,
@@ -130,6 +131,16 @@ export class CreateLeadDto {
   @IsString()
   @Length(3, 45)
   clientIp?: string;
+
+  /**
+   * Lead-form checkbox: T&C, Privacy Policy, and contact permission.
+   * Required on public apply. Omitted for CRM/partner creates (stored as false).
+   */
+  @IsBoolean()
+  @Equals(true, {
+    message: 'Please agree to the T&C and Privacy Policy to continue.',
+  })
+  consentAccepted?: boolean;
 }
 
 export class UpdateLeadDto {
@@ -219,6 +230,11 @@ export class UpdateLeadDto {
   @IsOptional()
   @IsBoolean()
   otpVerified?: boolean;
+
+  /** Set when a public apply upgrades an OTP draft after the consent checkbox. */
+  @IsOptional()
+  @IsBoolean()
+  consentAccepted?: boolean;
 }
 
 /** Admin CRM — create lead with optional status/notes. */
@@ -296,6 +312,17 @@ export class AdminCreateLeadDto {
   @IsNumber({}, { message: 'Net monthly income is required for personal loan' })
   @Min(1, { message: 'Net monthly income must be at least 1' })
   netMonthlyIncome?: number;
+
+  /** Add-lead checkbox. Omitted by older clients; stored false unless true. */
+  @IsOptional()
+  @IsBoolean()
+  consentAccepted?: boolean;
+
+  /** Firebase idToken from the OTP sent to mobileNumber. Required to save an admin/partner lead. */
+  @IsOptional()
+  @IsString()
+  @MinLength(20)
+  idToken?: string;
 }
 
 export class RevealPanDto {
