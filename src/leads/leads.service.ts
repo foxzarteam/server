@@ -23,6 +23,7 @@ import { PanAuditService } from '../security/pan-audit.service';
 import { UsersService } from '../users/users.service';
 import { WalletService } from '../wallet/wallet.service';
 import { ServicesService } from '../services/services.service';
+import { FALLBACK_INSURANCE_TYPES } from '../catalog/catalog';
 import {
   CODE_LOAN_AMOUNT_REQUIRED,
   leadLoanAmount,
@@ -320,15 +321,14 @@ export class LeadsService {
     const t = String(insType ?? '')
       .trim()
       .toLowerCase();
-    if (t === 'life_insurance') return 'Life Insurance';
-    if (t === 'health_insurance') return 'Health Insurance';
-    if (t === 'motor_insurance') return 'Motor Insurance';
-    if (t === 'cyber_insurance') return 'Cyber Insurance';
     if (!t) return 'Insurance';
+    const found = FALLBACK_INSURANCE_TYPES.find((row) => row.value === t);
+    if (found) return found.label;
+    if (t === 'motor_insurance') return 'Motor Insurance';
     return t.replace(/_/g, ' ').replace(/\b\w/g, (ch) => ch.toUpperCase());
   }
 
-  /** Personal Loan, or Life/Health/Motor/Cyber Insurance. */
+  /** Personal Loan, or the insurance type label. */
   productLabel(lead: { category?: unknown; ins_type?: unknown }): string {
     const cat = this.normalizeCategory(String(lead.category ?? ''));
     if (cat === 'insurance') return this.insTypeLabel(lead.ins_type);
@@ -885,6 +885,7 @@ export class LeadsService {
       payload.loan_amt = amounts.loanAmt;
       payload.employment_type = dto.employmentType;
       payload.net_monthly_income = dto.netMonthlyIncome;
+      payload.loan_tenure_months = dto.loanTenureMonths ?? null;
     }
     if (category === 'insurance') {
       payload.required_amount = null;
@@ -917,6 +918,7 @@ export class LeadsService {
             category === 'personal_loan' ? dto.employmentType ?? null : null,
           netMonthlyIncome:
             category === 'personal_loan' ? dto.netMonthlyIncome ?? null : null,
+          loanTenureMonths: category === 'personal_loan' ? dto.loanTenureMonths ?? null : null,
           clientIp: meta?.clientIp ?? undefined,
           agentId: !byMobile.agent_id && agentId ? agentId : undefined,
           consentAccepted: true,
@@ -1119,6 +1121,9 @@ export class LeadsService {
       payload.loan_amt = amounts.loanAmt;
       payload.employment_type = dto.employmentType;
       payload.net_monthly_income = dto.netMonthlyIncome;
+      if (dto.loanTenureMonths != null) {
+        payload.loan_tenure_months = dto.loanTenureMonths;
+      }
     }
     if (category === 'insurance' && dto.insType) {
       payload.ins_type = dto.insType;
@@ -1197,6 +1202,7 @@ export class LeadsService {
           insType: dto.insType,
           employmentType: dto.employmentType,
           netMonthlyIncome: dto.netMonthlyIncome,
+          loanTenureMonths: dto.loanTenureMonths,
           consentAccepted: dto.consentAccepted === true,
         },
         { agentId: uid },
@@ -1384,6 +1390,9 @@ export class LeadsService {
     }
     if (dto.netMonthlyIncome !== undefined) {
       payload.net_monthly_income = dto.netMonthlyIncome ?? null;
+    }
+    if (dto.loanTenureMonths !== undefined) {
+      payload.loan_tenure_months = dto.loanTenureMonths ?? null;
     }
     if (dto.agentId) payload.agent_id = dto.agentId.trim();
     if (dto.otpVerified === true) payload.otp_verified = true;

@@ -67,6 +67,7 @@ export type CustomerApplication = {
   ins_type: string | null;
   employment_type: string | null;
   net_monthly_income: number | null;
+  loan_tenure_months: number | null;
   created_at: string | null;
   updated_at: string | null;
   otp_verified: boolean;
@@ -110,6 +111,7 @@ export function sanitizeApplication(row: Record<string, unknown>): CustomerAppli
     ins_type: asString(row.ins_type) || null,
     employment_type: asString(row.employment_type) || null,
     net_monthly_income: asAmount(row.net_monthly_income),
+    loan_tenure_months: asAmount(row.loan_tenure_months),
     created_at: asString(row.created_at) || null,
     updated_at: asString(row.updated_at) || null,
     otp_verified: asBool(row.otp_verified),

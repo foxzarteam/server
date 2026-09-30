@@ -54,7 +54,7 @@ export class ServicesService {
   private async fetchActiveInsuranceTypes(): Promise<InsuranceTypePublic[]> {
     const { data, error } = await this.supabase
       .from(TABLE_INSURANCE_TYPES)
-      .select('slug, label, sort_order, is_active')
+      .select('slug, label, image, sort_order, is_active')
       .eq('is_active', true)
       .order('sort_order', { ascending: true });
 
@@ -66,8 +66,9 @@ export class ServicesService {
         .trim()
         .toLowerCase();
       const label = String((row as { label?: unknown }).label ?? '').trim();
+      const image = String((row as { image?: unknown }).image ?? '').trim();
       if (!INS_TYPE_SLUG_PATTERN.test(value) || !label) continue;
-      types.push({ value, label });
+      types.push({ value, label, image });
     }
     return types.length > 0 ? types : FALLBACK_INSURANCE_TYPES.map((t) => ({ ...t }));
   }

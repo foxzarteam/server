@@ -3,7 +3,9 @@ import {
   Equals,
   IsBoolean,
   IsIn,
+  IsInt,
   IsNumber,
+  Max,
   IsOptional,
   IsString,
   Length,
@@ -87,6 +89,13 @@ export class CreateLeadDto {
   @ValidateIf((o) => o.requiredAmount != null)
   @Min(0, { message: 'Required amount must be positive' })
   requiredAmount?: number;
+
+  /** Personal loan tenure in months. */
+  @ValidateIf((o) => o.category === 'personal_loan')
+  @IsInt({ message: 'Loan tenure must be a whole number of months' })
+  @Min(12, { message: 'Loan tenure must be at least 12 months' })
+  @Max(72, { message: 'Loan tenure cannot exceed 72 months' })
+  loanTenureMonths?: number;
 
   @IsString()
   @Matches(LEAD_CATEGORY_PATTERN, {
@@ -177,6 +186,12 @@ export class UpdateLeadDto {
   @ValidateIf((o) => o.requiredAmount != null)
   @Min(0, { message: 'Required amount must be positive' })
   requiredAmount?: number | null;
+
+  @IsOptional()
+  @IsInt({ message: 'Loan tenure must be a whole number of months' })
+  @Min(12, { message: 'Loan tenure must be at least 12 months' })
+  @Max(72, { message: 'Loan tenure cannot exceed 72 months' })
+  loanTenureMonths?: number | null;
 
   @IsOptional()
   @IsString()
@@ -273,6 +288,12 @@ export class AdminCreateLeadDto {
   @ValidateIf((o) => o.requiredAmount != null)
   @Min(0, { message: 'Required amount must be positive' })
   requiredAmount?: number;
+
+  @IsOptional()
+  @IsInt({ message: 'Loan tenure must be a whole number of months' })
+  @Min(12, { message: 'Loan tenure must be at least 12 months' })
+  @Max(72, { message: 'Loan tenure cannot exceed 72 months' })
+  loanTenureMonths?: number;
 
   @IsString()
   @Matches(LEAD_CATEGORY_PATTERN, {
