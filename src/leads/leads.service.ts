@@ -1395,8 +1395,12 @@ export class LeadsService {
     if (dto.loanTenureMonths !== undefined) {
       payload.loan_tenure_months = dto.loanTenureMonths ?? null;
     }
-    if (dto.commissionType !== undefined || dto.commissionValue !== undefined) {
-      const approved = this.isApprovedStatus(payload.status ?? existing.status);
+    const hasPartner = Boolean(String(payload.agent_id ?? existing.agent_id ?? '').trim());
+    const approved = this.isApprovedStatus(payload.status ?? existing.status);
+    if (!hasPartner) {
+      payload.commission_type = null;
+      payload.commission_value = null;
+    } else if (dto.commissionType !== undefined || dto.commissionValue !== undefined) {
       if (!approved) {
         payload.commission_type = null;
         payload.commission_value = null;
