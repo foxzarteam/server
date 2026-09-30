@@ -273,11 +273,10 @@ export class LeadsController {
     if (isAgent && actor?.sub) {
       // Partner manual lead: always attributed to them, always pending.
       patch.agentId = actor.sub;
-      patch.status = 'pending';
-    } else {
-      if (dto.status != null) patch.status = dto.status;
-      if (dto.notes !== undefined) patch.notes = dto.notes;
     }
+    // New panel leads always start pending. Only an admin can change status later.
+    patch.status = 'pending';
+    if (!isAgent && dto.notes !== undefined) patch.notes = dto.notes;
 
     if (Object.keys(patch).length > 0) {
       try {
@@ -304,7 +303,12 @@ export class LeadsController {
     @Req() req: { adminActor?: AdminActor },
   ) {
     try {
-      const lead = await this.leadsService.updateById(id, dto, req.adminActor);
+      const actorRole = String(req.adminActor?.role ?? '').toLowerCase();
+      const patch =
+        actorRole === 'admin'
+          ? dto
+          : { ...dto, status: undefined, commissionType: undefined, commissionValue: undefined };
+      const lead = await this.leadsService.updateById(id, patch, req.adminActor);
       if (!lead) {
         throw new NotFoundException('Lead not found or update failed');
       }

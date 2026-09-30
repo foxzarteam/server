@@ -3,7 +3,6 @@ import { SupabaseClient } from '@supabase/supabase-js';
 import { TABLE_WALLET, getCurrentIsoTime } from '../common/constants';
 import { SUPABASE_CLIENT } from '../config/supabase';
 import { MSG_WALLET_SYNC_FAILED, WalletSyncError } from './wallet-sync';
-import { leadLoanAmount } from './loan-amount';
 
 export type WalletRow = {
   id: string;
@@ -16,27 +15,8 @@ export type WalletRow = {
   updated_at?: string;
 };
 
-/** Personal loan: 2% of lead amount. Insurance: flat ₹1000. */
-export const LOAN_COMMISSION_RATE = 0.02;
-export const INSURANCE_COMMISSION_FLAT = 1000;
-
 function roundMoney(n: number): number {
   return Math.round(Math.max(0, n) * 100) / 100;
-}
-
-export function commissionForLead(lead: {
-  category?: unknown;
-  required_amount?: unknown;
-  loan_amt?: unknown;
-}): number {
-  const cat = String(lead.category ?? '')
-    .trim()
-    .toLowerCase()
-    .replace(/-/g, '_');
-  if (cat === 'insurance') return INSURANCE_COMMISSION_FLAT;
-  const amount = leadLoanAmount(lead);
-  if (amount <= 0) return 0;
-  return roundMoney(amount * LOAN_COMMISSION_RATE);
 }
 
 @Injectable()

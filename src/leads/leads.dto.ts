@@ -205,6 +205,16 @@ export class UpdateLeadDto {
   })
   status?: string;
 
+  /** Personal loan: percentage 0.1–10. Insurance: fixed rupees 100–30000. */
+  @IsOptional()
+  @IsIn(['percentage', 'fixed'])
+  commissionType?: 'percentage' | 'fixed' | null;
+
+  @IsOptional()
+  @IsNumber()
+  @Min(0)
+  commissionValue?: number | null;
+
   @IsOptional()
   @IsString()
   @ValidateIf((o) => o.clientIp != null && o.clientIp !== '')

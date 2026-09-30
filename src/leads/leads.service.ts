@@ -31,6 +31,7 @@ import {
   personalLoanAmountError,
   resolvePersonalLoanAmounts,
 } from '../wallet/loan-amount';
+import { commissionInputError } from '../wallet/lead-commission';
 import {
   CODE_APPROVE_ADMIN_ONLY,
   isCommissionAffectingChange,
@@ -94,7 +95,7 @@ export class LeadsService {
     return String(status ?? '').trim().toLowerCase() === 'approved';
   }
 
-  /** Recalc partner wallet from all their approved leads (loan 2% / insurance ₹1000). */
+  /** Recalc partner wallet from approved leads. */
   private async reconcileAgentWallet(agentId: unknown): Promise<void> {
     const uid = String(agentId ?? '').trim();
     if (!uid) return;
@@ -1393,6 +1394,33 @@ export class LeadsService {
     }
     if (dto.loanTenureMonths !== undefined) {
       payload.loan_tenure_months = dto.loanTenureMonths ?? null;
+    }
+    if (dto.commissionType !== undefined || dto.commissionValue !== undefined) {
+      const approved = this.isApprovedStatus(payload.status ?? existing.status);
+      if (!approved) {
+        payload.commission_type = null;
+        payload.commission_value = null;
+      } else {
+        const category = this.normalizeCategory(
+          String(payload.category ?? existing.category ?? ''),
+        );
+        const loanAmount =
+          category === 'insurance'
+            ? 0
+            : leadLoanAmount({
+                required_amount: payload.required_amount ?? existing.required_amount,
+                loan_amt: payload.loan_amt ?? existing.loan_amt,
+              });
+        const commissionError = commissionInputError({
+          category,
+          loanAmount,
+          type: dto.commissionType,
+          value: dto.commissionValue,
+        });
+        if (commissionError) throw new LeadRuleError(commissionError, 'COMMISSION_INVALID');
+        payload.commission_type = dto.commissionType;
+        payload.commission_value = dto.commissionValue ?? null;
+      }
     }
     if (dto.agentId) payload.agent_id = dto.agentId.trim();
     if (dto.otpVerified === true) payload.otp_verified = true;
