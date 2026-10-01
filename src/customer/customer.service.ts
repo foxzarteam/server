@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { LeadsService } from '../leads/leads.service';
+import { isDraftLead } from '../leads/lead-present';
 import { OtpService } from '../otp/otp.service';
 import { isMaskedPan, isValidPanFormat, maskPan, normalizePan } from '../security/pan-crypto';
 import {
@@ -23,7 +24,7 @@ export class CustomerService {
       includeOtpVerified: false,
     });
     return rows
-      .filter((row) => !this.leadsService.isDraftLead(row))
+      .filter((row) => !isDraftLead(row))
       .map(sanitizeApplication)
       .filter((a): a is CustomerApplication => a != null);
   }
@@ -32,7 +33,7 @@ export class CustomerService {
     const rows = await this.leadsService.listByMobile(mobileNumber.trim(), {
       includeOtpVerified: false,
     });
-    return rows.some((row) => !this.leadsService.isDraftLead(row));
+    return rows.some((row) => !isDraftLead(row));
   }
 
   /** Profile is derived from the customer's leads (newest lead wins). */
@@ -42,7 +43,7 @@ export class CustomerService {
 
     const rows = (
       await this.leadsService.listByMobile(mobile, { includeOtpVerified: false })
-    ).filter((row) => !this.leadsService.isDraftLead(row));
+    ).filter((row) => !isDraftLead(row));
 
     if (rows.length === 0) {
       // Session can still be valid after soft-deleting all apps.
@@ -82,7 +83,7 @@ export class CustomerService {
     const mobile = mobileNumber.trim();
     const apps = (
       await this.leadsService.listByMobile(mobile, { includeOtpVerified: false })
-    ).filter((row) => !this.leadsService.isDraftLead(row));
+    ).filter((row) => !isDraftLead(row));
     if (apps.length === 0) {
       // No active applications — keep session name only (cannot persist to leads).
       return {

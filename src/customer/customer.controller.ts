@@ -2,7 +2,6 @@ import {
   Body,
   Controller,
   Delete,
-  Headers,
   HttpCode,
   HttpStatus,
   NotFoundException,
@@ -10,12 +9,12 @@ import {
   Patch,
   Post,
   Req,
-  UnauthorizedException,
   BadRequestException,
+  UseGuards,
 } from '@nestjs/common';
 import type { Request } from 'express';
-import { adminInternalKeyOk } from '../common/admin-internal';
-import { extractClientIp } from '../common/client-ip';
+import { InternalKeyGuard } from '../common/admin-crm.guard';
+import { requestClientIp } from '../common/client-ip';
 import { allowRateLimitedAction } from '../security/rate-limit';
 
 import {
@@ -35,11 +34,7 @@ export class CustomerController {
   @HttpCode(HttpStatus.OK)
   async checkMobile(@Body() dto: CheckMobileDto, @Req() req: Request) {
     const mobile = dto.mobileNumber.trim();
-    const ip =
-      extractClientIp(
-        req.headers as Record<string, string | string[] | undefined>,
-        req.ip ?? req.socket?.remoteAddress,
-      ) ?? 'unknown';
+    const ip = requestClientIp(req) ?? 'unknown';
     if (!allowRateLimitedAction(`check-mobile:${mobile}:${ip}`, 5, 60_000)) {
       throw new BadRequestException('Too many attempts. Try again in a minute.');
     }
@@ -55,11 +50,7 @@ export class CustomerController {
   @HttpCode(HttpStatus.OK)
   async login(@Body() dto: CustomerLoginDto, @Req() req: Request) {
     const mobile = dto.mobileNumber.trim();
-    const ip =
-      extractClientIp(
-        req.headers as Record<string, string | string[] | undefined>,
-        req.ip ?? req.socket?.remoteAddress,
-      ) ?? 'unknown';
+    const ip = requestClientIp(req) ?? 'unknown';
     if (
       !allowRateLimitedAction(`customer-login:${mobile}:${ip}`, 5, 60_000) ||
       !allowRateLimitedAction(`customer-login-ip:${ip}`, 20, 60_000)
@@ -88,14 +79,9 @@ export class CustomerController {
    * Requires `x-admin-internal-key` (same as other Nest internal admin routes).
    */
   @Post('applications')
+  @UseGuards(InternalKeyGuard)
   @HttpCode(HttpStatus.OK)
-  async applications(
-    @Headers('x-admin-internal-key') adminKey: string | undefined,
-    @Body() dto: ApplicationsDto,
-  ) {
-    if (!adminInternalKeyOk(adminKey)) {
-      throw new UnauthorizedException('Unauthorized');
-    }
+  async applications(@Body() dto: ApplicationsDto) {
     const applications = await this.customerService.getApplications(dto.mobileNumber);
     return {
       success: true,
@@ -109,14 +95,9 @@ export class CustomerController {
 
   /** BFF-only: read customer profile derived from their applications. */
   @Post('profile')
+  @UseGuards(InternalKeyGuard)
   @HttpCode(HttpStatus.OK)
-  async profile(
-    @Headers('x-admin-internal-key') adminKey: string | undefined,
-    @Body() dto: ApplicationsDto,
-  ) {
-    if (!adminInternalKeyOk(adminKey)) {
-      throw new UnauthorizedException('Unauthorized');
-    }
+  async profile(@Body() dto: ApplicationsDto) {
     const profile = await this.customerService.getProfile(dto.mobileNumber);
     if (!profile) {
       throw new NotFoundException('Profile not found');
@@ -126,14 +107,9 @@ export class CustomerController {
 
   /** BFF-only: customer updates own name / email. */
   @Patch('profile')
+  @UseGuards(InternalKeyGuard)
   @HttpCode(HttpStatus.OK)
-  async updateProfile(
-    @Headers('x-admin-internal-key') adminKey: string | undefined,
-    @Body() dto: UpdateProfileDto,
-  ) {
-    if (!adminInternalKeyOk(adminKey)) {
-      throw new UnauthorizedException('Unauthorized');
-    }
+  async updateProfile(@Body() dto: UpdateProfileDto) {
     const result = await this.customerService.updateProfile(dto.mobileNumber, {
       fullName: dto.fullName,
       email: dto.email,
@@ -146,15 +122,12 @@ export class CustomerController {
 
   /** BFF-only: customer deletes own application (mobile must match). */
   @Delete('applications/:id')
+  @UseGuards(InternalKeyGuard)
   @HttpCode(HttpStatus.OK)
   async deleteApplication(
-    @Headers('x-admin-internal-key') adminKey: string | undefined,
     @Param('id') id: string,
     @Body() dto: ApplicationsDto,
   ) {
-    if (!adminInternalKeyOk(adminKey)) {
-      throw new UnauthorizedException('Unauthorized');
-    }
     const result = await this.customerService.deleteOwnApplication(id, dto.mobileNumber);
     if (!result.ok) {
       throw new NotFoundException(result.message || 'Application not found');

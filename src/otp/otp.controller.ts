@@ -8,7 +8,7 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import type { Request } from 'express';
-import { extractClientIp } from '../common/client-ip';
+import { requestClientIp } from '../common/client-ip';
 import { allowRateLimitedAction } from '../security/rate-limit';
 import { SendOtpDto, VerifyFirebaseOtpDto } from './otp.dto';
 import { OtpService } from './otp.service';
@@ -21,11 +21,7 @@ export class OtpController {
   @Post('request-send')
   @HttpCode(HttpStatus.OK)
   async requestSend(@Body() dto: SendOtpDto, @Req() req: Request) {
-    const ip =
-      extractClientIp(
-        req.headers as Record<string, string | string[] | undefined>,
-        req.ip ?? req.socket?.remoteAddress,
-      ) ?? 'unknown';
+    const ip = requestClientIp(req) ?? 'unknown';
     if (!allowRateLimitedAction(`otp-request-ip:${ip}`, 12, 60_000)) {
       throw new BadRequestException('Too many OTP requests. Please try again in a minute.');
     }

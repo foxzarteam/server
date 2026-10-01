@@ -18,16 +18,17 @@ import {
 } from '@nestjs/common';
 import type { Request } from 'express';
 import type { AdminActor } from '../common/admin-actor';
+import { isCrmAdminActor } from '../common/admin-actor';
 import {
-  extractAdminActorToken,
-  isCrmAdminActor,
-  verifyAdminActor,
-} from '../common/admin-actor';
-import { AdminCrmGuard, AdminOnlyGuard, AdminPanelGuard } from '../common/admin-crm.guard';
-import { adminInternalKeyOk } from '../common/admin-internal';
+  AdminCrmGuard,
+  AdminOnlyGuard,
+  AdminPanelGuard,
+  bindSignedActor,
+} from '../common/admin-crm.guard';
 import { sanitizePublicLead } from '../security/pan-crypto';
 import { allowRateLimitedAction } from '../security/rate-limit';
-import { extractClientIp } from '../common/client-ip';
+import { requestClientIp } from '../common/client-ip';
+import { throwLeadMutation } from './lead-http';
 import {
   AdminCreateLeadDto,
   CreateLeadDto,
@@ -42,9 +43,7 @@ import {
 import {
   CODE_APPROVE_ADMIN_ONLY,
   MSG_APPROVE_ADMIN_ONLY,
-  WalletSyncError,
 } from '../wallet/wallet-sync';
-import { CODE_LOAN_AMOUNT_REQUIRED } from '../wallet/loan-amount';
 
 @Controller('leads')
 export class LeadsController {
@@ -65,51 +64,6 @@ export class LeadsController {
     );
   }
 
-  private rethrowLeadMutation(err: unknown): never {
-    if (err instanceof WalletSyncError) {
-      throw new HttpException(
-        {
-          success: false,
-          message: err.message,
-          code: err.code,
-          leadStatusSaved: err.leadStatusSaved,
-        },
-        err.leadStatusSaved
-          ? HttpStatus.INTERNAL_SERVER_ERROR
-          : HttpStatus.SERVICE_UNAVAILABLE,
-      );
-    }
-    if (err instanceof LeadRuleError) {
-      const status =
-        err.code === CODE_APPROVE_ADMIN_ONLY
-          ? HttpStatus.FORBIDDEN
-          : err.code === CODE_LOAN_AMOUNT_REQUIRED
-            ? HttpStatus.BAD_REQUEST
-            : HttpStatus.CONFLICT;
-      throw new HttpException(
-        {
-          success: false,
-          message: err.message,
-          code: err.code,
-        },
-        status,
-      );
-    }
-    throw err;
-  }
-
-  private sanitizePublicLead(lead: Record<string, unknown>): Record<string, unknown> {
-    return sanitizePublicLead(lead);
-  }
-
-  private clientIp(req: Request, bodyIp?: string | null): string | null {
-    return extractClientIp(
-      req.headers as Record<string, string | string[] | undefined>,
-      req.ip ?? req.socket?.remoteAddress,
-      bodyIp,
-    );
-  }
-
   /**
    * Public apply: persist the lead on form submit (Verified = No).
    * OTP is a later step — verify-firebase marks Verified = Yes.
@@ -122,21 +76,21 @@ export class LeadsController {
     @Req() req: Request,
   ) {
     const mobile = dto.mobileNumber?.trim() ?? '';
-    const ip = this.clientIp(req, dto.clientIp) || 'unknown';
+    const limitIp = requestClientIp(req) || 'unknown';
     if (
       (mobile && !allowRateLimitedAction(`lead-apply:${mobile}`, 8, 60_000)) ||
-      !allowRateLimitedAction(`lead-apply-ip:${ip}`, 20, 60_000)
+      !allowRateLimitedAction(`lead-apply-ip:${limitIp}`, 20, 60_000)
     ) {
       throw new BadRequestException('Too many applications. Please try again in a minute.');
     }
 
     const result = await this.leadsService.applyLead(dto, {
-      clientIp: this.clientIp(req, dto.clientIp),
+      clientIp: requestClientIp(req, dto.clientIp),
     });
     if (!result.ok || !result.lead) {
       this.throwLeadWriteFailure(result.message || 'Failed to create lead', result.code);
     }
-    return { success: true, data: this.sanitizePublicLead(result.lead) };
+    return { success: true, data: sanitizePublicLead(result.lead) };
   }
 
   @Get('admin/all')
@@ -152,18 +106,11 @@ export class LeadsController {
   async getByAgentForAdmin(
     @Param('agentId') agentId: string,
     @Headers() headers: Record<string, string | string[] | undefined>,
-    @Headers('x-admin-internal-key') adminKey: string | undefined,
   ) {
-    if (!adminInternalKeyOk(adminKey)) {
-      throw new UnauthorizedException('Unauthorized');
-    }
-    const actor = verifyAdminActor(extractAdminActorToken(headers));
-    const allowed =
+    bindSignedActor({ headers }, (actor) =>
       isCrmAdminActor(actor) ||
-      (actor?.role === 'agent' && actor.sub === agentId.trim());
-    if (!allowed) {
-      throw new UnauthorizedException('Unauthorized');
-    }
+      (actor?.role === 'agent' && actor.sub === agentId.trim()),
+    );
 
     const leads = await this.leadsService.getByAgentId(agentId);
     // Masked PAN only (ABCDE****F). Never strip the field — partners need it in view.
@@ -287,7 +234,7 @@ export class LeadsController {
         );
         if (updated) lead = updated;
       } catch (err) {
-        this.rethrowLeadMutation(err);
+        throwLeadMutation(err);
       }
     }
 
@@ -315,7 +262,7 @@ export class LeadsController {
       return { success: true, data: lead };
     } catch (err) {
       if (err instanceof NotFoundException) throw err;
-      this.rethrowLeadMutation(err);
+      throwLeadMutation(err);
     }
   }
 
@@ -329,7 +276,7 @@ export class LeadsController {
   async revealPanForAdmin(
     @Param('id') id: string,
     @Body() dto: RevealPanDto,
-    @Req() req: { adminActor?: AdminActor },
+    @Req() req: Request & { adminActor?: AdminActor },
   ) {
     const actor = req.adminActor;
     if (!actor) {
@@ -341,12 +288,13 @@ export class LeadsController {
       throw new BadRequestException('Too many PAN reveals. Try again in a minute.');
     }
 
+    const userAgent = req.headers['user-agent'];
     const result = await this.leadsService.revealPan(id, {
       adminId: actor.sub,
       adminEmail: actor.email,
       adminRole: actor.role,
-      ipAddress: dto.ipAddress,
-      userAgent: dto.userAgent,
+      ipAddress: requestClientIp(req) ?? undefined,
+      userAgent: typeof userAgent === 'string' ? userAgent.slice(0, 300) : undefined,
       reason: dto.reason ?? 'admin_panel_reveal',
     });
 
@@ -374,7 +322,7 @@ export class LeadsController {
       return { success: true };
     } catch (err) {
       if (err instanceof NotFoundException) throw err;
-      this.rethrowLeadMutation(err);
+      throwLeadMutation(err);
     }
   }
 }

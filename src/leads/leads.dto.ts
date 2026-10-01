@@ -6,6 +6,7 @@ import {
   IsInt,
   IsNumber,
   Max,
+  MaxLength,
   IsOptional,
   IsString,
   Length,
@@ -359,25 +360,6 @@ export class AdminCreateLeadDto {
 export class RevealPanDto {
   @IsOptional()
   @IsString()
-  adminId?: string;
-
-  @IsOptional()
-  @IsString()
-  adminEmail?: string;
-
-  @IsOptional()
-  @IsString()
-  adminRole?: string;
-
-  @IsOptional()
-  @IsString()
+  @MaxLength(200)
   reason?: string;
-
-  @IsOptional()
-  @IsString()
-  ipAddress?: string;
-
-  @IsOptional()
-  @IsString()
-  userAgent?: string;
 }

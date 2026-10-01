@@ -15,20 +15,10 @@ import {
 } from '@nestjs/common';
 import type { Request } from 'express';
 import { AdminCrmGuard, AdminOnlyGuard } from '../common/admin-crm.guard';
+import { requestClientIp } from '../common/client-ip';
 import { allowRateLimitedAction } from '../security/rate-limit';
 import { CreateContactDto, TaxCalculatorLeadDto, UpdateContactDto } from './contact.dto';
 import { ContactService } from './contact.service';
-
-function clientIp(req: Request): string {
-  const forwarded = req.headers['x-forwarded-for'];
-  if (typeof forwarded === 'string' && forwarded.trim()) {
-    return forwarded.split(',')[0]?.trim() || 'unknown';
-  }
-  if (Array.isArray(forwarded) && forwarded[0]) {
-    return String(forwarded[0]).split(',')[0]?.trim() || 'unknown';
-  }
-  return req.ip || 'unknown';
-}
 
 @Controller('contact')
 export class ContactController {
@@ -58,7 +48,7 @@ export class ContactController {
   @HttpCode(HttpStatus.OK)
   async createTaxCalculatorLead(@Body() dto: TaxCalculatorLeadDto, @Req() req: Request) {
     const phoneKey = dto.phone.replace(/\D/g, '').slice(0, 10);
-    const ip = clientIp(req);
+    const ip = requestClientIp(req) || 'unknown';
 
     // Silent throttle — still return success so the UI reveals nothing
     if (

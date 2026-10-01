@@ -18,5 +18,10 @@ export function allowRateLimitedAction(
   }
   recent.push(now);
   buckets.set(key, recent);
+  if (buckets.size > 4000) {
+    for (const [bucketKey, times] of buckets) {
+      if (!times.some((t) => now - t < windowMs)) buckets.delete(bucketKey);
+    }
+  }
   return true;
 }

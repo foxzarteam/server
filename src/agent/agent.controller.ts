@@ -19,14 +19,13 @@ import { AdminCreateLeadDto } from '../leads/leads.dto';
 import { LeadsService } from '../leads/leads.service';
 import {
   CODE_MOBILE_PAN_LIMIT_REACHED,
-  LeadRuleError,
 } from '../leads/mobile-pan-limit';
 import { UpsertPaymentAccountDto } from '../payment-accounts/payment-accounts.dto';
 import { PaymentAccountsService } from '../payment-accounts/payment-accounts.service';
 import { UpdateMpinDto, UpdateProfileDto } from '../users/users.dto';
 import { UsersService } from '../users/users.service';
 import { WalletService } from '../wallet/wallet.service';
-import { WalletSyncError } from '../wallet/wallet-sync';
+import { throwLeadMutation } from '../leads/lead-http';
 import { sanitizePublicLead } from '../security/pan-crypto';
 
 type PartnerReq = { partnerActor?: AdminActor };
@@ -106,19 +105,7 @@ export class AgentController {
       return { success: true, data: sanitizePublicLead(result.lead) };
     } catch (err) {
       if (err instanceof HttpException) throw err;
-      if (err instanceof WalletSyncError) {
-        throw new HttpException(
-          { success: false, message: err.message, code: err.code },
-          HttpStatus.SERVICE_UNAVAILABLE,
-        );
-      }
-      if (err instanceof LeadRuleError) {
-        throw new HttpException(
-          { success: false, message: err.message, code: err.code },
-          HttpStatus.CONFLICT,
-        );
-      }
-      throw err;
+      throwLeadMutation(err);
     }
   }
 

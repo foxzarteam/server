@@ -1,3 +1,7 @@
+import { isApprovedLeadStatus } from '../common/lead-status';
+
+export { isApprovedLeadStatus };
+
 /** Commission-affecting lead status changes and wallet sync errors. */
 
 export const CODE_WALLET_SYNC_FAILED = 'WALLET_SYNC_FAILED';
@@ -21,10 +25,6 @@ export class WalletSyncError extends Error {
     this.name = 'WalletSyncError';
     this.leadStatusSaved = leadStatusSaved;
   }
-}
-
-export function isApprovedLeadStatus(status: unknown): boolean {
-  return String(status ?? '').trim().toLowerCase() === 'approved';
 }
 
 /** True when a save will add, remove, or reassign commission. */

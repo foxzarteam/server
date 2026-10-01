@@ -5,6 +5,10 @@
  * Pure helpers live here so controllers stay thin and tests do not need a live DB.
  */
 
+import { isApprovedLeadStatus } from '../common/lead-status';
+
+export { isApprovedLeadStatus };
+
 export const MOBILE_PAN_LIMIT = 4;
 
 export const CODE_MOBILE_PAN_LIMIT_REACHED = 'MOBILE_PAN_LIMIT_REACHED';
@@ -58,10 +62,6 @@ export type DuplicateGateResult =
       category: string;
       insType: string | null;
     };
-
-export function isApprovedLeadStatus(status: unknown): boolean {
-  return String(status ?? '').trim().toLowerCase() === 'approved';
-}
 
 /** Non-draft + not approved → same PAN + same product is blocked (any mobile). */
 export function isBlockingPanProductStatus(

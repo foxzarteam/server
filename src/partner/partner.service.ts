@@ -1,22 +1,5 @@
-import {
-  Body,
-  Controller,
-  Delete,
-  Get,
-  Headers,
-  HttpCode,
-  HttpStatus,
-  Inject,
-  Injectable,
-  NotFoundException,
-  Param,
-  Patch,
-  Post,
-  UnauthorizedException,
-} from '@nestjs/common';
+import { Inject, Injectable } from '@nestjs/common';
 import { SupabaseClient } from '@supabase/supabase-js';
-import { IsIn, IsNumber, IsOptional, IsString, Min, MinLength } from 'class-validator';
-import { adminInternalKeyOk } from '../common/admin-internal';
 import { TABLE_PARTNER, TABLE_SERVICES } from '../common/constants';
 import { SUPABASE_CLIENT } from '../config/supabase';
 

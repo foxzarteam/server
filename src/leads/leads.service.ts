@@ -23,7 +23,6 @@ import { PanAuditService } from '../security/pan-audit.service';
 import { UsersService } from '../users/users.service';
 import { WalletService } from '../wallet/wallet.service';
 import { ServicesService } from '../services/services.service';
-import { FALLBACK_INSURANCE_TYPES } from '../catalog/catalog';
 import {
   CODE_LOAN_AMOUNT_REQUIRED,
   leadLoanAmount,
@@ -41,7 +40,6 @@ import {
   requiresAdminCommissionGate,
   WalletSyncError,
 } from '../wallet/wallet-sync';
-import { withDecryptedPanForPartner } from '../security/pan-partner';
 import { allowRateLimitedAction } from '../security/rate-limit';
 import {
   AdminCreateLeadDto,
@@ -58,10 +56,18 @@ import {
   leadFullNameError,
   personalLoanEmploymentError as checkPersonalLoanEmployment,
 } from './personal-loan-employment';
-
-/** Placeholder until user completes the second-step form */
-export const LEAD_DRAFT_FULL_NAME = 'Unknown';
-export const LEAD_DRAFT_PAN = 'XXXXX0000X';
+import { LEAD_DRAFT_PAN } from './lead-draft';
+import {
+  blockingApplicationMessage,
+  categoryLabel,
+  insTypeLabel,
+  isDraftLead,
+  normalizeStoredCategory,
+  normalizeStoredInsType,
+  productLabel,
+  statusLabel,
+} from './lead-present';
+import { isApprovedLeadStatus } from '../common/lead-status';
 
 export type LeadMutationActor = {
   sub?: string;
@@ -91,10 +97,6 @@ export class LeadsService {
     return toSafeLeadRow(row);
   }
 
-  private isApprovedStatus(status: unknown): boolean {
-    return String(status ?? '').trim().toLowerCase() === 'approved';
-  }
-
   /** Recalc partner wallet from approved leads. */
   private async reconcileAgentWallet(agentId: unknown): Promise<void> {
     const uid = String(agentId ?? '').trim();
@@ -106,7 +108,7 @@ export class LeadsService {
     before: Record<string, unknown>,
     after: Record<string, unknown>,
   ): Promise<void> {
-    if (!this.isApprovedStatus(before.status) && !this.isApprovedStatus(after.status)) {
+    if (!isApprovedLeadStatus(before.status) && !isApprovedLeadStatus(after.status)) {
       return;
     }
     const agents = new Set<string>();
@@ -301,63 +303,6 @@ export class LeadsService {
     });
   }
 
-  isDraftLead(lead: Record<string, unknown>): boolean {
-    const name = String(lead['full_name'] ?? '')
-      .trim()
-      .toLowerCase();
-    const pan = String(lead['pan'] ?? '')
-      .trim()
-      .toUpperCase();
-    return name === LEAD_DRAFT_FULL_NAME.toLowerCase() || pan === LEAD_DRAFT_PAN;
-  }
-
-  categoryLabel(category: unknown): string {
-    const c = this.normalizeCategory(String(category ?? ''));
-    if (c === 'personal_loan') return 'Personal Loan';
-    if (c === 'insurance') return 'Insurance';
-    return c.replace(/_/g, ' ').replace(/\b\w/g, (ch) => ch.toUpperCase());
-  }
-
-  insTypeLabel(insType: unknown): string {
-    const t = String(insType ?? '')
-      .trim()
-      .toLowerCase();
-    if (!t) return 'Insurance';
-    const found = FALLBACK_INSURANCE_TYPES.find((row) => row.value === t);
-    if (found) return found.label;
-    if (t === 'motor_insurance') return 'Motor Insurance';
-    return t.replace(/_/g, ' ').replace(/\b\w/g, (ch) => ch.toUpperCase());
-  }
-
-  /** Personal Loan, or the insurance type label. */
-  productLabel(lead: { category?: unknown; ins_type?: unknown }): string {
-    const cat = this.normalizeCategory(String(lead.category ?? ''));
-    if (cat === 'insurance') return this.insTypeLabel(lead.ins_type);
-    return this.categoryLabel(cat);
-  }
-
-  statusLabel(status: unknown): string {
-    const s = String(status ?? '')
-      .trim()
-      .toLowerCase();
-    if (s === 'approved') return 'Approved';
-    if (s === 'rejected') return 'Not Approved';
-    if (s === 'in_process') return 'In Process';
-    if (s === 'action_required') return 'Action Required';
-    return 'Under Review';
-  }
-
-  private normalizeInsType(
-    category: string,
-    insType?: string | null,
-  ): string | null {
-    if (this.normalizeCategory(category) !== 'insurance') return null;
-    const t = String(insType ?? '')
-      .trim()
-      .toLowerCase();
-    return t || null;
-  }
-
   /**
    * Gate 2 — same PAN + same product (any mobile):
    * - personal_loan vs personal_loan
@@ -373,14 +318,14 @@ export class LeadsService {
     category?: string | null,
     insType?: string | null,
   ): Promise<Record<string, unknown> | null> {
-    const cat = this.normalizeCategory(category);
-    const ins = this.normalizeInsType(cat, insType);
+    const cat = normalizeStoredCategory(category);
+    const ins = normalizeStoredInsType(cat, insType);
     const panUpper = pan ? normalizePan(pan) : '';
     if (!panUpper || !isValidPanFormat(panUpper)) return null;
 
     const pickOpen = (rows: Record<string, unknown>[] | null) => {
       for (const row of rows ?? []) {
-        if (!this.isDraftLead(row) && !this.isApprovedStatus(row.status)) {
+        if (!isDraftLead(row) && !isApprovedLeadStatus(row.status)) {
           return row;
         }
       }
@@ -422,12 +367,6 @@ export class LeadsService {
       return null;
     }
     return pickOpen((data as Record<string, unknown>[]) || []);
-  }
-
-  blockingApplicationMessage(lead: Record<string, unknown>): string {
-    const product = this.productLabel(lead);
-    const status = this.statusLabel(lead.status);
-    return `Your ${product} application is already ${status}. You can apply again for this product only after it is Approved.`;
   }
 
   private writeFailure(errorMessage?: string): {
@@ -477,7 +416,7 @@ export class LeadsService {
 
     const hashes = new Set<string>();
     for (const row of (leads as Record<string, unknown>[]) || []) {
-      if (this.isDraftLead(row)) continue;
+      if (isDraftLead(row)) continue;
       const hash = String(row.pan_hash ?? '').trim();
       if (hash) {
         hashes.add(hash);
@@ -535,15 +474,15 @@ export class LeadsService {
     categoryLabel?: string;
     insType?: string | null;
   }> {
-    const category = this.normalizeCategory(input.category);
-    const ins = this.normalizeInsType(category, input.insType);
+    const category = normalizeStoredCategory(input.category);
+    const ins = normalizeStoredInsType(category, input.insType);
     if (category === 'insurance') {
       if (!ins) {
         return {
           allowed: false,
           message: 'Please select insurance type.',
           category,
-          categoryLabel: this.categoryLabel(category),
+          categoryLabel: categoryLabel(category),
         };
       }
       const insOk = await this.servicesService.isAllowedInsuranceType(ins);
@@ -552,7 +491,7 @@ export class LeadsService {
           allowed: false,
           message: 'Invalid insurance type.',
           category,
-          categoryLabel: this.categoryLabel(category),
+          categoryLabel: categoryLabel(category),
         };
       }
     }
@@ -564,7 +503,7 @@ export class LeadsService {
         message: limit.message,
         code: limit.code,
         category,
-        categoryLabel: this.categoryLabel(category),
+        categoryLabel: categoryLabel(category),
         insType: ins,
       };
     }
@@ -580,12 +519,12 @@ export class LeadsService {
         String(blocking.status ?? 'pending').trim().toLowerCase() || 'pending';
       return {
         allowed: false,
-        message: this.blockingApplicationMessage(blocking),
+        message: blockingApplicationMessage(blocking),
         status,
-        statusLabel: this.statusLabel(status),
+        statusLabel: statusLabel(status),
         category,
-        categoryLabel: this.productLabel(blocking),
-        insType: this.normalizeInsType(category, String(blocking.ins_type ?? ins ?? '')),
+        categoryLabel: productLabel(blocking),
+        insType: normalizeStoredInsType(category, String(blocking.ins_type ?? ins ?? '')),
       };
     }
 
@@ -690,14 +629,6 @@ export class LeadsService {
     return (data as Record<string, unknown>) ?? null;
   }
 
-  private normalizeCategory(category?: string | null): string {
-    const c = String(category ?? '')
-      .trim()
-      .toLowerCase()
-      .replace(/-/g, '_');
-    return c || 'personal_loan';
-  }
-
   /** Active lead for this mobile + product (+ insurance subtype when set). */
   async getByMobileAndCategory(
     mobileNumber: string,
@@ -705,8 +636,8 @@ export class LeadsService {
     insType?: string | null,
   ): Promise<Record<string, unknown> | null> {
     const mobile = mobileNumber.trim();
-    const cat = this.normalizeCategory(category);
-    const ins = this.normalizeInsType(cat, insType);
+    const cat = normalizeStoredCategory(category);
+    const ins = normalizeStoredInsType(cat, insType);
     let q = this.leads
       .select()
       .eq('mobile_number', mobile)
@@ -738,8 +669,8 @@ export class LeadsService {
   ): Promise<Record<string, unknown> | null> {
     const panUpper = normalizePan(pan);
     if (!isValidPanFormat(panUpper)) return null;
-    const cat = this.normalizeCategory(category);
-    const ins = this.normalizeInsType(cat, insType);
+    const cat = normalizeStoredCategory(category);
+    const ins = normalizeStoredInsType(cat, insType);
     const digest = hashPan(panUpper);
 
     let byHash = this.leads
@@ -813,8 +744,8 @@ export class LeadsService {
       };
     }
 
-    const category = this.normalizeCategory(dto.category);
-    const ins = this.normalizeInsType(category, dto.insType);
+    const category = normalizeStoredCategory(dto.category);
+    const ins = normalizeStoredInsType(category, dto.insType);
     if (category === 'personal_loan') {
       const empErr = this.personalLoanEmploymentError(dto);
       if (empErr) return { ok: false, message: empErr };
@@ -825,9 +756,9 @@ export class LeadsService {
 
     // Prefer exact product match; fall back to untyped insurance draft for upgrade.
     let byMobile = await this.getByMobileAndCategory(mobile, category, ins);
-    if ((!byMobile || !this.isDraftLead(byMobile)) && category === 'insurance' && ins) {
+    if ((!byMobile || !isDraftLead(byMobile)) && category === 'insurance' && ins) {
       const draftAny = await this.getByMobileAndCategory(mobile, category, null);
-      if (draftAny && this.isDraftLead(draftAny)) {
+      if (draftAny && isDraftLead(draftAny)) {
         byMobile = draftAny;
       }
     }
@@ -838,7 +769,7 @@ export class LeadsService {
       category,
       insType: ins,
       ignoreLeadId:
-        byMobile && this.isDraftLead(byMobile) && byMobile.id
+        byMobile && isDraftLead(byMobile) && byMobile.id
           ? String(byMobile.id)
           : undefined,
     });
@@ -896,7 +827,7 @@ export class LeadsService {
 
     // Upgrade OTP/start draft for this category only — never overwrite another product.
     // Approved prior lead stays; only drafts are upgraded.
-    if (byMobile && this.isDraftLead(byMobile) && byMobile.id) {
+    if (byMobile && isDraftLead(byMobile) && byMobile.id) {
       try {
         const plAmounts =
           category === 'personal_loan'
@@ -981,7 +912,7 @@ export class LeadsService {
     const nameErr = leadFullNameError(dto.fullName);
     if (nameErr) return { ok: false, message: nameErr };
 
-    const category = this.normalizeCategory(dto.category || 'personal_loan');
+    const category = normalizeStoredCategory(dto.category || 'personal_loan');
     if (category === 'personal_loan') {
       const empErr = this.personalLoanEmploymentError(dto);
       if (empErr) return { ok: false, field: 'employmentType', message: empErr };
@@ -992,7 +923,7 @@ export class LeadsService {
       const amtErr = personalLoanAmountError(amounts.requiredAmount);
       if (amtErr) return { ok: false, message: amtErr };
     }
-    if (category === 'insurance' && !this.normalizeInsType(category, dto.insType)) {
+    if (category === 'insurance' && !normalizeStoredInsType(category, dto.insType)) {
       return { ok: false, message: 'Please select insurance type.' };
     }
 
@@ -1054,7 +985,7 @@ export class LeadsService {
       return null;
     }
 
-    const category = this.normalizeCategory(dto.category || 'personal_loan');
+    const category = normalizeStoredCategory(dto.category || 'personal_loan');
     if (category === 'personal_loan') {
       const empErr = this.personalLoanEmploymentError(dto);
       if (empErr) {
@@ -1171,7 +1102,7 @@ export class LeadsService {
       return { ok: false, message: 'Unauthorized' };
     }
 
-    const category = this.normalizeCategory(dto.category || 'personal_loan');
+    const category = normalizeStoredCategory(dto.category || 'personal_loan');
     const insType = category === 'insurance' ? dto.insType ?? null : null;
     const gates = await this.evaluateApplicationGates({
       mobileNumber: dto.mobileNumber,
@@ -1396,7 +1327,7 @@ export class LeadsService {
       payload.loan_tenure_months = dto.loanTenureMonths ?? null;
     }
     const hasPartner = Boolean(String(payload.agent_id ?? existing.agent_id ?? '').trim());
-    const approved = this.isApprovedStatus(payload.status ?? existing.status);
+    const approved = isApprovedLeadStatus(payload.status ?? existing.status);
     if (!hasPartner) {
       payload.commission_type = null;
       payload.commission_value = null;
@@ -1405,7 +1336,7 @@ export class LeadsService {
         payload.commission_type = null;
         payload.commission_value = null;
       } else {
-        const category = this.normalizeCategory(
+        const category = normalizeStoredCategory(
           String(payload.category ?? existing.category ?? ''),
         );
         const loanAmount =
@@ -1432,7 +1363,7 @@ export class LeadsService {
 
     const nextStatus = String(payload.status ?? existing.status ?? '').trim();
     const nextAgent = String(payload.agent_id ?? existing.agent_id ?? '').trim();
-    const nextCategory = this.normalizeCategory(
+    const nextCategory = normalizeStoredCategory(
       String(payload.category ?? existing.category ?? ''),
     );
     if (nextCategory === 'personal_loan') {
@@ -1478,8 +1409,8 @@ export class LeadsService {
     }
     if (
       moneyChange &&
-      this.isApprovedStatus(nextStatus) &&
-      !this.isApprovedStatus(existing.status) &&
+      isApprovedLeadStatus(nextStatus) &&
+      !isApprovedLeadStatus(existing.status) &&
       nextCategory === 'personal_loan' &&
       leadLoanAmount({
         required_amount: payload.required_amount ?? existing.required_amount,
@@ -1498,12 +1429,12 @@ export class LeadsService {
       } else {
         const panUpper = normalizePan(dto.pan);
         if (!isValidPanFormat(panUpper)) return null;
-        const category = this.normalizeCategory(
+        const category = normalizeStoredCategory(
           dto.category ??
             (payload.category as string | undefined) ??
             String(existing['category'] ?? ''),
         );
-        const ins = this.normalizeInsType(
+        const ins = normalizeStoredInsType(
           category,
           dto.insType ??
             (payload.ins_type as string | undefined) ??
@@ -1634,7 +1565,7 @@ export class LeadsService {
   ): Promise<{ ok: true; pan: string; masked: string } | { ok: false; message: string }> {
     const row = await this.getById(id);
     if (!row) return { ok: false, message: 'Lead not found' };
-    if (this.isDraftLead(row)) {
+    if (isDraftLead(row)) {
       return { ok: false, message: 'PAN not available for incomplete applications' };
     }
 
@@ -1690,44 +1621,6 @@ export class LeadsService {
     return { ok: true, pan: plain, masked: maskPan(plain) };
   }
 
-  /**
-   * Decrypt temporarily and invoke partner handler. Audited as partner_send.
-   */
-  async sendPanToPartner(
-    leadId: string,
-    partner: { id: string; name?: string },
-    actor: {
-      adminId?: string;
-      adminEmail?: string;
-      adminRole?: string;
-      ipAddress?: string;
-      userAgent?: string;
-      reason?: string;
-    },
-    handler: (plainPan: string) => Promise<void> | void,
-  ) {
-    const row = await this.getById(leadId);
-    if (!row?.pan_encrypted) {
-      return { ok: false as const, message: 'Encrypted PAN not found for this lead' };
-    }
-    return withDecryptedPanForPartner(
-      String(row.pan_encrypted),
-      this.panAudit,
-      {
-        leadId,
-        partnerId: partner.id,
-        partnerName: partner.name,
-        adminId: actor.adminId,
-        adminEmail: actor.adminEmail,
-        adminRole: actor.adminRole,
-        ipAddress: actor.ipAddress,
-        userAgent: actor.userAgent,
-        reason: actor.reason,
-      },
-      handler,
-    );
-  }
-
   /** Update shared applicant details on every active lead for a mobile. */
   async updateProfileByMobile(
     mobileNumber: string,
@@ -1768,7 +1661,7 @@ export class LeadsService {
     }
 
     const ok = Array.isArray(data) && data.length > 0;
-    if (ok && existing && this.isApprovedStatus(existing.status)) {
+    if (ok && existing && isApprovedLeadStatus(existing.status)) {
       try {
         await this.reconcileAgentWallet(existing.agent_id);
       } catch (err) {

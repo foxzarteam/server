@@ -67,3 +67,18 @@ export function extractClientIp(
   if (!v4 || isPrivateOrLocalIp(v4)) return null;
   return v4.slice(0, 45) || null;
 }
+
+type IpRequest = {
+  headers?: Record<string, string | string[] | undefined>;
+  ip?: string;
+  socket?: { remoteAddress?: string | null };
+};
+
+/** Connection IP from proxy headers. Pass bodyIp only when storing attribution, not for rate limits. */
+export function requestClientIp(req: IpRequest, bodyIp?: string | null): string | null {
+  return extractClientIp(
+    req.headers ?? {},
+    req.ip ?? req.socket?.remoteAddress,
+    bodyIp,
+  );
+}
