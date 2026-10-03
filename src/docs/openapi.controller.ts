@@ -85,7 +85,7 @@ export const OPENAPI_SPEC = {
                     description:
                       'Lead category = service slug with underscores (personal-loan → personal_loan). New products come from public.services.',
                   },
-                  requiredAmount: { type: 'number', example: 500000, description: 'PL only, ₹25,000–₹10,00,000' },
+                  requiredAmount: { type: 'number', example: 500000, description: 'PL only, ₹25,000–₹50,00,000' },
                   employmentType: { type: 'string', enum: ['salaried', 'self_employed'] },
                   netMonthlyIncome: { type: 'number', example: 45000 },
                   insType: {

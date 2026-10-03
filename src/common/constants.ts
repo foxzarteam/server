@@ -11,6 +11,10 @@ export const TABLE_WALLET = 'wallet';
 /** Admin/staff panel users (`public.auth`). */
 export const TABLE_AUTH = 'auth';
 export const TABLE_CONTACT = 'contact';
+/** Encrypted integration secrets (WhatsApp + Gemini). One row per key. */
+export const TABLE_APP_SETTINGS = 'app_settings';
+/** One WhatsApp conversation per phone. */
+export const TABLE_WP_ENQUIRIES = 'wp_enquiries';
 /** PAN reveal / partner-send audit trail. */
 export const TABLE_PAN_ACCESS_AUDIT = 'pan_access_audit';
 /** Max 4 unique PAN fingerprints per mobile. */

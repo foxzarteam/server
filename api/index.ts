@@ -46,6 +46,7 @@ async function createApp(): Promise<express.Express> {
   expressApp.set('trust proxy', 1);
 
   const app = await NestFactory.create(AppModule, new ExpressAdapter(expressApp), {
+    rawBody: true,
     bufferLogs: true,
     logger: process.env.NODE_ENV === 'production' ? ['error', 'warn', 'log'] : undefined,
   });

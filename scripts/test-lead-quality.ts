@@ -73,8 +73,10 @@ assert.ok(leadFullNameError('A')?.includes('required'));
 assert.ok(leadFullNameError('Rahul123')?.includes('special'));
 
 assert.strictEqual(personalLoanAmountError(500000), null);
+assert.strictEqual(personalLoanAmountError(20_00_000), null);
+assert.strictEqual(personalLoanAmountError(50_00_000), null);
 assert.ok(personalLoanAmountError(1000));
-assert.ok(personalLoanAmountError(20_00_000));
+assert.ok(personalLoanAmountError(50_00_001));
 
 // —— write errors ——
 assert.strictEqual(

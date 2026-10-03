@@ -19,6 +19,7 @@ async function bootstrap() {
   }
 
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
+    rawBody: true,
     bufferLogs: true,
     logger: process.env.NODE_ENV === 'production' ? ['error', 'warn', 'log'] : undefined,
   });

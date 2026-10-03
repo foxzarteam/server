@@ -1,7 +1,7 @@
 /** Personal-loan amount for commission: exact rupees, else midpoint of loan_amt range. */
 
 export const PERSONAL_LOAN_AMOUNT_MIN = 25_000;
-export const PERSONAL_LOAN_AMOUNT_MAX = 10_00_000;
+export const PERSONAL_LOAN_AMOUNT_MAX = 50_00_000;
 
 export const CODE_LOAN_AMOUNT_REQUIRED = 'LOAN_AMOUNT_REQUIRED';
 
@@ -59,7 +59,7 @@ export function personalLoanAmountError(amount: unknown): string | null {
     n < PERSONAL_LOAN_AMOUNT_MIN ||
     n > PERSONAL_LOAN_AMOUNT_MAX
   ) {
-    return 'Loan amount must be between ₹25,000 and ₹10,00,000.';
+    return 'Loan amount must be between ₹25,000 and ₹50,00,000.';
   }
   return null;
 }

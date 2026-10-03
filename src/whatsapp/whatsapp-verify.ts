@@ -1,4 +1,4 @@
-import { timingSafeEqual } from 'crypto';
+import { createHmac, timingSafeEqual } from 'crypto';
 
 function tokensEqual(a: string, b: string): boolean {
   const left = Buffer.from(a);
@@ -24,4 +24,22 @@ export function whatsappHubChallenge(input: {
   if (!expected || mode !== 'subscribe' || !challenge) return null;
   if (!tokensEqual(token, expected)) return null;
   return challenge;
+}
+
+/**
+ * Meta X-Hub-Signature-256. Empty app secret means verification is not configured yet.
+ * A configured secret with a missing or wrong signature returns false.
+ */
+export function whatsappSignatureOk(
+  rawBody: Buffer,
+  signatureHeader: string | undefined,
+  appSecret: string,
+): boolean {
+  const secret = String(appSecret ?? '').trim();
+  if (!secret) return true;
+  const header = String(signatureHeader ?? '').trim();
+  const match = /^sha256=([0-9a-f]{64})$/i.exec(header);
+  if (!match) return false;
+  const expected = createHmac('sha256', secret).update(rawBody).digest('hex');
+  return tokensEqual(expected.toLowerCase(), match[1].toLowerCase());
 }
