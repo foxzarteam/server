@@ -59,6 +59,13 @@ function keep(next: string | undefined, prev: string): string {
   return value || prev;
 }
 
+/** Ignore blank or short values so a browser autofill cannot replace a saved API secret. */
+function keepLongSecret(next: string | undefined, prev: string): string {
+  const value = String(next ?? '').trim();
+  if (value.length < 30) return prev;
+  return value;
+}
+
 function cleanAccessToken(raw: string): string {
   return String(raw ?? '')
     .trim()
@@ -143,12 +150,12 @@ export class WhatsappSettingsService {
   async update(dto: UpdateWhatsappSettingsDto): Promise<{ settings: WhatsappSettings; warning?: string }> {
     const prev = await this.getStored();
     const next: WhatsappSettings = {
-      accessToken: cleanAccessToken(keep(dto.accessToken, prev.accessToken)),
+      accessToken: cleanAccessToken(keepLongSecret(dto.accessToken, prev.accessToken)),
       phoneNumberId: digitsOnly(keep(dto.phoneNumberId, prev.phoneNumberId)),
       businessAccountId: digitsOnly(keep(dto.businessAccountId, prev.businessAccountId)),
-      appSecret: keep(dto.appSecret, prev.appSecret),
+      appSecret: keepLongSecret(dto.appSecret, prev.appSecret),
       verifyToken: keep(dto.verifyToken, prev.verifyToken),
-      geminiApiKey: cleanGeminiKey(keep(dto.geminiApiKey, prev.geminiApiKey)),
+      geminiApiKey: cleanGeminiKey(keepLongSecret(dto.geminiApiKey, prev.geminiApiKey)),
       geminiModel: keep(dto.geminiModel, prev.geminiModel),
       displayPhone: prev.displayPhone,
     };

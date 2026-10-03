@@ -1,4 +1,4 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, NotFoundException, Param, Post, Put, Query, Req, Res, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, HttpCode, HttpStatus, NotFoundException, Param, Post, Put, Query, Req, Res, UseGuards } from '@nestjs/common';
 import type { RawBodyRequest } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { AdminCrmGuard } from '../common/admin-crm.guard';
@@ -81,6 +81,15 @@ export class WhatsappController {
     const data = await this.whatsapp.getForAdmin(id);
     if (!data) throw new NotFoundException('Chat not found.');
     return { success: true, data };
+  }
+
+  @Delete('admin/enquiries/:id')
+  @UseGuards(AdminCrmGuard)
+  @HttpCode(HttpStatus.OK)
+  async deleteAdminEnquiry(@Param('id') id: string) {
+    const ok = await this.whatsapp.deleteForAdmin(id);
+    if (!ok) throw new NotFoundException('Chat not found.');
+    return { success: true };
   }
 
   /** Meta subscription handshake — body must be the raw challenge, not JSON. */

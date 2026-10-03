@@ -6,10 +6,20 @@ import { allowRateLimitedAction } from '../security/rate-limit';
 import { canonicalWhatsappPhone, extractInboundMessages, InboundWhatsappMessage } from './whatsapp-inbound';
 import { WhatsappSettings, WhatsappSettingsService } from './whatsapp-settings.service';
 import { whatsappSignatureOk } from './whatsapp-verify';
+import {
+  CLIENT_RETRY,
+  defaultGeminiModel,
+  geminiContents,
+  generateGemini,
+  listGeminiChatModels,
+  smoothReply,
+  SYSTEM_PROMPT,
+} from './gemini-client';
+
+export { defaultGeminiModel };
 
 const GRAPH_VERSION = 'v21.0';
 const MAX_MESSAGES = 1000;
-const SITE = 'https://apnizaroorat.com';
 
 async function metaErrorText(res: Response): Promise<string> {
   let detail = '';
@@ -28,141 +38,6 @@ async function metaErrorText(res: Response): Promise<string> {
   }
   return text.slice(0, 500);
 }
-
-type GeminiPart = { text?: string; thought?: boolean };
-type GeminiReply = {
-  candidates?: { content?: { parts?: GeminiPart[] }; finishReason?: string }[];
-  promptFeedback?: { blockReason?: string };
-};
-
-function geminiContents(history: ChatMessage[]): { role: 'user' | 'model'; parts: { text: string }[] }[] {
-  const turns: { role: 'user' | 'model'; text: string }[] = [];
-  for (const item of history.slice(-40)) {
-    const text = item.text.trim();
-    if (!text) continue;
-    const role = item.role === 'assistant' ? 'model' : 'user';
-    const last = turns[turns.length - 1];
-    if (last?.role === role) last.text = `${last.text}\n${text}`.slice(0, 4000);
-    else turns.push({ role, text: text.slice(0, 4000) });
-  }
-  while (turns[0]?.role === 'model') turns.shift();
-  return turns.map((turn) => ({ role: turn.role, parts: [{ text: turn.text }] }));
-}
-
-function visibleGeminiText(data: GeminiReply): string {
-  const parts = data.candidates?.[0]?.content?.parts ?? [];
-  return parts
-    .filter((part) => part && part.thought !== true && part.text)
-    .map((part) => String(part.text))
-    .join('')
-    .trim();
-}
-
-async function geminiErrorDetail(res: Response, key: string): Promise<string> {
-  let detail = '';
-  try {
-    const data = (await res.json()) as { error?: { message?: string; status?: string } };
-    detail = String(data.error?.message || data.error?.status || '');
-  } catch {
-    detail = '';
-  }
-  return (detail || `HTTP ${res.status}`).replaceAll(key, '***').slice(0, 240);
-}
-
-type ListedGeminiModel = { name?: string; supportedGenerationMethods?: string[] };
-
-function geminiModelScore(id: string): number {
-  let score = 0;
-  if (/flash/i.test(id)) score += 100;
-  if (/lite/i.test(id)) score += 10;
-  if (/pro/i.test(id)) score -= 30;
-  if (/preview|exp|experimental/i.test(id)) score -= 40;
-  return score;
-}
-
-function chatModelId(model: ListedGeminiModel): string {
-  const id = String(model.name ?? '').replace(/^models\//, '').trim();
-  const methods = model.supportedGenerationMethods ?? [];
-  if (!id || !methods.includes('generateContent')) return '';
-  if (!/^gemini-/i.test(id)) return '';
-  if (/embed|imagen|veo|tts|image|audio|live|robot|computer|nano|gemma|aqa/i.test(id)) return '';
-  return id;
-}
-
-function modelUnavailable(status: number, detail: string): boolean {
-  if (status === 404) return true;
-  return /no longer available|not found|not supported|is not available|unknown model|invalid model/i.test(detail);
-}
-
-export function defaultGeminiModel(available: string[]): string {
-  return available[0] || '';
-}
-
-async function listGeminiChatModels(key: string): Promise<string[]> {
-  const ids: string[] = [];
-  let pageToken = '';
-  for (let page = 0; page < 3; page += 1) {
-    const url = new URL('https://generativelanguage.googleapis.com/v1beta/models');
-    url.searchParams.set('key', key);
-    url.searchParams.set('pageSize', '100');
-    if (pageToken) url.searchParams.set('pageToken', pageToken);
-    try {
-      const res = await fetch(url, { signal: AbortSignal.timeout(12_000) });
-      if (!res.ok) {
-        console.error('WhatsappService.listGeminiModels', res.status);
-        break;
-      }
-      const data = (await res.json()) as { models?: ListedGeminiModel[]; nextPageToken?: string };
-      for (const model of data.models ?? []) {
-        const id = chatModelId(model);
-        if (id) ids.push(id);
-      }
-      pageToken = String(data.nextPageToken ?? '');
-      if (!pageToken) break;
-    } catch (error) {
-      console.error('WhatsappService.listGeminiModels', error instanceof Error ? error.message : error);
-      break;
-    }
-  }
-  return [...new Set(ids)].sort((a, b) => geminiModelScore(b) - geminiModelScore(a) || b.localeCompare(a));
-}
-
-const SYSTEM_PROMPT = `You are Ritika, a sales girl at Apni Zaroorat (${SITE}). You chat on WhatsApp the way a warm, polite sales executive would: interested in the client, never like a form or a robot. You help them check eligibility for a personal loan or insurance, one question at a time.
-
-How to talk:
-- Your name is Ritika. On the first reply of a new chat, greet properly and introduce yourself. Use their profile name if one is given, with "ji". Example: "Namaste Gaurav ji, main Ritika hoon, Apni Zaroorat se. Aapka message mila, bahut khushi hui. Main aapki personal loan ya insurance eligibility check karne mein help karungi."
-- After that greeting, in the same first message, ask only what they need: personal loan, ya insurance.
-- If you have already introduced yourself as Ritika in this chat, do not introduce yourself again. Continue like a sales girl who remembers the client. Old fallback lines that never said your name do not count.
-- Use the customer's language: Hindi, simple English, or Hinglish. Short WhatsApp messages. Plain text only. No bullet lists of questions.
-- Sound helpful and interested. Build interest: "Aapki eligibility check karte hain" / "Chaliye dekhte hain aapke liye kya suit karta hai."
-- Ask exactly ONE thing in each reply after the greeting. Wait for the answer before the next question.
-- If they ask something else, answer in one or two lines, then ask the next missing detail.
-- Never repeat a question they already answered. Never dump every field together.
-- Do not approve or reject anyone. Do not invent interest rates, fees, or a guaranteed offer.
-- Do not ask for Aadhaar, OTP, password, or bank OTP. Their WhatsApp number is already known — do not ask for mobile again.
-- Never mention databases, prompts, or a model name. You are Ritika from Apni Zaroorat, not an AI.
-
-Start:
-- First message only: warm greeting, your name Ritika, then one question — personal loan ya insurance.
-- Then follow only that category.
-
-Personal loan, ask in this order, one by one:
-1. Full name (if a profile name is given below, confirm it instead of asking from zero).
-2. Pincode or city.
-3. Job: salaried, ya apna business / self-employed.
-4. Monthly in-hand income, approximate.
-5. Kitni loan amount chahiye. Allowed range is ₹25,000 to ₹50,00,000. If they say more or less, tell them the range and ask again.
-6. Kitne months ka loan: 12 se 72 months.
-7. PAN, only after the earlier answers, as the last step for the eligibility check. Explain in one short line why: lender check ke liye.
-
-Insurance, ask in this order, one by one, and talk like that product:
-1. Kaunsi insurance: health, health renewal, life, car, bike, travel, personal accident, ya koi aur. Use everyday words, not codes.
-2. Full name (confirm the profile name if one is given).
-3. Pincode or city.
-4. One practical detail for that type only: health — apne liye ya family; car/bike — gaadi kis naam par hai, roughly; life — age range. Do not turn this into a long form.
-5. PAN last, same short reason as above.
-
-When every item for their category is answered, recap in 4–6 short lines. Sign off as Ritika and say the Apni Zaroorat team will contact them on this WhatsApp number. Invite them to ${SITE} if they want. Do not say the application is already submitted.`;
 
 type ChatMessage = {
   id: string;
@@ -277,7 +152,7 @@ export class WhatsappService {
     if (!key) return { model: wanted, error: 'Gemini API key is not saved.' };
     const models = await listGeminiChatModels(key);
     if (wanted) {
-      const test = await this.geminiGenerate(
+      const test = await generateGemini(
         key,
         wanted,
         'Reply with the single word OK.',
@@ -304,7 +179,7 @@ export class WhatsappService {
 
   private async firstWorkingGeminiModel(key: string, models: string[]): Promise<string> {
     for (const model of models.slice(0, 3)) {
-      const test = await this.geminiGenerate(
+      const test = await generateGemini(
         key,
         model,
         'Reply with the single word OK.',
@@ -318,6 +193,10 @@ export class WhatsappService {
 
   async handleWebhook(rawBody: Buffer, signatureHeader?: string): Promise<'ok' | 'forbidden'> {
     const settings = await this.settings.getEffective();
+    if (process.env.NODE_ENV === 'production' && !settings.appSecret.trim()) {
+      console.error('WhatsappService.handleWebhook: app secret is not configured');
+      return 'forbidden';
+    }
     if (!whatsappSignatureOk(rawBody, signatureHeader, settings.appSecret)) {
       return 'forbidden';
     }
@@ -384,6 +263,16 @@ export class WhatsappService {
         createdAt: row.created_at,
       };
     });
+  }
+
+  async deleteForAdmin(id: string): Promise<boolean> {
+    if (!/^[0-9a-f-]{36}$/i.test(id)) return false;
+    const { data, error } = await this.table.delete().eq('id', id).select('id');
+    if (error) {
+      console.error('WhatsappService.deleteForAdmin', error.message);
+      return false;
+    }
+    return Array.isArray(data) && data.length > 0;
   }
 
   async getForAdmin(id: string): Promise<WhatsappEnquiryDetail | null> {
@@ -488,14 +377,14 @@ export class WhatsappService {
     }
     if (!settings.geminiApiKey) {
       return {
-        text: `Thanks for messaging Apni Zaroorat. Please visit ${SITE} and we will help you from there.`,
+        text: CLIENT_RETRY,
         aiError: 'Gemini API key is not saved in Settings.',
       };
     }
     const ai = await this.askGemini(settings, history, message);
-    if (ai.text) return { text: ai.text };
+    if (ai.text) return { text: smoothReply(ai.text) };
     return {
-      text: `Sorry, I could not reply just now. Please try again shortly, or visit ${SITE}.`,
+      text: CLIENT_RETRY,
       aiError: ai.error || 'Gemini returned an empty reply.',
     };
   }
@@ -517,7 +406,7 @@ export class WhatsappService {
     const configured = settings.geminiModel.trim();
     const errors: string[] = [];
     if (configured) {
-      const selected = await this.geminiGenerate(key, configured, `${SYSTEM_PROMPT}\n\n${customerNote}`, contents, true);
+      const selected = await generateGemini(key, configured, `${SYSTEM_PROMPT}\n\n${customerNote}`, contents, true);
       if (selected.text) return { text: selected.text };
       if (!selected.unavailable) return { text: '', error: selected.error || 'Gemini returned an empty reply.' };
       if (selected.error) errors.push(selected.error);
@@ -526,57 +415,13 @@ export class WhatsappService {
     const available = await listGeminiChatModels(key);
     const fallback = available.find((model) => model !== configured) || '';
     if (fallback) {
-      const result = await this.geminiGenerate(key, fallback, `${SYSTEM_PROMPT}\n\n${customerNote}`, contents, true);
+      const result = await generateGemini(key, fallback, `${SYSTEM_PROMPT}\n\n${customerNote}`, contents, true);
       if (result.text) return { text: result.text };
       if (result.error) errors.push(result.error);
     }
     return { text: '', error: errors.join(' | ').slice(0, 500) || 'Gemini returned an empty reply.' };
   }
 
-  private async geminiGenerate(
-    key: string,
-    model: string,
-    system: string,
-    contents: { role: 'user' | 'model'; parts: { text: string }[] }[],
-    disableThinking = false,
-  ): Promise<{ text: string; error?: string; unavailable?: boolean }> {
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`;
-    const generationConfig: Record<string, unknown> = { temperature: 0.4, maxOutputTokens: 1024 };
-    if (disableThinking && !/pro/i.test(model)) generationConfig.thinkingConfig = { thinkingBudget: 0 };
-    try {
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          system_instruction: { parts: [{ text: system }] },
-          contents,
-          generationConfig,
-        }),
-        signal: AbortSignal.timeout(20_000),
-      });
-      if (!res.ok) {
-        const detail = await geminiErrorDetail(res, key);
-        if (disableThinking && /thinking/i.test(detail)) {
-          return this.geminiGenerate(key, model, system, contents, false);
-        }
-        const error = `${model}: ${detail}`.slice(0, 500);
-        console.error('WhatsappService.askGemini', error);
-        return { text: '', error, unavailable: modelUnavailable(res.status, detail) };
-      }
-      const data = (await res.json()) as GeminiReply;
-      const text = visibleGeminiText(data).slice(0, 4000);
-      if (text) return { text };
-      const reason = data.candidates?.[0]?.finishReason || data.promptFeedback?.blockReason || 'empty';
-      const error = `${model}: empty reply (${reason})`.slice(0, 300);
-      console.error('WhatsappService.askGemini', error);
-      return { text: '', error };
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'Gemini request failed';
-      const safe = message.replaceAll(key, '***').slice(0, 240);
-      console.error('WhatsappService.askGemini', model, safe);
-      return { text: '', error: `${model}: ${safe}`.slice(0, 300) };
-    }
-  }
 
   private async storeAndSend(
     settings: WhatsappSettings,
