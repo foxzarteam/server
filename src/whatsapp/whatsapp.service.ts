@@ -231,7 +231,7 @@ export class WhatsappService {
       if (phone) await this.settings.rememberDisplayPhone(phone);
     }
     const url = /^[0-9]{8,15}$/.test(phone)
-      ? `https://wa.me/${phone}?text=${encodeURIComponent('Hi')}`
+      ? `https://wa.me/${phone}?text=${encodeURIComponent('Hello 👋')}`
       : null;
     this.linkCache = { until: now + 60_000, url };
     return url;
