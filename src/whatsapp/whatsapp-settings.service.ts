@@ -8,7 +8,6 @@ import { UpdateWhatsappSettingsDto } from './whatsapp.dto';
 
 const SETTINGS_KEY = 'whatsapp_integration';
 const GRAPH_VERSION = 'v21.0';
-const DEFAULT_MODEL = 'gemini-3.8-flash';
 
 export type WhatsappSettings = {
   accessToken: string;
@@ -33,6 +32,7 @@ export type WhatsappSettingsPublic = {
   geminiApiKeyConfigured: boolean;
   geminiApiKeyHint: string;
   geminiModel: string;
+  geminiModels: string[];
   displayPhone: string;
 };
 
@@ -117,7 +117,7 @@ export class WhatsappSettingsService {
       appSecret: stored.appSecret || env('WHATSAPP_APP_SECRET'),
       verifyToken: stored.verifyToken || env('WHATSAPP_VERIFY_TOKEN'),
       geminiApiKey: cleanGeminiKey(stored.geminiApiKey || env('GEMINI_API_KEY')),
-      geminiModel: stored.geminiModel || env('GEMINI_MODEL') || DEFAULT_MODEL,
+      geminiModel: stored.geminiModel || env('GEMINI_MODEL'),
       displayPhone: stored.displayPhone || digitsOnly(env('WHATSAPP_DISPLAY_PHONE')),
     };
   }
@@ -134,7 +134,8 @@ export class WhatsappSettingsService {
       verifyTokenHint: hint(settings.verifyToken),
       geminiApiKeyConfigured: Boolean(settings.geminiApiKey),
       geminiApiKeyHint: hint(settings.geminiApiKey),
-      geminiModel: settings.geminiModel || DEFAULT_MODEL,
+      geminiModel: settings.geminiModel,
+      geminiModels: [],
       displayPhone: settings.displayPhone,
     };
   }
@@ -148,7 +149,7 @@ export class WhatsappSettingsService {
       appSecret: keep(dto.appSecret, prev.appSecret),
       verifyToken: keep(dto.verifyToken, prev.verifyToken),
       geminiApiKey: cleanGeminiKey(keep(dto.geminiApiKey, prev.geminiApiKey)),
-      geminiModel: keep(dto.geminiModel, prev.geminiModel) || DEFAULT_MODEL,
+      geminiModel: keep(dto.geminiModel, prev.geminiModel),
       displayPhone: prev.displayPhone,
     };
 
@@ -176,6 +177,25 @@ export class WhatsappSettingsService {
     }
 
     return { settings: next, warning };
+  }
+
+  async setGeminiModel(model: string): Promise<WhatsappSettings> {
+    const prev = await this.getStored();
+    const next = { ...prev, geminiModel: model.trim() };
+    this.assertShape(next);
+    const { error } = await this.supabase.from(TABLE_APP_SETTINGS).upsert(
+      {
+        key: SETTINGS_KEY,
+        value: encryptSettingsJson(next),
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: 'key' },
+    );
+    if (error) {
+      console.error('WhatsappSettingsService.setGeminiModel', error.message);
+      throw new BadRequestException('Could not save WhatsApp settings.');
+    }
+    return next;
   }
 
   async rememberDisplayPhone(phone: string): Promise<void> {

@@ -3,8 +3,8 @@ import type { RawBodyRequest } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { AdminCrmGuard } from '../common/admin-crm.guard';
 import { UpdateWhatsappSettingsDto } from './whatsapp.dto';
-import { WhatsappService } from './whatsapp.service';
-import { WhatsappSettingsService } from './whatsapp-settings.service';
+import { WhatsappService, defaultGeminiModel } from './whatsapp.service';
+import { WhatsappSettings, WhatsappSettingsService } from './whatsapp-settings.service';
 import { whatsappHubChallenge } from './whatsapp-verify';
 
 function webhookRawBody(req: RawBodyRequest<Request>): Buffer {
@@ -40,7 +40,7 @@ export class WhatsappController {
   @HttpCode(HttpStatus.OK)
   async adminSettings() {
     const stored = await this.settings.getStored();
-    return { success: true, data: this.settings.toPublic(stored) };
+    return { success: true, data: await this.presentSettings(stored) };
   }
 
   @Put('admin/settings')
@@ -49,10 +49,20 @@ export class WhatsappController {
   async updateAdminSettings(@Body() dto: UpdateWhatsappSettingsDto) {
     const saved = await this.settings.update(dto);
     this.whatsapp.clearLinkCache();
+    let settings = saved.settings;
+    let modelWarning = '';
+    if (settings.geminiApiKey) {
+      const resolved = await this.whatsapp.resolveGeminiModel(settings.geminiApiKey, settings.geminiModel);
+      if (resolved.model && resolved.model !== settings.geminiModel) {
+        settings = await this.settings.setGeminiModel(resolved.model);
+      }
+      modelWarning = resolved.error || '';
+    }
+    const warning = [saved.warning, modelWarning].filter(Boolean).join(' ');
     return {
       success: true,
-      data: this.settings.toPublic(saved.settings),
-      ...(saved.warning ? { warning: saved.warning } : {}),
+      data: await this.presentSettings(settings),
+      ...(warning ? { warning } : {}),
     };
   }
 
@@ -104,5 +114,17 @@ export class WhatsappController {
       return res.status(403).type('text/plain').send('Forbidden');
     }
     return res.status(200).type('text/plain').send('');
+  }
+
+  private async presentSettings(settings: WhatsappSettings) {
+    const data = this.settings.toPublic(settings);
+    const geminiModels = settings.geminiApiKey
+      ? await this.whatsapp.listChatModels(settings.geminiApiKey)
+      : [];
+    return {
+      ...data,
+      geminiModels,
+      geminiModel: data.geminiModel || defaultGeminiModel(geminiModels),
+    };
   }
 }

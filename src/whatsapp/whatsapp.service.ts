@@ -69,6 +69,64 @@ async function geminiErrorDetail(res: Response, key: string): Promise<string> {
   return (detail || `HTTP ${res.status}`).replaceAll(key, '***').slice(0, 240);
 }
 
+type ListedGeminiModel = { name?: string; supportedGenerationMethods?: string[] };
+
+function geminiModelScore(id: string): number {
+  let score = 0;
+  if (/flash/i.test(id)) score += 100;
+  if (/lite/i.test(id)) score += 10;
+  if (/pro/i.test(id)) score -= 30;
+  if (/preview|exp|experimental/i.test(id)) score -= 40;
+  return score;
+}
+
+function chatModelId(model: ListedGeminiModel): string {
+  const id = String(model.name ?? '').replace(/^models\//, '').trim();
+  const methods = model.supportedGenerationMethods ?? [];
+  if (!id || !methods.includes('generateContent')) return '';
+  if (!/^gemini-/i.test(id)) return '';
+  if (/embed|imagen|veo|tts|image|audio|live|robot|computer|nano|gemma|aqa/i.test(id)) return '';
+  return id;
+}
+
+function modelUnavailable(status: number, detail: string): boolean {
+  if (status === 404) return true;
+  return /no longer available|not found|not supported|is not available|unknown model|invalid model/i.test(detail);
+}
+
+export function defaultGeminiModel(available: string[]): string {
+  return available[0] || '';
+}
+
+async function listGeminiChatModels(key: string): Promise<string[]> {
+  const ids: string[] = [];
+  let pageToken = '';
+  for (let page = 0; page < 3; page += 1) {
+    const url = new URL('https://generativelanguage.googleapis.com/v1beta/models');
+    url.searchParams.set('key', key);
+    url.searchParams.set('pageSize', '100');
+    if (pageToken) url.searchParams.set('pageToken', pageToken);
+    try {
+      const res = await fetch(url, { signal: AbortSignal.timeout(12_000) });
+      if (!res.ok) {
+        console.error('WhatsappService.listGeminiModels', res.status);
+        break;
+      }
+      const data = (await res.json()) as { models?: ListedGeminiModel[]; nextPageToken?: string };
+      for (const model of data.models ?? []) {
+        const id = chatModelId(model);
+        if (id) ids.push(id);
+      }
+      pageToken = String(data.nextPageToken ?? '');
+      if (!pageToken) break;
+    } catch (error) {
+      console.error('WhatsappService.listGeminiModels', error instanceof Error ? error.message : error);
+      break;
+    }
+  }
+  return [...new Set(ids)].sort((a, b) => geminiModelScore(b) - geminiModelScore(a) || b.localeCompare(a));
+}
+
 const SYSTEM_PROMPT = `You are Ritika, a sales girl at Apni Zaroorat (${SITE}). You chat on WhatsApp the way a warm, polite sales executive would: interested in the client, never like a form or a robot. You help them check eligibility for a personal loan or insurance, one question at a time.
 
 How to talk:
@@ -201,6 +259,61 @@ export class WhatsappService {
 
   private get table() {
     return this.supabase.from(TABLE_WP_ENQUIRIES);
+  }
+
+  async listChatModels(apiKey: string): Promise<string[]> {
+    const key = apiKey.trim().replace(/\s+/g, '');
+    if (!key) return [];
+    return listGeminiChatModels(key);
+  }
+
+  /** Confirms the admin model with a real generate call. Picks a listed free-tier model only when that call says the model is unavailable. */
+  async resolveGeminiModel(
+    apiKey: string,
+    requested: string,
+  ): Promise<{ model: string; error?: string }> {
+    const key = apiKey.trim().replace(/\s+/g, '');
+    const wanted = requested.trim();
+    if (!key) return { model: wanted, error: 'Gemini API key is not saved.' };
+    const models = await listGeminiChatModels(key);
+    if (wanted) {
+      const test = await this.geminiGenerate(
+        key,
+        wanted,
+        'Reply with the single word OK.',
+        [{ role: 'user', parts: [{ text: 'Hi' }] }],
+        true,
+      );
+      if (test.text) return { model: wanted };
+      if (!test.unavailable) {
+        return { model: wanted, error: test.error || `${wanted} did not return a reply.` };
+      }
+      const replacement = await this.firstWorkingGeminiModel(key, models.filter((model) => model !== wanted));
+      if (replacement) {
+        return {
+          model: replacement,
+          error: `${wanted} is not available for this API key. ${test.error || ''} Using ${replacement} instead.`.replace(/\s+/g, ' ').trim(),
+        };
+      }
+      return { model: wanted, error: test.error || `${wanted} is not available for this API key.` };
+    }
+    const replacement = await this.firstWorkingGeminiModel(key, models);
+    if (replacement) return { model: replacement };
+    return { model: '', error: 'No Gemini model on this API key returned a reply. Check the key and Free Tier access.' };
+  }
+
+  private async firstWorkingGeminiModel(key: string, models: string[]): Promise<string> {
+    for (const model of models.slice(0, 3)) {
+      const test = await this.geminiGenerate(
+        key,
+        model,
+        'Reply with the single word OK.',
+        [{ role: 'user', parts: [{ text: 'Hi' }] }],
+        true,
+      );
+      if (test.text) return model;
+    }
+    return '';
   }
 
   async handleWebhook(rawBody: Buffer, signatureHeader?: string): Promise<'ok' | 'forbidden'> {
@@ -401,14 +514,19 @@ export class WhatsappService {
     if (!key) return { text: '', error: 'Gemini API key is not saved.' };
     if (contents.length === 0) return { text: '', error: 'No customer text to send to Gemini.' };
 
-    const retired = new Set(['gemini-2.0-flash', 'gemini-2.0-flash-lite', 'gemini-1.5-flash', 'gemini-1.5-pro']);
     const configured = settings.geminiModel.trim();
-    const models = ['gemini-3.8-flash', configured].filter(
-      (model, index, all) => model && !retired.has(model) && all.indexOf(model) === index,
-    );
     const errors: string[] = [];
-    for (const model of models) {
-      const result = await this.geminiGenerate(key, model, `${SYSTEM_PROMPT}\n\n${customerNote}`, contents, true);
+    if (configured) {
+      const selected = await this.geminiGenerate(key, configured, `${SYSTEM_PROMPT}\n\n${customerNote}`, contents, true);
+      if (selected.text) return { text: selected.text };
+      if (!selected.unavailable) return { text: '', error: selected.error || 'Gemini returned an empty reply.' };
+      if (selected.error) errors.push(selected.error);
+    }
+
+    const available = await listGeminiChatModels(key);
+    const fallback = available.find((model) => model !== configured) || '';
+    if (fallback) {
+      const result = await this.geminiGenerate(key, fallback, `${SYSTEM_PROMPT}\n\n${customerNote}`, contents, true);
       if (result.text) return { text: result.text };
       if (result.error) errors.push(result.error);
     }
@@ -421,7 +539,7 @@ export class WhatsappService {
     system: string,
     contents: { role: 'user' | 'model'; parts: { text: string }[] }[],
     disableThinking = false,
-  ): Promise<{ text: string; error?: string }> {
+  ): Promise<{ text: string; error?: string; unavailable?: boolean }> {
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`;
     const generationConfig: Record<string, unknown> = { temperature: 0.4, maxOutputTokens: 1024 };
     if (disableThinking && !/pro/i.test(model)) generationConfig.thinkingConfig = { thinkingBudget: 0 };
@@ -443,7 +561,7 @@ export class WhatsappService {
         }
         const error = `${model}: ${detail}`.slice(0, 500);
         console.error('WhatsappService.askGemini', error);
-        return { text: '', error };
+        return { text: '', error, unavailable: modelUnavailable(res.status, detail) };
       }
       const data = (await res.json()) as GeminiReply;
       const text = visibleGeminiText(data).slice(0, 4000);
