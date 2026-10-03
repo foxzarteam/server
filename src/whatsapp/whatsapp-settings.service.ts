@@ -8,7 +8,7 @@ import { UpdateWhatsappSettingsDto } from './whatsapp.dto';
 
 const SETTINGS_KEY = 'whatsapp_integration';
 const GRAPH_VERSION = 'v21.0';
-const DEFAULT_MODEL = 'gemini-2.5-flash';
+const DEFAULT_MODEL = 'gemini-3.8-flash';
 
 export type WhatsappSettings = {
   accessToken: string;

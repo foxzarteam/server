@@ -13,15 +13,20 @@ const SITE = 'https://apnizaroorat.com';
 
 async function metaErrorText(res: Response): Promise<string> {
   let detail = '';
+  let code: number | undefined;
   try {
     const data = (await res.json()) as { error?: { message?: string; code?: number } };
     const message = String(data.error?.message ?? '').trim();
-    const code = data.error?.code;
+    code = data.error?.code;
     if (message) detail = code ? `${code}: ${message}` : message;
   } catch {
     detail = '';
   }
-  return (detail || `WhatsApp send failed (${res.status})`).slice(0, 300);
+  let text = detail || `WhatsApp send failed (${res.status})`;
+  if (code === 100 || /authorization error/i.test(text)) {
+    text = `${text}. Access token is invalid, expired, or not allowed to send from this phone number ID.`;
+  }
+  return text.slice(0, 500);
 }
 
 type GeminiPart = { text?: string; thought?: boolean };
@@ -174,8 +179,8 @@ function asChat(raw: unknown): ChatDoc {
       ...(row.sent ? { sent: true } : {}),
       ...(row.sending ? { sending: true } : {}),
       ...(row.sendingAt ? { sendingAt: String(row.sendingAt) } : {}),
-      ...(row.sendError ? { sendError: String(row.sendError).slice(0, 300) } : {}),
-      ...(row.aiError ? { aiError: String(row.aiError).slice(0, 300) } : {}),
+      ...(row.sendError ? { sendError: String(row.sendError).slice(0, 500) } : {}),
+      ...(row.aiError ? { aiError: String(row.aiError).slice(0, 500) } : {}),
     });
   }
   return {
@@ -396,16 +401,18 @@ export class WhatsappService {
     if (!key) return { text: '', error: 'Gemini API key is not saved.' };
     if (contents.length === 0) return { text: '', error: 'No customer text to send to Gemini.' };
 
-    const models = [settings.geminiModel || 'gemini-2.5-flash', 'gemini-2.0-flash'].filter(
-      (model, index, all) => model && all.indexOf(model) === index,
+    const retired = new Set(['gemini-2.0-flash', 'gemini-2.0-flash-lite', 'gemini-1.5-flash', 'gemini-1.5-pro']);
+    const configured = settings.geminiModel.trim();
+    const models = ['gemini-3.8-flash', configured].filter(
+      (model, index, all) => model && !retired.has(model) && all.indexOf(model) === index,
     );
-    let lastError = 'Gemini returned an empty reply.';
+    const errors: string[] = [];
     for (const model of models) {
-      const result = await this.geminiGenerate(key, model, `${SYSTEM_PROMPT}\n\n${customerNote}`, contents);
+      const result = await this.geminiGenerate(key, model, `${SYSTEM_PROMPT}\n\n${customerNote}`, contents, true);
       if (result.text) return { text: result.text };
-      if (result.error) lastError = result.error;
+      if (result.error) errors.push(result.error);
     }
-    return { text: '', error: lastError };
+    return { text: '', error: errors.join(' | ').slice(0, 500) || 'Gemini returned an empty reply.' };
   }
 
   private async geminiGenerate(
@@ -413,10 +420,11 @@ export class WhatsappService {
     model: string,
     system: string,
     contents: { role: 'user' | 'model'; parts: { text: string }[] }[],
+    disableThinking = false,
   ): Promise<{ text: string; error?: string }> {
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`;
     const generationConfig: Record<string, unknown> = { temperature: 0.4, maxOutputTokens: 1024 };
-    if (!/pro/i.test(model)) generationConfig.thinkingConfig = { thinkingBudget: 0 };
+    if (disableThinking && !/pro/i.test(model)) generationConfig.thinkingConfig = { thinkingBudget: 0 };
     try {
       const res = await fetch(url, {
         method: 'POST',
@@ -429,7 +437,11 @@ export class WhatsappService {
         signal: AbortSignal.timeout(20_000),
       });
       if (!res.ok) {
-        const error = `${model}: ${await geminiErrorDetail(res, key)}`.slice(0, 300);
+        const detail = await geminiErrorDetail(res, key);
+        if (disableThinking && /thinking/i.test(detail)) {
+          return this.geminiGenerate(key, model, system, contents, false);
+        }
+        const error = `${model}: ${detail}`.slice(0, 500);
         console.error('WhatsappService.askGemini', error);
         return { text: '', error };
       }
@@ -467,7 +479,7 @@ export class WhatsappService {
           role: 'assistant',
           text,
           at: new Date().toISOString(),
-          ...(aiError ? { aiError: aiError.slice(0, 300) } : {}),
+          ...(aiError ? { aiError: aiError.slice(0, 500) } : {}),
         },
         waPhoneNumberId || row.chat.waPhoneNumberId,
       );
@@ -702,7 +714,7 @@ export class WhatsappService {
   }
 
   private noteSendError(phone: string, messageId: string, error: string) {
-    const sendError = error.slice(0, 300);
+    const sendError = error.slice(0, 500);
     return this.patchMessage(
       phone,
       messageId,
