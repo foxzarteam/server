@@ -11,20 +11,76 @@ const GRAPH_VERSION = 'v21.0';
 const MAX_MESSAGES = 1000;
 const SITE = 'https://apnizaroorat.com';
 
-const SYSTEM_PROMPT = `You are the WhatsApp assistant for Apni Zaroorat (${SITE}). You help people check eligibility for a personal loan or insurance by chatting, one question at a time.
+async function metaErrorText(res: Response): Promise<string> {
+  let detail = '';
+  try {
+    const data = (await res.json()) as { error?: { message?: string; code?: number } };
+    const message = String(data.error?.message ?? '').trim();
+    const code = data.error?.code;
+    if (message) detail = code ? `${code}: ${message}` : message;
+  } catch {
+    detail = '';
+  }
+  return (detail || `WhatsApp send failed (${res.status})`).slice(0, 300);
+}
+
+type GeminiPart = { text?: string; thought?: boolean };
+type GeminiReply = {
+  candidates?: { content?: { parts?: GeminiPart[] }; finishReason?: string }[];
+  promptFeedback?: { blockReason?: string };
+};
+
+function geminiContents(history: ChatMessage[]): { role: 'user' | 'model'; parts: { text: string }[] }[] {
+  const turns: { role: 'user' | 'model'; text: string }[] = [];
+  for (const item of history.slice(-40)) {
+    const text = item.text.trim();
+    if (!text) continue;
+    const role = item.role === 'assistant' ? 'model' : 'user';
+    const last = turns[turns.length - 1];
+    if (last?.role === role) last.text = `${last.text}\n${text}`.slice(0, 4000);
+    else turns.push({ role, text: text.slice(0, 4000) });
+  }
+  while (turns[0]?.role === 'model') turns.shift();
+  return turns.map((turn) => ({ role: turn.role, parts: [{ text: turn.text }] }));
+}
+
+function visibleGeminiText(data: GeminiReply): string {
+  const parts = data.candidates?.[0]?.content?.parts ?? [];
+  return parts
+    .filter((part) => part && part.thought !== true && part.text)
+    .map((part) => String(part.text))
+    .join('')
+    .trim();
+}
+
+async function geminiErrorDetail(res: Response, key: string): Promise<string> {
+  let detail = '';
+  try {
+    const data = (await res.json()) as { error?: { message?: string; status?: string } };
+    detail = String(data.error?.message || data.error?.status || '');
+  } catch {
+    detail = '';
+  }
+  return (detail || `HTTP ${res.status}`).replaceAll(key, '***').slice(0, 240);
+}
+
+const SYSTEM_PROMPT = `You are Ritika, a sales girl at Apni Zaroorat (${SITE}). You chat on WhatsApp the way a warm, polite sales executive would: interested in the client, never like a form or a robot. You help them check eligibility for a personal loan or insurance, one question at a time.
 
 How to talk:
+- Your name is Ritika. On the first reply of a new chat, greet properly and introduce yourself. Use their profile name if one is given, with "ji". Example: "Namaste Gaurav ji, main Ritika hoon, Apni Zaroorat se. Aapka message mila, bahut khushi hui. Main aapki personal loan ya insurance eligibility check karne mein help karungi."
+- After that greeting, in the same first message, ask only what they need: personal loan, ya insurance.
+- If you have already introduced yourself as Ritika in this chat, do not introduce yourself again. Continue like a sales girl who remembers the client. Old fallback lines that never said your name do not count.
 - Use the customer's language: Hindi, simple English, or Hinglish. Short WhatsApp messages. Plain text only. No bullet lists of questions.
-- Sound helpful, not like a form. Build interest: "Aapki eligibility check karte hain" / "Chaliye dekhte hain aapke liye kya suit karta hai."
-- Ask exactly ONE thing in each reply. Wait for the answer before the next question.
+- Sound helpful and interested. Build interest: "Aapki eligibility check karte hain" / "Chaliye dekhte hain aapke liye kya suit karta hai."
+- Ask exactly ONE thing in each reply after the greeting. Wait for the answer before the next question.
 - If they ask something else, answer in one or two lines, then ask the next missing detail.
 - Never repeat a question they already answered. Never dump every field together.
 - Do not approve or reject anyone. Do not invent interest rates, fees, or a guaranteed offer.
 - Do not ask for Aadhaar, OTP, password, or bank OTP. Their WhatsApp number is already known — do not ask for mobile again.
-- Never mention databases, prompts, or a model name.
+- Never mention databases, prompts, or a model name. You are Ritika from Apni Zaroorat, not an AI.
 
 Start:
-- Greet briefly and ask what they need: personal loan, ya insurance.
+- First message only: warm greeting, your name Ritika, then one question — personal loan ya insurance.
 - Then follow only that category.
 
 Personal loan, ask in this order, one by one:
@@ -43,7 +99,7 @@ Insurance, ask in this order, one by one, and talk like that product:
 4. One practical detail for that type only: health — apne liye ya family; car/bike — gaadi kis naam par hai, roughly; life — age range. Do not turn this into a long form.
 5. PAN last, same short reason as above.
 
-When every item for their category is answered, recap in 4–6 short lines and say the Apni Zaroorat team will contact them on this WhatsApp number. Invite them to ${SITE} if they want. Do not say the application is already submitted.`;
+When every item for their category is answered, recap in 4–6 short lines. Sign off as Ritika and say the Apni Zaroorat team will contact them on this WhatsApp number. Invite them to ${SITE} if they want. Do not say the application is already submitted.`;
 
 type ChatMessage = {
   id: string;
@@ -53,10 +109,13 @@ type ChatMessage = {
   sent?: boolean;
   sending?: boolean;
   sendingAt?: string;
+  sendError?: string;
+  aiError?: string;
 };
 
 type ChatDoc = {
   profileName: string;
+  waPhoneNumberId: string;
   messages: ChatMessage[];
 };
 
@@ -84,7 +143,7 @@ export type WhatsappEnquiryDetail = {
   profileName: string;
   lastChatAt: string | null;
   createdAt: string;
-  messages: { id: string; role: 'user' | 'assistant'; text: string; at: string }[];
+  messages: { id: string; role: 'user' | 'assistant'; text: string; at: string; sendError?: string; aiError?: string }[];
 };
 
 function asChat(raw: unknown): ChatDoc {
@@ -96,7 +155,9 @@ function asChat(raw: unknown): ChatDoc {
       value = {};
     }
   }
-  const obj = value && typeof value === 'object' ? (value as { profileName?: unknown; messages?: unknown }) : {};
+  const obj = value && typeof value === 'object'
+    ? (value as { profileName?: unknown; messages?: unknown; waPhoneNumberId?: unknown })
+    : {};
   const messages = Array.isArray(obj.messages) ? obj.messages : [];
   const clean: ChatMessage[] = [];
   for (const item of messages) {
@@ -113,10 +174,13 @@ function asChat(raw: unknown): ChatDoc {
       ...(row.sent ? { sent: true } : {}),
       ...(row.sending ? { sending: true } : {}),
       ...(row.sendingAt ? { sendingAt: String(row.sendingAt) } : {}),
+      ...(row.sendError ? { sendError: String(row.sendError).slice(0, 300) } : {}),
+      ...(row.aiError ? { aiError: String(row.aiError).slice(0, 300) } : {}),
     });
   }
   return {
     profileName: String(obj.profileName ?? '').slice(0, 120),
+    waPhoneNumberId: String(obj.waPhoneNumberId ?? '').replace(/\D/g, '').slice(0, 30),
     messages: clean.slice(-MAX_MESSAGES),
   };
 }
@@ -224,11 +288,13 @@ export class WhatsappService {
       profileName: chat.profileName,
       lastChatAt: row.last_chat_at,
       createdAt: row.created_at,
-      messages: chat.messages.map(({ id: messageId, role, text, at }) => ({
+      messages: chat.messages.map(({ id: messageId, role, text, at, sendError, aiError }) => ({
         id: messageId,
         role,
         text,
         at,
+        ...(sendError ? { sendError } : {}),
+        ...(aiError ? { aiError } : {}),
       })),
     };
   }
@@ -241,7 +307,6 @@ export class WhatsappService {
   }
 
   private async handleInbound(settings: WhatsappSettings, message: InboundWhatsappMessage) {
-    await this.flushUnsent(settings, message.phone);
     const assistantId = `ai:${message.messageId}`;
     const userMessage: ChatMessage = {
       id: message.messageId,
@@ -250,8 +315,14 @@ export class WhatsappService {
       at: new Date().toISOString(),
     };
 
-    const appended = await this.appendMessage(message.phone, message.profileName, userMessage);
+    const appended = await this.appendMessage(
+      message.phone,
+      message.profileName,
+      userMessage,
+      message.phoneNumberId,
+    );
     if (!appended) return;
+    await this.flushUnsent(settings, message.phone, message.phoneNumberId);
     if (!appended.added) {
       await this.ensureReply(settings, appended.row, message, assistantId);
       return;
@@ -259,9 +330,17 @@ export class WhatsappService {
 
     const limited = !allowRateLimitedAction(`wa-in:${message.phone}`, 20, 10 * 60_000);
     const reply = limited
-      ? 'Please wait a few minutes before sending more messages.'
+      ? { text: 'Please wait a few minutes before sending more messages.' }
       : await this.buildReply(settings, appended.row.chat.messages, message);
-    await this.storeAndSend(settings, appended.row, message.profileName, assistantId, reply);
+    await this.storeAndSend(
+      settings,
+      appended.row,
+      message.profileName,
+      assistantId,
+      reply.text,
+      message.phoneNumberId,
+      reply.aiError,
+    );
   }
 
   private async ensureReply(
@@ -273,67 +352,99 @@ export class WhatsappService {
     const assistant = row.chat.messages.find((item) => item.id === assistantId);
     if (assistant?.sent) return;
     if (assistant) {
-      await this.deliver(settings, row.phone, assistantId, assistant.text);
+      await this.deliver(settings, row.phone, assistantId, assistant.text, row.chat.waPhoneNumberId);
       return;
     }
     const reply = await this.buildReply(settings, row.chat.messages, message);
-    await this.storeAndSend(settings, row, message.profileName, assistantId, reply);
+    await this.storeAndSend(settings, row, message.profileName, assistantId, reply.text, message.phoneNumberId, reply.aiError);
   }
 
   private async buildReply(
     settings: WhatsappSettings,
     history: ChatMessage[],
     message: InboundWhatsappMessage,
-  ): Promise<string> {
+  ): Promise<{ text: string; aiError?: string }> {
     const textLike = message.type === 'text' || message.type === 'button' || message.type === 'interactive';
     if (!textLike || !message.text) {
-      return 'Please send your question as a text message.';
+      return { text: 'Please send your question as a text message.' };
     }
     if (!settings.geminiApiKey) {
-      return `Thanks for messaging Apni Zaroorat. Please visit ${SITE} and we will help you from there.`;
+      return {
+        text: `Thanks for messaging Apni Zaroorat. Please visit ${SITE} and we will help you from there.`,
+        aiError: 'Gemini API key is not saved in Settings.',
+      };
     }
     const ai = await this.askGemini(settings, history, message);
-    return ai || `Sorry, I could not reply just now. Please try again shortly, or visit ${SITE}.`;
+    if (ai.text) return { text: ai.text };
+    return {
+      text: `Sorry, I could not reply just now. Please try again shortly, or visit ${SITE}.`,
+      aiError: ai.error || 'Gemini returned an empty reply.',
+    };
   }
 
   private async askGemini(
     settings: WhatsappSettings,
     history: ChatMessage[],
     message: InboundWhatsappMessage,
-  ): Promise<string> {
+  ): Promise<{ text: string; error?: string }> {
+    const key = settings.geminiApiKey.trim().replace(/\s+/g, '');
     const knownName = message.profileName.trim();
     const customerNote = knownName
       ? `Customer WhatsApp number: ${message.phone}. Profile name on WhatsApp: ${knownName}. Confirm this name; do not ask for the phone number.`
       : `Customer WhatsApp number: ${message.phone}. No profile name. Ask their name when that step comes. Do not ask for the phone number.`;
-    const contents = history.slice(-40).map((item) => ({
-      role: item.role === 'assistant' ? 'model' : 'user',
-      parts: [{ text: item.text.slice(0, 4000) }],
-    }));
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(settings.geminiModel)}:generateContent?key=${encodeURIComponent(settings.geminiApiKey)}`;
+    const contents = geminiContents(history);
+    if (!key) return { text: '', error: 'Gemini API key is not saved.' };
+    if (contents.length === 0) return { text: '', error: 'No customer text to send to Gemini.' };
+
+    const models = [settings.geminiModel || 'gemini-2.5-flash', 'gemini-2.0-flash'].filter(
+      (model, index, all) => model && all.indexOf(model) === index,
+    );
+    let lastError = 'Gemini returned an empty reply.';
+    for (const model of models) {
+      const result = await this.geminiGenerate(key, model, `${SYSTEM_PROMPT}\n\n${customerNote}`, contents);
+      if (result.text) return { text: result.text };
+      if (result.error) lastError = result.error;
+    }
+    return { text: '', error: lastError };
+  }
+
+  private async geminiGenerate(
+    key: string,
+    model: string,
+    system: string,
+    contents: { role: 'user' | 'model'; parts: { text: string }[] }[],
+  ): Promise<{ text: string; error?: string }> {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(key)}`;
+    const generationConfig: Record<string, unknown> = { temperature: 0.4, maxOutputTokens: 1024 };
+    if (!/pro/i.test(model)) generationConfig.thinkingConfig = { thinkingBudget: 0 };
     try {
       const res = await fetch(url, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          system_instruction: { parts: [{ text: `${SYSTEM_PROMPT}\n\n${customerNote}` }] },
+          system_instruction: { parts: [{ text: system }] },
           contents,
-          generationConfig: { temperature: 0.4, maxOutputTokens: 512 },
+          generationConfig,
         }),
         signal: AbortSignal.timeout(20_000),
       });
       if (!res.ok) {
-        console.error('WhatsappService.askGemini', res.status);
-        return '';
+        const error = `${model}: ${await geminiErrorDetail(res, key)}`.slice(0, 300);
+        console.error('WhatsappService.askGemini', error);
+        return { text: '', error };
       }
-      const data = (await res.json()) as {
-        candidates?: { content?: { parts?: { text?: string }[] } }[];
-      };
-      return String(data.candidates?.[0]?.content?.parts?.[0]?.text ?? '')
-        .trim()
-        .slice(0, 4000);
-    } catch (error) {
+      const data = (await res.json()) as GeminiReply;
+      const text = visibleGeminiText(data).slice(0, 4000);
+      if (text) return { text };
+      const reason = data.candidates?.[0]?.finishReason || data.promptFeedback?.blockReason || 'empty';
+      const error = `${model}: empty reply (${reason})`.slice(0, 300);
       console.error('WhatsappService.askGemini', error);
-      return '';
+      return { text: '', error };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Gemini request failed';
+      const safe = message.replaceAll(key, '***').slice(0, 240);
+      console.error('WhatsappService.askGemini', model, safe);
+      return { text: '', error: `${model}: ${safe}`.slice(0, 300) };
     }
   }
 
@@ -343,47 +454,78 @@ export class WhatsappService {
     profileName: string,
     assistantId: string,
     text: string,
+    waPhoneNumberId = '',
+    aiError = '',
   ) {
     const already = row.chat.messages.some((item) => item.id === assistantId);
     if (!already) {
-      const appended = await this.appendMessage(row.phone, profileName, {
-        id: assistantId,
-        role: 'assistant',
-        text,
-        at: new Date().toISOString(),
-      });
+      const appended = await this.appendMessage(
+        row.phone,
+        profileName,
+        {
+          id: assistantId,
+          role: 'assistant',
+          text,
+          at: new Date().toISOString(),
+          ...(aiError ? { aiError: aiError.slice(0, 300) } : {}),
+        },
+        waPhoneNumberId || row.chat.waPhoneNumberId,
+      );
       if (!appended) return;
     }
-    await this.deliver(settings, row.phone, assistantId, text);
+    await this.deliver(settings, row.phone, assistantId, text, waPhoneNumberId || row.chat.waPhoneNumberId);
   }
 
   /** Resend replies that were saved but never delivered (Meta will not always retry). */
-  private async flushUnsent(settings: WhatsappSettings, phone: string) {
+  private async flushUnsent(settings: WhatsappSettings, phone: string, waPhoneNumberId = '') {
     const row = await this.readByPhone(phone);
     if (!row) return;
+    const fromId = waPhoneNumberId || row.chat.waPhoneNumberId;
     const pending = row.chat.messages.filter((item) => item.role === 'assistant' && !item.sent).slice(-5);
     for (const item of pending) {
-      await this.deliver(settings, phone, item.id, item.text);
+      await this.deliver(settings, phone, item.id, item.text, fromId);
     }
   }
 
   /** Only one worker sends a given reply. A stale claim can be taken again after a crash. */
-  private async deliver(settings: WhatsappSettings, phone: string, messageId: string, text: string) {
+  private async deliver(
+    settings: WhatsappSettings,
+    phone: string,
+    messageId: string,
+    text: string,
+    waPhoneNumberId = '',
+  ) {
     const claimed = await this.claimSend(phone, messageId);
     if (!claimed) return;
-    const delivered = await this.sendWhatsapp(settings, phone, text);
-    if (delivered) await this.markSent(phone, messageId);
-    else await this.releaseSend(phone, messageId);
+    const result = await this.sendWhatsapp(settings, phone, text, waPhoneNumberId);
+    if (result.ok) await this.markSent(phone, messageId);
+    else {
+      await this.releaseSend(phone, messageId);
+      if (result.error) await this.noteSendError(phone, messageId, result.error);
+    }
   }
 
-  private async sendWhatsapp(settings: WhatsappSettings, phone: string, text: string): Promise<boolean> {
-    if (!settings.accessToken || !settings.phoneNumberId || !text.trim()) return false;
-    const url = `https://graph.facebook.com/${GRAPH_VERSION}/${encodeURIComponent(settings.phoneNumberId)}/messages`;
+  private async sendWhatsapp(
+    settings: WhatsappSettings,
+    phone: string,
+    text: string,
+    waPhoneNumberId = '',
+  ): Promise<{ ok: boolean; error?: string }> {
+    const token = settings.accessToken.trim().replace(/^bearer\s+/i, '').trim();
+    const fromId = (waPhoneNumberId || settings.phoneNumberId).replace(/\D/g, '');
+    if (!token || !fromId || !text.trim()) {
+      const error = !token
+        ? 'WhatsApp access token is missing in Settings.'
+        : 'WhatsApp phone number ID is missing in Settings.';
+      console.error('WhatsappService.sendWhatsapp', error);
+      return { ok: false, error };
+    }
+    const url = `https://graph.facebook.com/${GRAPH_VERSION}/${encodeURIComponent(fromId)}/messages`;
     try {
       const res = await fetch(url, {
         method: 'POST',
         headers: {
-          Authorization: `Bearer ${settings.accessToken}`,
+          Authorization: `Bearer ${token}`,
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
@@ -396,13 +538,15 @@ export class WhatsappService {
         signal: AbortSignal.timeout(15_000),
       });
       if (!res.ok) {
-        console.error('WhatsappService.sendWhatsapp', res.status);
-        return false;
+        const error = await metaErrorText(res);
+        console.error('WhatsappService.sendWhatsapp', error);
+        return { ok: false, error };
       }
-      return true;
+      return { ok: true };
     } catch (error) {
-      console.error('WhatsappService.sendWhatsapp', error);
-      return false;
+      const message = error instanceof Error ? error.message : 'WhatsApp send failed';
+      console.error('WhatsappService.sendWhatsapp', message);
+      return { ok: false, error: message.slice(0, 300) };
     }
   }
 
@@ -424,6 +568,7 @@ export class WhatsappService {
     phone: string,
     profileName: string,
     message: ChatMessage,
+    waPhoneNumberId = '',
   ): Promise<{ row: EnquiryRow; added: boolean } | null> {
     const key = canonicalWhatsappPhone(phone);
     if (!/^[0-9]{8,15}$/.test(key)) return null;
@@ -437,6 +582,7 @@ export class WhatsappService {
 
       const chat: ChatDoc = {
         profileName: profileName.trim() || current?.chat.profileName || '',
+        waPhoneNumberId: (waPhoneNumberId || current?.chat.waPhoneNumberId || '').replace(/\D/g, '').slice(0, 30),
         messages: [...(current?.chat.messages ?? []), message].slice(-MAX_MESSAGES),
       };
       const now = new Date().toISOString();
@@ -482,6 +628,7 @@ export class WhatsappService {
     }
     const chat: ChatDoc = {
       profileName: profileName.trim() || latest.chat.profileName || '',
+      waPhoneNumberId: (waPhoneNumberId || latest.chat.waPhoneNumberId || '').replace(/\D/g, '').slice(0, 30),
       messages: [...latest.chat.messages, message].slice(-MAX_MESSAGES),
     };
     const now = new Date().toISOString();
@@ -547,8 +694,19 @@ export class WhatsappService {
         const next = { ...message, sent: true };
         delete next.sending;
         delete next.sendingAt;
+        delete next.sendError;
         return next;
       },
+      (message) => !message.sent,
+    );
+  }
+
+  private noteSendError(phone: string, messageId: string, error: string) {
+    const sendError = error.slice(0, 300);
+    return this.patchMessage(
+      phone,
+      messageId,
+      (message) => ({ ...message, sendError }),
       (message) => !message.sent,
     );
   }

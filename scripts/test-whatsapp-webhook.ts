@@ -87,6 +87,7 @@ assert.strictEqual(canonicalWhatsappPhone('+91 98765 43210'), '919876543210');
 assert.strictEqual(canonicalWhatsappPhone('919876543210'), '919876543210');
 assert.strictEqual(inbound[0].text, 'Hello');
 assert.strictEqual(inbound[0].profileName, 'Riya');
+assert.strictEqual(inbound[0].phoneNumberId, '');
 assert.deepStrictEqual(extractInboundMessages({ object: 'whatsapp_business_account', entry: [{ changes: [{ value: { statuses: [{ id: '1' }] } }] }] }), []);
 
 const sealed = encryptSettingsJson({ accessToken: 'secret-token' });

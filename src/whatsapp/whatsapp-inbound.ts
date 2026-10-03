@@ -4,6 +4,8 @@ export type InboundWhatsappMessage = {
   text: string;
   profileName: string;
   type: string;
+  /** Meta phone number id that received this message. */
+  phoneNumberId: string;
 };
 
 type UnknownRecord = Record<string, unknown>;
@@ -69,12 +71,16 @@ export function extractInboundMessages(body: unknown): InboundWhatsappMessage[] 
           .find((row) => row && canonicalWhatsappPhone(String(row.wa_id ?? '')) === phone);
         const profileName = String(asRecord(contact?.profile)?.name ?? '').trim().slice(0, 120);
 
+        const metadata = asRecord(value.metadata);
+        const phoneNumberId = digits(metadata?.phone_number_id).slice(0, 30);
+
         out.push({
           phone,
           messageId,
           text: text.slice(0, 4000),
           profileName,
           type,
+          phoneNumberId,
         });
       }
     }

@@ -59,6 +59,21 @@ function keep(next: string | undefined, prev: string): string {
   return value || prev;
 }
 
+function cleanAccessToken(raw: string): string {
+  return String(raw ?? '')
+    .trim()
+    .replace(/^bearer\s+/i, '')
+    .replace(/^["']+|["']+$/g, '')
+    .trim();
+}
+
+function cleanGeminiKey(raw: string): string {
+  return String(raw ?? '')
+    .trim()
+    .replace(/^["']+|["']+$/g, '')
+    .replace(/\s+/g, '');
+}
+
 function digitsOnly(value: string): string {
   return value.replace(/\D/g, '');
 }
@@ -96,12 +111,12 @@ export class WhatsappSettingsService {
     const stored = await this.getStored();
     const env = (name: string) => (this.config.get<string>(name) ?? '').trim();
     return {
-      accessToken: stored.accessToken || env('WHATSAPP_ACCESS_TOKEN'),
+      accessToken: cleanAccessToken(stored.accessToken || env('WHATSAPP_ACCESS_TOKEN')),
       phoneNumberId: stored.phoneNumberId || env('WHATSAPP_PHONE_NUMBER_ID'),
       businessAccountId: stored.businessAccountId || env('WHATSAPP_BUSINESS_ACCOUNT_ID'),
       appSecret: stored.appSecret || env('WHATSAPP_APP_SECRET'),
       verifyToken: stored.verifyToken || env('WHATSAPP_VERIFY_TOKEN'),
-      geminiApiKey: stored.geminiApiKey || env('GEMINI_API_KEY'),
+      geminiApiKey: cleanGeminiKey(stored.geminiApiKey || env('GEMINI_API_KEY')),
       geminiModel: stored.geminiModel || env('GEMINI_MODEL') || DEFAULT_MODEL,
       displayPhone: stored.displayPhone || digitsOnly(env('WHATSAPP_DISPLAY_PHONE')),
     };
@@ -127,12 +142,12 @@ export class WhatsappSettingsService {
   async update(dto: UpdateWhatsappSettingsDto): Promise<{ settings: WhatsappSettings; warning?: string }> {
     const prev = await this.getStored();
     const next: WhatsappSettings = {
-      accessToken: keep(dto.accessToken, prev.accessToken),
+      accessToken: cleanAccessToken(keep(dto.accessToken, prev.accessToken)),
       phoneNumberId: digitsOnly(keep(dto.phoneNumberId, prev.phoneNumberId)),
       businessAccountId: digitsOnly(keep(dto.businessAccountId, prev.businessAccountId)),
       appSecret: keep(dto.appSecret, prev.appSecret),
       verifyToken: keep(dto.verifyToken, prev.verifyToken),
-      geminiApiKey: keep(dto.geminiApiKey, prev.geminiApiKey),
+      geminiApiKey: cleanGeminiKey(keep(dto.geminiApiKey, prev.geminiApiKey)),
       geminiModel: keep(dto.geminiModel, prev.geminiModel) || DEFAULT_MODEL,
       displayPhone: prev.displayPhone,
     };
