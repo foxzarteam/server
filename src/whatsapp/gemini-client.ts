@@ -154,16 +154,25 @@ export async function listGeminiChatModels(key: string): Promise<string[]> {
   return [...new Set(ids)].sort((a, b) => geminiModelScore(b) - geminiModelScore(a) || b.localeCompare(a));
 }
 
+/** Gemini 3 rejects the old thinkingBudget field with a bare "invalid argument" error. */
+function generationConfigFor(model: string, plain: boolean): Record<string, unknown> {
+  if (plain || /^gemini-3/i.test(model)) return { maxOutputTokens: 1024 };
+  const generationConfig: Record<string, unknown> = { temperature: 0.4, maxOutputTokens: 1024 };
+  if (!/pro/i.test(model)) generationConfig.thinkingConfig = { thinkingBudget: 0 };
+  return generationConfig;
+}
+
 export async function generateGemini(
   key: string,
   model: string,
   system: string,
   contents: { role: 'user' | 'model'; parts: { text: string }[] }[],
   disableThinking = false,
+  plain = false,
 ): Promise<{ text: string; error?: string; unavailable?: boolean }> {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
-  const generationConfig: Record<string, unknown> = { temperature: 0.4, maxOutputTokens: 1024 };
-  if (disableThinking && !/pro/i.test(model)) generationConfig.thinkingConfig = { thinkingBudget: 0 };
+  const alreadyPlain = plain || !disableThinking || /^gemini-3/i.test(model);
+  const generationConfig = generationConfigFor(model, alreadyPlain);
   try {
     const res = await fetch(url, {
       method: 'POST',
@@ -177,8 +186,8 @@ export async function generateGemini(
     });
     if (!res.ok) {
       const detail = await geminiErrorDetail(res, key);
-      if (disableThinking && /thinking/i.test(detail)) {
-        return generateGemini(key, model, system, contents, false);
+      if (!alreadyPlain && /thinking|invalid argument/i.test(detail)) {
+        return generateGemini(key, model, system, contents, false, true);
       }
       const error = `${model}: ${detail}`.slice(0, 500);
       console.error('gemini-client.generate', error);
