@@ -231,7 +231,7 @@ export class WhatsappService {
       if (phone) await this.settings.rememberDisplayPhone(phone);
     }
     const url = /^[0-9]{8,15}$/.test(phone)
-      ? `https://wa.me/${phone}?text=${encodeURIComponent('Hello 👋')}`
+      ? `https://wa.me/${phone}?text=${encodeURIComponent('Hello')}`
       : null;
     this.linkCache = { until: now + 60_000, url };
     return url;
@@ -508,7 +508,7 @@ export class WhatsappService {
           recipient_type: 'individual',
           to: phone,
           type: 'text',
-          text: { preview_url: false, body: text.slice(0, 4000) },
+          text: { preview_url: false, body: text.replace(/\uFFFD/g, '').trim().slice(0, 4000) },
         }),
         signal: AbortSignal.timeout(15_000),
       });
