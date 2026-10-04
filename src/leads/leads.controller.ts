@@ -187,7 +187,6 @@ export class LeadsController {
         category: dto.category,
         loanAmt: dto.loanAmt,
         insType: dto.insType,
-        employmentType: dto.employmentType,
         netMonthlyIncome: dto.netMonthlyIncome,
         consentAccepted: dto.consentAccepted === true,
       });

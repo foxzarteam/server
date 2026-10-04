@@ -815,7 +815,6 @@ export class LeadsService {
       if (amtErr) return { ok: false, message: amtErr };
       payload.required_amount = amounts.requiredAmount;
       payload.loan_amt = amounts.loanAmt;
-      payload.employment_type = dto.employmentType;
       payload.net_monthly_income = dto.netMonthlyIncome;
       payload.loan_tenure_months = dto.loanTenureMonths ?? null;
     }
@@ -846,8 +845,6 @@ export class LeadsService {
           status: 'pending',
           loanAmt: category === 'personal_loan' ? plAmounts?.loanAmt ?? null : undefined,
           insType: category === 'insurance' ? ins : null,
-          employmentType:
-            category === 'personal_loan' ? dto.employmentType ?? null : null,
           netMonthlyIncome:
             category === 'personal_loan' ? dto.netMonthlyIncome ?? null : null,
           loanTenureMonths: category === 'personal_loan' ? dto.loanTenureMonths ?? null : null,
@@ -915,7 +912,7 @@ export class LeadsService {
     const category = normalizeStoredCategory(dto.category || 'personal_loan');
     if (category === 'personal_loan') {
       const empErr = this.personalLoanEmploymentError(dto);
-      if (empErr) return { ok: false, field: 'employmentType', message: empErr };
+      if (empErr) return { ok: false, field: 'netMonthlyIncome', message: empErr };
       const amounts = resolvePersonalLoanAmounts({
         requiredAmount: dto.requiredAmount,
         loanAmt: dto.loanAmt,
@@ -1051,7 +1048,6 @@ export class LeadsService {
       if (amtErr) throw new LeadRuleError(amtErr);
       payload.required_amount = amounts.requiredAmount;
       payload.loan_amt = amounts.loanAmt;
-      payload.employment_type = dto.employmentType;
       payload.net_monthly_income = dto.netMonthlyIncome;
       if (dto.loanTenureMonths != null) {
         payload.loan_tenure_months = dto.loanTenureMonths;
@@ -1132,7 +1128,6 @@ export class LeadsService {
           category: dto.category,
           loanAmt: dto.loanAmt,
           insType: dto.insType,
-          employmentType: dto.employmentType,
           netMonthlyIncome: dto.netMonthlyIncome,
           loanTenureMonths: dto.loanTenureMonths,
           consentAccepted: dto.consentAccepted === true,
@@ -1317,9 +1312,6 @@ export class LeadsService {
     if (dto.notes !== undefined) payload.notes = dto.notes?.trim() || null;
     if (dto.loanAmt !== undefined) payload.loan_amt = dto.loanAmt ?? null;
     if (dto.insType !== undefined) payload.ins_type = dto.insType ?? null;
-    if (dto.employmentType !== undefined) {
-      payload.employment_type = dto.employmentType ?? null;
-    }
     if (dto.netMonthlyIncome !== undefined) {
       payload.net_monthly_income = dto.netMonthlyIncome ?? null;
     }

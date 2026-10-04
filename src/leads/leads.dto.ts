@@ -39,8 +39,6 @@ export const LOAN_AMT_VALUES = [
 /** Fallback list when `insurance_types` is unavailable. New types come from DB. */
 export const INS_TYPE_VALUES = FALLBACK_INSURANCE_TYPES.map((t) => t.value);
 
-export const EMPLOYMENT_TYPE_VALUES = ['salaried', 'self_employed'] as const;
-
 export const LEAD_STATUS_VALUES = [
   'pending',
   'in_process',
@@ -114,10 +112,9 @@ export class CreateLeadDto {
   @Matches(INS_TYPE_SLUG_PATTERN, { message: 'Invalid insurance type' })
   insType?: string;
 
-  /** Required when category is personal_loan */
-  @ValidateIf((o) => o.category === 'personal_loan')
-  @IsString({ message: 'Employment type is required for personal loan' })
-  @IsIn([...EMPLOYMENT_TYPE_VALUES], { message: 'Invalid employment type' })
+  /** Ignored. Employment type is asked only in the chatbots, not stored on the lead. */
+  @IsOptional()
+  @IsString()
   employmentType?: string;
 
   @ValidateIf((o) => o.category === 'personal_loan')
@@ -239,7 +236,6 @@ export class UpdateLeadDto {
 
   @IsOptional()
   @IsString()
-  @IsIn([...EMPLOYMENT_TYPE_VALUES], { message: 'Invalid employment type' })
   employmentType?: string | null;
 
   @IsOptional()
@@ -334,10 +330,9 @@ export class AdminCreateLeadDto {
   @Matches(INS_TYPE_SLUG_PATTERN, { message: 'Invalid insurance type' })
   insType?: string;
 
-  /** Required when category is personal_loan */
-  @ValidateIf((o) => o.category === 'personal_loan')
-  @IsString({ message: 'Employment type is required for personal loan' })
-  @IsIn([...EMPLOYMENT_TYPE_VALUES], { message: 'Invalid employment type' })
+  /** Ignored. Employment type is asked only in the chatbots, not stored on the lead. */
+  @IsOptional()
+  @IsString()
   employmentType?: string;
 
   @ValidateIf((o) => o.category === 'personal_loan')

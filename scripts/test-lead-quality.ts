@@ -59,14 +59,8 @@ assert.strictEqual(buildLocationLabel(['Mumbai', '', 'India', 'Mumbai']), 'Mumba
 assert.strictEqual(buildLocationLabel([null, undefined, '']), null);
 
 // —— employment ——
-assert.ok(personalLoanEmploymentError({}).includes('Employment'));
-assert.ok(
-  personalLoanEmploymentError({ employmentType: 'salaried' })?.includes('income'),
-);
-assert.strictEqual(
-  personalLoanEmploymentError({ employmentType: 'salaried', netMonthlyIncome: 50000 }),
-  null,
-);
+assert.ok(personalLoanEmploymentError({})?.includes('income'));
+assert.strictEqual(personalLoanEmploymentError({ netMonthlyIncome: 50000 }), null);
 
 assert.strictEqual(leadFullNameError('Rahul Sharma'), null);
 assert.ok(leadFullNameError('A')?.includes('required'));
