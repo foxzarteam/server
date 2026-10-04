@@ -924,8 +924,12 @@ export class LeadsService {
     }
 
     const pin = String(dto.pincode ?? '').replace(/\D/g, '');
-    if (pin && !/^[1-9][0-9]{5}$/.test(pin)) {
-      return { ok: false, field: 'pincode', message: 'Enter a valid 6-digit Indian pincode.' };
+    if (!/^[1-9][0-9]{5}$/.test(pin)) {
+      return {
+        ok: false,
+        field: 'pincode',
+        message: pin ? 'Enter a valid 6-digit Indian pincode.' : 'Pincode is required.',
+      };
     }
 
     const gates = await this.evaluateApplicationGates({
