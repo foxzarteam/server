@@ -340,15 +340,14 @@ export class AdminCreateLeadDto {
   @Min(1, { message: 'Net monthly income must be at least 1' })
   netMonthlyIncome?: number;
 
-  /** Add-lead checkbox. Omitted by older clients; stored false unless true. */
+  /** Ignored on admin/partner create. Those leads are stored with consent yes. */
   @IsOptional()
   @IsBoolean()
   consentAccepted?: boolean;
 
-  /** Firebase idToken from the OTP sent to mobileNumber. Required to save an admin/partner lead. */
+  /** Ignored. Admin and partner add-lead does not use a phone OTP. */
   @IsOptional()
   @IsString()
-  @MinLength(20)
   idToken?: string;
 }
 

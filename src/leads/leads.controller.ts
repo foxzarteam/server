@@ -154,11 +154,6 @@ export class LeadsController {
       };
     }
 
-    const otp = await this.leadsService.assertPhoneOtp(dto.mobileNumber, dto.idToken);
-    if (!otp.ok) {
-      return { success: false, message: otp.message };
-    }
-
     const actorRole = String(actor?.role ?? '').toLowerCase();
     if (
       !isAgent &&
@@ -188,7 +183,8 @@ export class LeadsController {
         loanAmt: dto.loanAmt,
         insType: dto.insType,
         netMonthlyIncome: dto.netMonthlyIncome,
-        consentAccepted: dto.consentAccepted === true,
+        loanTenureMonths: dto.loanTenureMonths,
+        consentAccepted: true,
       });
     } catch (err) {
       if (err instanceof LeadRuleError) {

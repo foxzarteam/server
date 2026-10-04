@@ -112,7 +112,7 @@ export const OPENAPI_SPEC = {
       },
     },
     '/leads/admin': {
-      post: { summary: 'CRM/partner manual lead create (signed actor)', responses: { '201': { description: 'Created' } } },
+      post: { summary: 'CRM/partner manual lead create. No OTP. Verified and consent are yes.', responses: { '201': { description: 'Created' } } },
     },
     '/leads/admin/{id}': {
       patch: {

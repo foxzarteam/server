@@ -895,7 +895,6 @@ export class LeadsService {
 
   /**
    * Same PAN / mobile / product rules as create, without inserting a lead.
-   * Admin and partner must pass this before an OTP is sent.
    */
   async validateAdminCreate(dto: AdminCreateLeadDto): Promise<
     | { ok: true }
@@ -929,13 +928,6 @@ export class LeadsService {
       return { ok: false, field: 'pincode', message: 'Enter a valid 6-digit Indian pincode.' };
     }
 
-    if (dto.consentAccepted !== true) {
-      return {
-        ok: false,
-        message: 'Please agree to the T&C and Privacy Policy to continue.',
-      };
-    }
-
     const gates = await this.evaluateApplicationGates({
       mobileNumber: dto.mobileNumber,
       pan: panUpper,
@@ -951,28 +943,6 @@ export class LeadsService {
       };
     }
 
-    return { ok: true };
-  }
-
-  /** Firebase OTP for this mobile must succeed before an admin/partner lead is saved. */
-  async assertPhoneOtp(
-    mobileNumber: string,
-    idToken: string | undefined,
-  ): Promise<{ ok: true } | { ok: false; message: string }> {
-    const token = idToken?.trim() ?? '';
-    if (token.length < 20) {
-      return {
-        ok: false,
-        message: 'Verify the OTP sent to this mobile number before adding the lead.',
-      };
-    }
-    const checked = await this.otpService.assertFirebaseIdToken(mobileNumber.trim(), token);
-    if (!checked.success) {
-      return {
-        ok: false,
-        message: checked.message || 'OTP verification failed. Please try again.',
-      };
-    }
     return { ok: true };
   }
 
@@ -1023,9 +993,9 @@ export class LeadsService {
       category,
       status: 'pending',
       is_active: true,
-      // Admin/partner portal create, or OTP-gated public POST /leads.
+      // Partner or admin add-lead: verified and consent are yes by default.
       otp_verified: true,
-      consent_accepted: dto.consentAccepted === true,
+      consent_accepted: true,
     };
 
     // Public/admin insert: never trust client-supplied userId (commission IDOR).
@@ -1130,7 +1100,7 @@ export class LeadsService {
           insType: dto.insType,
           netMonthlyIncome: dto.netMonthlyIncome,
           loanTenureMonths: dto.loanTenureMonths,
-          consentAccepted: dto.consentAccepted === true,
+          consentAccepted: true,
         },
         { agentId: uid },
       );
