@@ -8,6 +8,7 @@ import { whatsappHubChallenge, whatsappSignatureOk } from '../src/whatsapp/whats
 import { canonicalWhatsappPhone, extractInboundMessages } from '../src/whatsapp/whatsapp-inbound';
 import { decryptSettingsJson, encryptSettingsJson } from '../src/whatsapp/settings-crypto';
 import { chatModelId, defaultGeminiModel, geminiModelScore, smoothReply } from '../src/whatsapp/gemini-client';
+import { defaultGroqModel, groqModelScore } from '../src/whatsapp/groq-client';
 
 const expected = 'az_wa_test_token_value';
 
@@ -108,5 +109,9 @@ assert.strictEqual(
   'gemini-2.5-flash',
 );
 assert.strictEqual(smoothReply('Namaste\n\n  Navya  \n'), 'Namaste\nNavya');
+assert.ok(groqModelScore('openai/gpt-oss-20b') > groqModelScore('openai/gpt-oss-120b'));
+assert.ok(groqModelScore('whisper-large-v3') < 0);
+assert.strictEqual(defaultGroqModel([]), 'openai/gpt-oss-20b');
+assert.strictEqual(defaultGroqModel(['openai/gpt-oss-120b', 'openai/gpt-oss-20b']), 'openai/gpt-oss-20b');
 
 console.log('test-whatsapp-webhook: all asserts passed');

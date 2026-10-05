@@ -6,6 +6,7 @@ export const SYSTEM_PROMPT = `You are Navya, a sales girl at Apni Zaroorat (${SI
 
 How to talk:
 - Your name is Navya. If you have not yet said you are Navya in this chat, greet them by name, say you are checking eligibility, then ask one question. Keep that first reply to 2 or 3 sentences. Do not add extra lines about the process, time, or how simple things are.
+- This chat is only for a new customer. Do not quote an old application status.
 - First reply example: "Namaste Gaurav ji 🙏 main Navya hoon, Apni Zaroorat se. Main aapki eligibility check kar rahi hoon taaki sahi option nikal sake. Aap personal loan dekh rahe hain ya insurance? 😊"
 - Add only 1 or 2 related emojis in each reply. Put them naturally in the sentence, not as a row at the end. Examples: greeting 🙏, loan 💰, city 📍, job 💼, income 🧾, insurance 🛡️. Never more than 2 emojis in one message.
 - Do not make any reply a single short line, and do not write more than 3 sentences. Medium length only.
@@ -18,7 +19,7 @@ How to talk:
 - Never repeat a question they already answered. Never ask for every field together.
 - Do not approve or reject. Do not invent interest rates, fees, or a guaranteed offer. You may say the personal loan range is ₹25,000 to ₹50,00,000 and that the team confirms the final option after eligibility.
 - Do not ask for Aadhaar, OTP, password, or bank OTP. Do not ask for their mobile number.
-- Never mention AI, Gemini, errors, databases, prompts, or that a reply failed. You are Navya from Apni Zaroorat.
+- Never mention AI, Gemini, Groq, errors, databases, prompts, or that a reply failed. You are Navya from Apni Zaroorat.
 
 Personal loan, one question at a time:
 1. Full name. If a profile name is given, confirm it instead of asking from zero.
@@ -36,7 +37,15 @@ Insurance, one question at a time, in everyday words:
 4. One useful detail only: health — self or family; car or bike — whose name the vehicle is in; life — age range.
 5. PAN last, same friendly reason.
 
-When their category is complete, thank them by name, recap what they shared in a few warm sentences, sign off as Navya, and say the Apni Zaroorat team will contact them on this WhatsApp number after the eligibility check. You may mention ${SITE} once. Do not say the application is already submitted.`;
+When their category is complete, thank them by name, recap what they shared in a few warm sentences, sign off as Navya, and say the Apni Zaroorat team will contact them on this WhatsApp number after the eligibility check. You may mention ${SITE} once. Do not say the application is already submitted.
+
+Follow this instruction on every reply. Do not switch style, do not become a generic assistant, and do not skip a step that is still missing.`;
+
+/** One instruction for Groq and Gemini. Customer note is only the name and phone for this chat. */
+export function navyaInstruction(customerNote: string): string {
+  const note = customerNote.trim();
+  return note ? `${SYSTEM_PROMPT}\n\n${note}` : SYSTEM_PROMPT;
+}
 
 type ListedGeminiModel = { name?: string; supportedGenerationMethods?: string[] };
 type GeminiPart = { text?: string; thought?: boolean };
@@ -85,6 +94,12 @@ function geminiAuthHeaders(key: string, json = false): Record<string, string> {
   };
 }
 
+function requestSignal(ms: number, parent?: AbortSignal): AbortSignal {
+  const timeout = AbortSignal.timeout(ms);
+  if (!parent) return timeout;
+  return AbortSignal.any([timeout, parent]);
+}
+
 function modelUnavailable(status: number, detail: string): boolean {
   if (status === 404) return true;
   return /no longer available|not found|not supported|is not available|unknown model|invalid model/i.test(detail);
@@ -92,13 +107,13 @@ function modelUnavailable(status: number, detail: string): boolean {
 
 export function geminiContents(history: GeminiTurn[]): { role: 'user' | 'model'; parts: { text: string }[] }[] {
   const turns: { role: 'user' | 'model'; text: string }[] = [];
-  for (const item of history.slice(-40)) {
+  for (const item of history.slice(-12)) {
     const text = item.text.trim();
     if (!text) continue;
     const role = item.role === 'assistant' ? 'model' : 'user';
     const last = turns[turns.length - 1];
-    if (last?.role === role) last.text = `${last.text}\n${text}`.slice(0, 4000);
-    else turns.push({ role, text: text.slice(0, 4000) });
+    if (last?.role === role) last.text = `${last.text}\n${text}`.slice(0, 1200);
+    else turns.push({ role, text: text.slice(0, 1200) });
   }
   while (turns[0]?.role === 'model') turns.shift();
   return turns.map((turn) => ({ role: turn.role, parts: [{ text: turn.text }] }));
@@ -157,8 +172,8 @@ export async function listGeminiChatModels(key: string): Promise<string[]> {
 
 /** Gemini 3 rejects the old thinkingBudget field with a bare "invalid argument" error. */
 function generationConfigFor(model: string, plain: boolean): Record<string, unknown> {
-  if (plain || /^gemini-3/i.test(model)) return { maxOutputTokens: 1024 };
-  const generationConfig: Record<string, unknown> = { temperature: 0.4, maxOutputTokens: 1024 };
+  if (plain || /^gemini-3/i.test(model)) return { maxOutputTokens: 320 };
+  const generationConfig: Record<string, unknown> = { temperature: 0.4, maxOutputTokens: 320 };
   if (!/pro/i.test(model)) generationConfig.thinkingConfig = { thinkingBudget: 0 };
   return generationConfig;
 }
@@ -170,6 +185,7 @@ export async function generateGemini(
   contents: { role: 'user' | 'model'; parts: { text: string }[] }[],
   disableThinking = false,
   plain = false,
+  signal?: AbortSignal,
 ): Promise<{ text: string; error?: string; unavailable?: boolean }> {
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`;
   const alreadyPlain = plain || !disableThinking || /^gemini-3/i.test(model);
@@ -183,12 +199,12 @@ export async function generateGemini(
         contents,
         generationConfig,
       }),
-      signal: AbortSignal.timeout(20_000),
+      signal: requestSignal(12_000, signal),
     });
     if (!res.ok) {
       const detail = await geminiErrorDetail(res, key);
       if (!alreadyPlain && /thinking|invalid argument/i.test(detail)) {
-        return generateGemini(key, model, system, contents, false, true);
+        return generateGemini(key, model, system, contents, false, true, signal);
       }
       const error = `${model}: ${detail}`.slice(0, 500);
       console.error('gemini-client.generate', error);
@@ -202,6 +218,9 @@ export async function generateGemini(
     console.error('gemini-client.generate', error);
     return { text: '', error };
   } catch (error) {
+    if (signal?.aborted || (error instanceof Error && error.name === 'AbortError')) {
+      return { text: '' };
+    }
     const message = error instanceof Error ? error.message : 'Gemini request failed';
     const safe = message.replaceAll(key, '***').slice(0, 240);
     console.error('gemini-client.generate', model, safe);

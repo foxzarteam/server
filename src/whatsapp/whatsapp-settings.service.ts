@@ -17,6 +17,8 @@ export type WhatsappSettings = {
   verifyToken: string;
   geminiApiKey: string;
   geminiModel: string;
+  groqApiKey: string;
+  groqModel: string;
   displayPhone: string;
 };
 
@@ -33,6 +35,10 @@ export type WhatsappSettingsPublic = {
   geminiApiKeyHint: string;
   geminiModel: string;
   geminiModels: string[];
+  groqApiKeyConfigured: boolean;
+  groqApiKeyHint: string;
+  groqModel: string;
+  groqModels: string[];
   displayPhone: string;
 };
 
@@ -44,6 +50,8 @@ const EMPTY: WhatsappSettings = {
   verifyToken: '',
   geminiApiKey: '',
   geminiModel: '',
+  groqApiKey: '',
+  groqModel: '',
   displayPhone: '',
 };
 
@@ -125,6 +133,8 @@ export class WhatsappSettingsService {
       verifyToken: stored.verifyToken || env('WHATSAPP_VERIFY_TOKEN'),
       geminiApiKey: cleanGeminiKey(stored.geminiApiKey || env('GEMINI_API_KEY')),
       geminiModel: stored.geminiModel || env('GEMINI_MODEL'),
+      groqApiKey: cleanGeminiKey(stored.groqApiKey || env('GROQ_API_KEY')),
+      groqModel: stored.groqModel || env('GROQ_MODEL'),
       displayPhone: stored.displayPhone || digitsOnly(env('WHATSAPP_DISPLAY_PHONE')),
     };
   }
@@ -143,6 +153,10 @@ export class WhatsappSettingsService {
       geminiApiKeyHint: hint(settings.geminiApiKey),
       geminiModel: settings.geminiModel,
       geminiModels: [],
+      groqApiKeyConfigured: Boolean(settings.groqApiKey),
+      groqApiKeyHint: hint(settings.groqApiKey),
+      groqModel: settings.groqModel,
+      groqModels: [],
       displayPhone: settings.displayPhone,
     };
   }
@@ -157,6 +171,8 @@ export class WhatsappSettingsService {
       verifyToken: keep(dto.verifyToken, prev.verifyToken),
       geminiApiKey: cleanGeminiKey(keepLongSecret(dto.geminiApiKey, prev.geminiApiKey)),
       geminiModel: keep(dto.geminiModel, prev.geminiModel),
+      groqApiKey: cleanGeminiKey(keepLongSecret(dto.groqApiKey, prev.groqApiKey)),
+      groqModel: keep(dto.groqModel, prev.groqModel),
       displayPhone: prev.displayPhone,
     };
 
@@ -205,6 +221,25 @@ export class WhatsappSettingsService {
     return next;
   }
 
+  async setGroqModel(model: string): Promise<WhatsappSettings> {
+    const prev = await this.getStored();
+    const next = { ...prev, groqModel: model.trim() };
+    this.assertShape(next);
+    const { error } = await this.supabase.from(TABLE_APP_SETTINGS).upsert(
+      {
+        key: SETTINGS_KEY,
+        value: encryptSettingsJson(next),
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: 'key' },
+    );
+    if (error) {
+      console.error('WhatsappSettingsService.setGroqModel', error.message);
+      throw new BadRequestException('Could not save WhatsApp settings.');
+    }
+    return next;
+  }
+
   async rememberDisplayPhone(phone: string): Promise<void> {
     const digits = phone.replace(/\D/g, '');
     if (!/^[0-9]{8,15}$/.test(digits)) return;
@@ -232,6 +267,9 @@ export class WhatsappSettingsService {
     }
     if (settings.geminiModel && !/^[A-Za-z0-9._-]{1,80}$/.test(settings.geminiModel)) {
       throw new BadRequestException('Gemini model name is not valid.');
+    }
+    if (settings.groqModel && !/^[A-Za-z0-9._/-]{1,80}$/.test(settings.groqModel)) {
+      throw new BadRequestException('Groq model name is not valid.');
     }
     if (settings.verifyToken && settings.verifyToken.length < 8) {
       throw new BadRequestException('Webhook verify token must be at least 8 characters.');

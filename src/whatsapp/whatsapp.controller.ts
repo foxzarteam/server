@@ -3,6 +3,7 @@ import type { RawBodyRequest } from '@nestjs/common';
 import type { Request, Response } from 'express';
 import { AdminCrmGuard } from '../common/admin-crm.guard';
 import { UpdateWhatsappSettingsDto } from './whatsapp.dto';
+import { defaultGroqModel } from './groq-client';
 import { WhatsappService, defaultGeminiModel } from './whatsapp.service';
 import { WhatsappSettings, WhatsappSettingsService } from './whatsapp-settings.service';
 import { whatsappHubChallenge } from './whatsapp-verify';
@@ -51,12 +52,19 @@ export class WhatsappController {
     this.whatsapp.clearLinkCache();
     let settings = saved.settings;
     let modelWarning = '';
+    if (settings.groqApiKey) {
+      const resolved = await this.whatsapp.resolveGroqModel(settings.groqApiKey, settings.groqModel);
+      if (resolved.model && resolved.model !== settings.groqModel) {
+        settings = await this.settings.setGroqModel(resolved.model);
+      }
+      modelWarning = resolved.error || '';
+    }
     if (settings.geminiApiKey) {
       const resolved = await this.whatsapp.resolveGeminiModel(settings.geminiApiKey, settings.geminiModel);
       if (resolved.model && resolved.model !== settings.geminiModel) {
         settings = await this.settings.setGeminiModel(resolved.model);
       }
-      modelWarning = resolved.error || '';
+      modelWarning = [modelWarning, resolved.error || ''].filter(Boolean).join(' ');
     }
     const warning = [saved.warning, modelWarning].filter(Boolean).join(' ');
     return {
@@ -127,13 +135,16 @@ export class WhatsappController {
 
   private async presentSettings(settings: WhatsappSettings) {
     const data = this.settings.toPublic(settings);
-    const geminiModels = settings.geminiApiKey
-      ? await this.whatsapp.listChatModels(settings.geminiApiKey)
-      : [];
+    const [geminiModels, groqModels] = await Promise.all([
+      settings.geminiApiKey ? this.whatsapp.listChatModels(settings.geminiApiKey) : Promise.resolve([]),
+      settings.groqApiKey ? this.whatsapp.listGroqModels(settings.groqApiKey) : Promise.resolve([]),
+    ]);
     return {
       ...data,
       geminiModels,
       geminiModel: data.geminiModel || defaultGeminiModel(geminiModels),
+      groqModels,
+      groqModel: data.groqModel || defaultGroqModel(groqModels),
     };
   }
 }
