@@ -4,7 +4,16 @@
  */
 
 const GEO_TIMEOUT_MS = 2_500;
+const GEO_CACHE_MAX = 2_000;
 const cache = new Map<string, string | null>();
+
+function rememberGeo(ip: string, label: string | null): void {
+  if (cache.size >= GEO_CACHE_MAX) {
+    const first = cache.keys().next().value;
+    if (first) cache.delete(first);
+  }
+  cache.set(ip, label);
+}
 
 /** Exported for unit tests + shared private-range detection. */
 export function isPrivateOrLocalIp(ip: string): boolean {
@@ -47,7 +56,7 @@ export async function resolveIpLocation(ip: string | null | undefined): Promise<
   if (cache.has(raw)) return cache.get(raw) ?? null;
 
   if (isPrivateOrLocalIp(raw)) {
-    cache.set(raw, 'Local / private network');
+    rememberGeo(raw, 'Local / private network');
     return 'Local / private network';
   }
 
@@ -61,7 +70,7 @@ export async function resolveIpLocation(ip: string | null | undefined): Promise<
     clearTimeout(timer);
 
     if (!res.ok) {
-      cache.set(raw, null);
+      rememberGeo(raw, null);
       return null;
     }
 
@@ -73,12 +82,12 @@ export async function resolveIpLocation(ip: string | null | undefined): Promise<
     };
 
     if (data.success === false) {
-      cache.set(raw, null);
+      rememberGeo(raw, null);
       return null;
     }
 
     const label = buildLocationLabel([data.city, data.region, data.country]);
-    cache.set(raw, label);
+    rememberGeo(raw, label);
     return label;
   } catch {
     // Don't cache hard failures forever so next attempt can succeed

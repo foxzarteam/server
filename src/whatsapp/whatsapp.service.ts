@@ -604,7 +604,7 @@ export class WhatsappService {
     const { data, error } = await this.supabase
       .from(TABLE_LEADS)
       .select('full_name, mobile_number, category, ins_type, status, pan, is_active')
-      .ilike('mobile_number', `%${ten}`)
+      .in('mobile_number', [ten, `91${ten}`])
       .eq('is_active', true)
       .order('created_at', { ascending: false })
       .limit(10);

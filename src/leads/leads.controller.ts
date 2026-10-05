@@ -117,7 +117,7 @@ export class LeadsController {
     return { success: true, data: leads };
   }
 
-  /** PAN, mobile, and product checks only. No lead row until OTP is verified. */
+  /** PAN, mobile, and product checks only. Does not insert a lead. */
   @Post('admin/precheck')
   @UseGuards(AdminPanelGuard)
   @HttpCode(HttpStatus.OK)
