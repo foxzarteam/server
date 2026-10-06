@@ -62,6 +62,10 @@ async function metaErrorText(res: Response): Promise<string> {
   return text.slice(0, 500);
 }
 
+function isGraphTimeout(error?: string): boolean {
+  return /timeout|aborted|abort/i.test(error || '');
+}
+
 function graphWaType(mime: string): NonNullable<ChatMessage['waType']> {
   if (mime.startsWith('image/')) return 'image';
   if (mime.startsWith('audio/')) return 'audio';
@@ -222,7 +226,13 @@ function asChat(raw: unknown): ChatDoc {
     };
   }
 
-type FlowMem = { welcomed: boolean; offered: boolean; thanked: boolean };
+type FlowMem = {
+  welcomed: boolean;
+  offered: boolean;
+  thanked: boolean;
+  product?: ProductChoice;
+  ids: Set<string>;
+};
 
 @Injectable()
 export class WhatsappService implements OnModuleInit {
@@ -319,7 +329,8 @@ export class WhatsappService implements OnModuleInit {
   async listForAdmin(): Promise<WhatsappEnquiryListItem[]> {
     const { data, error } = await this.table
       .select('id, phone, chat, last_chat_at, created_at')
-      .order('last_chat_at', { ascending: false, nullsFirst: false });
+      .order('last_chat_at', { ascending: false, nullsFirst: false })
+      .limit(80);
 
     if (error) {
       console.error('WhatsappService.listForAdmin', error.message);
@@ -453,6 +464,10 @@ export class WhatsappService implements OnModuleInit {
     this.inflight.add(message.messageId);
     try {
       const phone = canonicalWhatsappPhone(message.phone);
+      if (!this.flowMem.has(phone)) await this.ensureFlow(phone);
+      const seen = this.flowMem.get(phone)?.ids;
+      if (seen?.has(message.messageId) || seen?.has(assistantId)) return;
+
       const userMessage: ChatMessage = {
         id: message.messageId,
         role: 'user',
@@ -465,8 +480,6 @@ export class WhatsappService implements OnModuleInit {
       };
 
       const choice = productChoice(message.buttonId, message.text);
-      if (!choice) await this.ensureFlow(phone);
-
       let reply = this.decideReply(phone, message, assistantId);
       if (reply && !choice && !allowRateLimitedAction(`wa-in:${phone}`, 20, 10 * 60_000)) {
         reply = {
@@ -490,6 +503,7 @@ export class WhatsappService implements OnModuleInit {
         }
       }
 
+      this.rememberIds(phone, [userMessage.id, ...(reply ? [reply.id] : [])]);
       this.queuePersist(phone, () =>
         this.persistInbound(phone, message.profileName, userMessage, reply, message.phoneNumberId),
       );
@@ -500,9 +514,9 @@ export class WhatsappService implements OnModuleInit {
 
   /** Wait for any in-flight save, then load welcome/product flags from DB once. */
   private async ensureFlow(phone: string) {
-    if (this.flowMem.get(phone)?.welcomed) return;
+    if (this.flowMem.has(phone)) return;
     await (this.persistTail.get(phone) ?? Promise.resolve());
-    if (this.flowMem.get(phone)?.welcomed) return;
+    if (this.flowMem.has(phone)) return;
     await this.hydrateFlow(phone);
   }
 
@@ -511,10 +525,18 @@ export class WhatsappService implements OnModuleInit {
     const messages = row?.chat.messages ?? [];
     const offered = alreadyOfferedProduct(messages);
     const thanked = alreadyThanked(messages);
+    let product: ProductChoice | undefined;
+    for (const item of messages) {
+      if (item.role === 'assistant' && (item.kind === 'personal_loan' || item.kind === 'insurance')) {
+        product = item.kind;
+      }
+    }
     this.flowMem.set(phone, {
       welcomed: alreadyWelcomed(messages) || offered || thanked,
       offered,
       thanked,
+      ...(product ? { product } : {}),
+      ids: new Set(messages.map((item) => item.id)),
     });
   }
 
@@ -523,6 +545,7 @@ export class WhatsappService implements OnModuleInit {
     const mem = this.flowMem.get(phone);
     const choice = productChoice(message.buttonId, message.text);
     if (choice === 'personal_loan' || choice === 'insurance') {
+      if (mem?.product === choice) return null;
       return this.productTemplateMessage(assistantId, name, choice);
     }
     if (mem?.welcomed || mem?.offered) {
@@ -549,13 +572,33 @@ export class WhatsappService implements OnModuleInit {
   }
 
   private noteFlow(phone: string, reply: ChatMessage) {
-    const prev = this.flowMem.get(phone) || { welcomed: false, offered: false, thanked: false };
+    const prev = this.flowMem.get(phone) || {
+      welcomed: false,
+      offered: false,
+      thanked: false,
+      ids: new Set<string>(),
+    };
+    if (!prev.ids) prev.ids = new Set();
     if (reply.kind === 'welcome') prev.welcomed = true;
     if (reply.kind === 'personal_loan' || reply.kind === 'insurance') {
       prev.welcomed = true;
       prev.offered = true;
+      prev.product = reply.kind;
     }
     if (reply.kind === 'thanks') prev.thanked = true;
+    prev.ids.add(reply.id);
+    this.flowMem.set(phone, prev);
+  }
+
+  private rememberIds(phone: string, ids: string[]) {
+    const prev = this.flowMem.get(phone) || {
+      welcomed: false,
+      offered: false,
+      thanked: false,
+      ids: new Set<string>(),
+    };
+    if (!prev.ids) prev.ids = new Set();
+    for (const id of ids) prev.ids.add(id);
     this.flowMem.set(phone, prev);
   }
 
@@ -574,8 +617,7 @@ export class WhatsappService implements OnModuleInit {
     reply: ChatMessage | null,
     waPhoneNumberId: string,
   ) {
-    await this.appendMessage(phone, profileName, userMessage, waPhoneNumberId);
-    if (reply) await this.appendMessage(phone, profileName, reply, waPhoneNumberId);
+    await this.appendMessages(phone, profileName, reply ? [userMessage, reply] : [userMessage], waPhoneNumberId);
   }
 
   private rememberSent(id: string) {
@@ -959,24 +1001,12 @@ export class WhatsappService implements OnModuleInit {
     const payload = graphMessageBody(phone, outbound);
     if (!payload) return { ok: false, error: 'Nothing to send.' };
     const sent = await this.postGraphMessage(token, fromId, payload);
-    if (sent.ok) {
+    if (sent.ok || (payload.type === 'image' && isGraphTimeout(sent.error))) {
       if (outbound.mediaId) message.mediaId = outbound.mediaId;
       if (outbound.waType) message.waType = outbound.waType;
       if (outbound.filename) message.filename = outbound.filename;
       if (outbound.mime) message.mime = outbound.mime;
-      return sent;
-    }
-    if (payload.type === 'image') {
-      const body = outbound.text.replace(/\uFFFD/g, '').trim().slice(0, 4000);
-      if (body) {
-        return this.postGraphMessage(token, fromId, {
-          messaging_product: 'whatsapp',
-          recipient_type: 'individual',
-          to: phone,
-          type: 'text',
-          text: { preview_url: false, body },
-        });
-      }
+      return { ok: true };
     }
     return sent;
   }
@@ -1140,23 +1170,25 @@ export class WhatsappService implements OnModuleInit {
     return { ...row, chat: asChat(row.chat) };
   }
 
-  private async appendMessage(
+  private async appendMessages(
     phone: string,
     profileName: string,
-    message: ChatMessage,
+    incoming: ChatMessage[],
     waPhoneNumberId = '',
   ): Promise<{ row: EnquiryRow; added: boolean } | null> {
     const key = canonicalWhatsappPhone(phone);
-    if (!/^[0-9]{8,15}$/.test(key)) return null;
+    if (!/^[0-9]{8,15}$/.test(key) || incoming.length === 0) return null;
     phone = key;
 
     for (let attempt = 0; attempt < 4; attempt += 1) {
       const current = await this.readByPhone(phone);
-      if (current?.chat.messages.some((item) => item.id === message.id)) {
-        return { row: current, added: false };
+      const existing = new Set((current?.chat.messages ?? []).map((item) => item.id));
+      const toAdd = incoming.filter((item) => !existing.has(item.id));
+      if (toAdd.length === 0) {
+        return current ? { row: current, added: false } : null;
       }
 
-      const messages = [...(current?.chat.messages ?? []), message].slice(-MAX_MESSAGES);
+      const messages = [...(current?.chat.messages ?? []), ...toAdd].slice(-MAX_MESSAGES);
       const chat: ChatDoc = {
         profileName: profileName.trim() || current?.chat.profileName || '',
         waPhoneNumberId: (waPhoneNumberId || current?.chat.waPhoneNumberId || '').replace(/\D/g, '').slice(0, 30),
@@ -1164,7 +1196,7 @@ export class WhatsappService implements OnModuleInit {
         ...(current?.chat.leadNote !== undefined ? { leadNote: current.chat.leadNote } : {}),
       };
       const now = new Date().toISOString();
-      const lastChatAt = message.at || now;
+      const lastChatAt = toAdd[toAdd.length - 1]?.at || now;
 
       if (!current) {
         const { data, error } = await this.table
@@ -1198,31 +1230,16 @@ export class WhatsappService implements OnModuleInit {
       }
       if (error) console.error('WhatsappService.appendMessage.update', error.message);
     }
+    return null;
+  }
 
-    const latest = await this.readByPhone(phone);
-    if (!latest) return null;
-    if (latest.chat.messages.some((item) => item.id === message.id)) {
-      return { row: latest, added: false };
-    }
-    const messages = [...latest.chat.messages, message].slice(-MAX_MESSAGES);
-    const chat: ChatDoc = {
-      profileName: profileName.trim() || latest.chat.profileName || '',
-      waPhoneNumberId: (waPhoneNumberId || latest.chat.waPhoneNumberId || '').replace(/\D/g, '').slice(0, 30),
-      messages,
-      ...(latest.chat.leadNote !== undefined ? { leadNote: latest.chat.leadNote } : {}),
-    };
-    const now = new Date().toISOString();
-    const { data, error } = await this.table
-      .update({ chat, last_chat_at: message.at || now, updated_at: now })
-      .eq('id', latest.id)
-      .select('id, phone, chat, last_chat_at, created_at, updated_at')
-      .maybeSingle();
-    if (error || !data) {
-      console.error('WhatsappService.appendMessage.fallback', error?.message);
-      return null;
-    }
-    const row = data as EnquiryRow;
-    return { row: { ...row, chat: asChat(row.chat) }, added: true };
+  private async appendMessage(
+    phone: string,
+    profileName: string,
+    message: ChatMessage,
+    waPhoneNumberId = '',
+  ): Promise<{ row: EnquiryRow; added: boolean } | null> {
+    return this.appendMessages(phone, profileName, [message], waPhoneNumberId);
   }
 
   private async patchMessage(
