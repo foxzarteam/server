@@ -1,6 +1,6 @@
 const SITE = 'https://apnizaroorat.com';
 const LOAN_URL = `${SITE}/products/personal-loan`;
-const INSURANCE_WA = 'https://wa.me/919251283215?text=' + encodeURIComponent('Insurance chahiye');
+const INSURANCE_URL = `${SITE}/products/insurance/`;
 const BTN_LOAN = 'personal_loan';
 const BTN_INSURANCE = 'insurance';
 
@@ -20,7 +20,7 @@ export function personalLoanText(profileName: string): string {
 }
 
 export function insuranceText(profileName: string): string {
-  return `Great, ${who(profileName)}! 🛡️\nHealth, bike, life — sab tarah ke insurance options hamare paas hain. Paperless process, team aapki help karegi.\nInsurance ke liye yahan WhatsApp karein:\n${INSURANCE_WA}`;
+  return `Great, ${who(profileName)}! 🛡️\nHealth, bike, life — sab tarah ke insurance options hamare paas hain. Paperless process, team aapki help karegi.\nAbhi apply karein:\n${INSURANCE_URL}`;
 }
 
 export function welcomeInteractive(body: string) {

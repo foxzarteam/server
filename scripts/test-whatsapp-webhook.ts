@@ -131,7 +131,7 @@ assert.strictEqual(productChoice('insurance', 'Insurance'), 'insurance');
 assert.ok(/Personal Loan/.test(welcomeText('Gaurav')));
 assert.ok(!/Navya/i.test(welcomeText('Gaurav')));
 assert.ok(/apnizaroorat.com\/products\/personal-loan/.test(personalLoanText('Gaurav')));
-assert.ok(/wa.me\/919251283215/.test(insuranceText('Gaurav')));
+assert.ok(/apnizaroorat.com\/products\/insurance\//.test(insuranceText('Gaurav')));
 assert.ok(alreadyWelcomed([{ role: 'assistant', kind: 'welcome', text: welcomeText('Gaurav') }]));
 assert.ok(!alreadyWelcomed([{ role: 'user', text: 'Hi' }]));
 
