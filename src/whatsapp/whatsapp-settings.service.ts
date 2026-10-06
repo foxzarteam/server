@@ -126,8 +126,14 @@ export class WhatsappSettingsService {
       verifyToken: stored.verifyToken || env('WHATSAPP_VERIFY_TOKEN'),
       displayPhone: stored.displayPhone || digitsOnly(env('WHATSAPP_DISPLAY_PHONE')),
     };
-    this.effectiveCache = { until: Date.now() + 60_000, value };
+    this.effectiveCache = { until: Date.now() + 10 * 60_000, value };
     return value;
+  }
+
+  /** Memory only — never hits the database. */
+  peekEffective(): WhatsappSettings | null {
+    if (this.effectiveCache && this.effectiveCache.until > Date.now()) return this.effectiveCache.value;
+    return null;
   }
 
   toPublic(settings: WhatsappSettings): WhatsappSettingsPublic {

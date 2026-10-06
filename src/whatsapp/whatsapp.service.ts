@@ -1,4 +1,4 @@
-import { Inject, Injectable } from '@nestjs/common';
+import { Inject, Injectable, OnModuleInit } from '@nestjs/common';
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { SupabaseClient } from '@supabase/supabase-js';
@@ -222,14 +222,18 @@ function asChat(raw: unknown): ChatDoc {
     };
   }
 
+type FlowMem = { welcomed: boolean; offered: boolean; thanked: boolean };
+
 @Injectable()
-export class WhatsappService {
+export class WhatsappService implements OnModuleInit {
   private linkCache: { until: number; url: string | null } | null = null;
   private mediaIdCache = new Map<string, { id: string; until: number }>();
   private mediaUploadInflight = new Map<string, Promise<string>>();
   private leadRouteCache = new Map<string, { until: number; action: 'new' } | { until: number; action: 'existing'; text: string }>();
   private sentIds = new Set<string>();
   private inflight = new Set<string>();
+  private flowMem = new Map<string, FlowMem>();
+  private phoneTail = new Map<string, Promise<void>>();
 
   constructor(
     @Inject(SUPABASE_CLIENT) private readonly supabase: SupabaseClient,
@@ -240,8 +244,13 @@ export class WhatsappService {
     return this.supabase.from(TABLE_WP_ENQUIRIES);
   }
 
-  async handleWebhook(rawBody: Buffer, signatureHeader?: string): Promise<'ok' | 'forbidden'> {
+  async onModuleInit() {
     const settings = await this.settings.getEffective();
+    this.warmTemplateMedia(settings);
+  }
+
+  async handleWebhook(rawBody: Buffer, signatureHeader?: string): Promise<'ok' | 'forbidden'> {
+    const settings = this.settings.peekEffective() ?? (await this.settings.getEffective());
     if (process.env.NODE_ENV === 'production' && !settings.appSecret.trim()) {
       console.error('WhatsappService.handleWebhook: app secret is not configured');
       return 'forbidden';
@@ -266,13 +275,23 @@ export class WhatsappService {
   }
 
   private async dispatchInbound(settings: WhatsappSettings, inbound: InboundWhatsappMessage[]) {
-    for (const message of inbound) {
-      try {
-        await this.handleInbound(settings, message);
-      } catch (error) {
-        console.error('WhatsappService.handleInbound', message.messageId, error);
-      }
-    }
+    await Promise.all(
+      inbound.map((message) =>
+        this.enqueuePhone(message.phone, () =>
+          this.handleInbound(settings, message).catch((error) => {
+            console.error('WhatsappService.handleInbound', message.messageId, error);
+          }),
+        ),
+      ),
+    );
+  }
+
+  private enqueuePhone(phone: string, fn: () => Promise<void>): Promise<void> {
+    const key = canonicalWhatsappPhone(phone);
+    const prev = this.phoneTail.get(key) ?? Promise.resolve();
+    const next = prev.then(fn, fn);
+    this.phoneTail.set(key, next);
+    return next;
   }
 
   async publicLink(): Promise<string | null> {
@@ -386,26 +405,11 @@ export class WhatsappService {
         at: new Date().toISOString(),
       };
 
-      const row = await this.readByPhone(phone);
-      const existingReply = row?.chat.messages.find((item) => item.id === assistantId);
-      if (existingReply?.sent) {
-        this.rememberSent(assistantId);
-        return;
-      }
-      if (existingReply) {
-        const result = await this.sendWhatsapp(settings, phone, existingReply, message.phoneNumberId || row?.chat.waPhoneNumberId || '');
-        if (result.ok) {
-          this.rememberSent(assistantId);
-          await this.markSent(phone, assistantId);
-        }
-        return;
-      }
-
-      const route = await this.routeCustomer(phone, row?.chat.leadNote, row?.chat.messages ?? []);
-      let reply = this.buildCustomerReply(settings, row, message, assistantId, route);
+      const choice = productChoice(message.buttonId, message.text);
+      let reply = this.decideReply(phone, message, assistantId);
       if (
-        route.action === 'new' &&
         reply &&
+        !choice &&
         !allowRateLimitedAction(`wa-in:${phone}`, 20, 10 * 60_000)
       ) {
         reply = {
@@ -418,21 +422,74 @@ export class WhatsappService {
         };
       }
       if (reply) {
-        const result = await this.sendWhatsapp(settings, phone, reply, message.phoneNumberId || row?.chat.waPhoneNumberId || '');
+        const result = await this.sendWhatsapp(settings, phone, reply, message.phoneNumberId);
         if (result.ok) {
           this.rememberSent(assistantId);
           reply.sent = true;
+          this.noteFlow(phone, reply);
         } else if (result.error) {
           reply.sendError = result.error;
         }
       }
 
-      const profile = message.profileName || row?.chat.profileName || '';
-      await this.appendMessage(phone, profile, userMessage, message.phoneNumberId);
-      if (reply) await this.appendMessage(phone, profile, reply, message.phoneNumberId);
+      void this.persistInbound(phone, message.profileName, userMessage, reply, message.phoneNumberId);
     } finally {
       this.inflight.delete(message.messageId);
     }
+  }
+
+  private decideReply(phone: string, message: InboundWhatsappMessage, assistantId: string): ChatMessage | null {
+    const name = message.profileName || '';
+    const mem = this.flowMem.get(phone);
+    const choice = productChoice(message.buttonId, message.text);
+    if (choice === 'personal_loan' || choice === 'insurance') {
+      return this.productTemplateMessage(assistantId, name, choice);
+    }
+    if (!mem?.welcomed) {
+      return {
+        id: assistantId,
+        role: 'assistant',
+        text: welcomeText(name),
+        at: new Date().toISOString(),
+        replyBy: 'template',
+        kind: 'welcome',
+        waType: 'interactive',
+      };
+    }
+    if (mem.offered || mem.thanked) return null;
+    return {
+      id: assistantId,
+      role: 'assistant',
+      text: thankYouText(name),
+      at: new Date().toISOString(),
+      replyBy: 'template',
+      kind: 'thanks',
+      waType: 'text',
+    };
+  }
+
+  private noteFlow(phone: string, reply: ChatMessage) {
+    const prev = this.flowMem.get(phone) || { welcomed: false, offered: false, thanked: false };
+    if (reply.kind === 'welcome') prev.welcomed = true;
+    if (reply.kind === 'personal_loan' || reply.kind === 'insurance') {
+      prev.welcomed = true;
+      prev.offered = true;
+    }
+    if (reply.kind === 'thanks') prev.thanked = true;
+    this.flowMem.set(phone, prev);
+  }
+
+  private persistInbound(
+    phone: string,
+    profileName: string,
+    userMessage: ChatMessage,
+    reply: ChatMessage | null,
+    waPhoneNumberId: string,
+  ) {
+    void (async () => {
+      await this.appendMessage(phone, profileName, userMessage, waPhoneNumberId);
+      if (reply) await this.appendMessage(phone, profileName, reply, waPhoneNumberId);
+    })().catch((error) => console.error('WhatsappService.persistInbound', error));
   }
 
   private rememberSent(id: string) {
