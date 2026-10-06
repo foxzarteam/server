@@ -17,7 +17,6 @@ import {
   personalLoanText,
   productChoice,
   productImageFilename,
-  productImageUrl,
   thankYouText,
   welcomeInteractive,
   welcomeText,
@@ -25,7 +24,7 @@ import {
 } from './whatsapp-templates';
 
 const GRAPH_VERSION = 'v21.0';
-const GRAPH_SEND_MS = 10_000;
+const GRAPH_SEND_MS = 12_000;
 const GRAPH_UPLOAD_MS = 20_000;
 const MAX_MESSAGES = 1000;
 const EXISTING_MARK = 'EXISTING\n';
@@ -226,6 +225,9 @@ function asChat(raw: unknown): ChatDoc {
 export class WhatsappService {
   private linkCache: { until: number; url: string | null } | null = null;
   private mediaIdCache = new Map<string, { id: string; until: number }>();
+  private leadRouteCache = new Map<string, { until: number; action: 'new' } | { until: number; action: 'existing'; text: string }>();
+  private sentIds = new Set<string>();
+  private inflight = new Set<string>();
 
   constructor(
     @Inject(SUPABASE_CLIENT) private readonly supabase: SupabaseClient,
@@ -256,6 +258,7 @@ export class WhatsappService {
     }
 
     const inbound = extractInboundMessages(payload);
+    void this.warmTemplateMedia(settings);
     void this.dispatchInbound(settings, inbound);
     return 'ok';
   }
@@ -370,22 +373,121 @@ export class WhatsappService {
 
   private async handleInbound(settings: WhatsappSettings, message: InboundWhatsappMessage) {
     const assistantId = `ai:${message.messageId}`;
-    const userMessage: ChatMessage = {
-      id: message.messageId,
-      role: 'user',
-      text: this.userText(message),
-      at: new Date().toISOString(),
-    };
+    if (this.sentIds.has(assistantId) || this.inflight.has(message.messageId)) return;
+    this.inflight.add(message.messageId);
+    try {
+      const phone = canonicalWhatsappPhone(message.phone);
+      const userMessage: ChatMessage = {
+        id: message.messageId,
+        role: 'user',
+        text: this.userText(message),
+        at: new Date().toISOString(),
+      };
 
-    const appended = await this.appendMessage(
-      message.phone,
-      message.profileName,
-      userMessage,
-      message.phoneNumberId,
-    );
-    if (!appended) return;
-    await this.answerCustomer(settings, appended.row, message, assistantId, appended.added);
-    void this.flushUnsent(settings, message.phone);
+      const row = await this.readByPhone(phone);
+      const existingReply = row?.chat.messages.find((item) => item.id === assistantId);
+      if (existingReply?.sent) {
+        this.rememberSent(assistantId);
+        return;
+      }
+      if (existingReply) {
+        const result = await this.sendWhatsapp(settings, phone, existingReply, message.phoneNumberId || row?.chat.waPhoneNumberId || '');
+        if (result.ok) {
+          this.rememberSent(assistantId);
+          await this.markSent(phone, assistantId);
+        }
+        return;
+      }
+
+      const route = await this.routeCustomer(phone, row?.chat.leadNote, row?.chat.messages ?? []);
+      let reply = this.buildCustomerReply(settings, row, message, assistantId, route);
+      if (
+        route.action === 'new' &&
+        reply &&
+        !allowRateLimitedAction(`wa-in:${phone}`, 20, 10 * 60_000)
+      ) {
+        reply = {
+          id: assistantId,
+          role: 'assistant',
+          text: 'Please wait a few minutes before sending more messages.',
+          at: new Date().toISOString(),
+          replyBy: 'template',
+          waType: 'text',
+        };
+      }
+      if (reply) {
+        const result = await this.sendWhatsapp(settings, phone, reply, message.phoneNumberId || row?.chat.waPhoneNumberId || '');
+        if (result.ok) {
+          this.rememberSent(assistantId);
+          reply.sent = true;
+        } else if (result.error) {
+          reply.sendError = result.error;
+        }
+      }
+
+      const profile = message.profileName || row?.chat.profileName || '';
+      await this.appendMessage(phone, profile, userMessage, message.phoneNumberId);
+      if (reply) await this.appendMessage(phone, profile, reply, message.phoneNumberId);
+    } finally {
+      this.inflight.delete(message.messageId);
+    }
+  }
+
+  private rememberSent(id: string) {
+    this.sentIds.add(id);
+    if (this.sentIds.size > 4000) {
+      const first = this.sentIds.values().next().value;
+      if (first) this.sentIds.delete(first);
+    }
+  }
+
+  private buildCustomerReply(
+    settings: WhatsappSettings,
+    row: EnquiryRow | null,
+    message: InboundWhatsappMessage,
+    assistantId: string,
+    route: { action: 'new' } | { action: 'silent' } | { action: 'template'; text: string },
+  ): ChatMessage | null {
+    if (route.action === 'silent') return null;
+    const at = new Date().toISOString();
+    if (route.action === 'template') {
+      return {
+        id: assistantId,
+        role: 'assistant',
+        text: route.text,
+        at,
+        replyBy: 'template',
+        kind: 'status',
+        waType: 'text',
+      };
+    }
+    const messages = row?.chat.messages ?? [];
+    const name = message.profileName || row?.chat.profileName || '';
+    const choice = productChoice(message.buttonId, message.text);
+    if (choice === 'personal_loan' || choice === 'insurance') {
+      return this.productTemplateMessage(assistantId, name, choice, settings, message.phoneNumberId);
+    }
+    if (!alreadyWelcomed(messages)) {
+      return {
+        id: assistantId,
+        role: 'assistant',
+        text: welcomeText(name),
+        at,
+        replyBy: 'template',
+        kind: 'welcome',
+        waType: 'interactive',
+      };
+    }
+    if (alreadyOfferedProduct(messages) || alreadyThanked(messages)) return null;
+    return {
+      id: assistantId,
+      role: 'assistant',
+      text: thankYouText(name),
+      at,
+      replyBy: 'template',
+      kind: 'thanks',
+      waType: 'text',
+    };
   }
 
   private async ensureReply(
@@ -439,7 +541,12 @@ export class WhatsappService {
     const name = message.profileName || row.chat.profileName;
     const choice = productChoice(message.buttonId, message.text);
     if (choice === 'personal_loan' || choice === 'insurance') {
-      await this.storeAndSend(settings, row, name, this.productTemplateMessage(assistantId, name, choice));
+      await this.storeAndSend(
+        settings,
+        row,
+        name,
+        this.productTemplateMessage(assistantId, name, choice, settings, message.phoneNumberId),
+      );
       return;
     }
     if (!alreadyWelcomed(row.chat.messages)) {
@@ -475,17 +582,36 @@ export class WhatsappService {
     savedLeadNote: string | undefined,
     messages: ChatMessage[],
   ): Promise<{ action: 'new' } | { action: 'silent' } | { action: 'template'; text: string }> {
-    if (savedLeadNote === '') return { action: 'new' };
+    if (savedLeadNote === '') {
+      this.leadRouteCache.set(canonicalWhatsappPhone(phone), { until: Date.now() + 15 * 60_000, action: 'new' });
+      return { action: 'new' };
+    }
     if (savedLeadNote?.startsWith(EXISTING_MARK)) {
       const text = savedLeadNote.slice(EXISTING_MARK.length).trim();
       const told = messages.some((item) => item.role === 'assistant' && item.text.trim() === text);
       return told || !text ? { action: 'silent' } : { action: 'template', text };
     }
 
+    if (savedLeadNote === undefined && alreadyWelcomed(messages)) {
+      return { action: 'new' };
+    }
+    const cached = this.leadRouteCache.get(canonicalWhatsappPhone(phone));
+    if (cached && cached.until > Date.now()) {
+      if (cached.action === 'new') return { action: 'new' };
+      const told = messages.some((item) => item.role === 'assistant' && item.text.trim() === cached.text);
+      return told || !cached.text ? { action: 'silent' } : { action: 'template', text: cached.text };
+    }
+
     const template = await this.existingStatusTemplate(phone);
     if (template === null) return { action: 'template', text: STATUS_LOOKUP_RETRY };
 
-    await this.rememberLeadNote(phone, template ? `${EXISTING_MARK}${template}` : '', savedLeadNote !== undefined);
+    const key = canonicalWhatsappPhone(phone);
+    if (template) {
+      this.leadRouteCache.set(key, { until: Date.now() + 15 * 60_000, action: 'existing', text: template });
+    } else {
+      this.leadRouteCache.set(key, { until: Date.now() + 15 * 60_000, action: 'new' });
+    }
+    void this.rememberLeadNote(phone, template ? `${EXISTING_MARK}${template}` : '', savedLeadNote !== undefined);
     return template ? { action: 'template', text: template } : { action: 'new' };
   }
 
@@ -599,7 +725,16 @@ export class WhatsappService {
     return { ...row, chat: asChat(row.chat) };
   }
 
-  private productTemplateMessage(id: string, name: string, choice: ProductChoice): ChatMessage {
+  private productTemplateMessage(
+    id: string,
+    name: string,
+    choice: ProductChoice,
+    settings: WhatsappSettings,
+    inboundPhoneNumberId = '',
+  ): ChatMessage {
+    const fileName = productImageFilename(choice);
+    const fromId = (inboundPhoneNumberId || settings.phoneNumberId).replace(/\D/g, '');
+    if (fromId) void this.templateMediaId(settings, fromId, fileName);
     return {
       id,
       role: 'assistant',
@@ -608,8 +743,7 @@ export class WhatsappService {
       replyBy: 'template',
       kind: choice,
       waType: 'image',
-      mediaUrl: productImageUrl(choice),
-      filename: productImageFilename(choice),
+      filename: fileName,
       mime: 'image/jpeg',
     };
   }
@@ -693,25 +827,60 @@ export class WhatsappService {
     fromId: string,
     message: ChatMessage,
   ): Promise<ChatMessage> {
-    if (message.waType !== 'image' || message.mediaId) return message;
-    const fileName = message.filename || '';
-    if (fileName === 'wa_loa.jpg' || fileName === 'wa_ins.jpg') {
-      const id = await this.templateMediaId(settings, fromId, fileName);
-      if (id) return { ...message, mediaId: id, mediaUrl: undefined };
-      return { ...message, waType: 'text', mediaUrl: undefined, filename: undefined };
+    if (message.mediaId) return { ...message, waType: 'image', mediaUrl: undefined };
+    const product =
+      message.kind === 'insurance' ? 'insurance' : message.kind === 'personal_loan' ? 'personal_loan' : '';
+    const fileName =
+      message.filename === 'wa_ins.jpg' || message.filename === 'wa_loa.jpg'
+        ? message.filename
+        : product === 'insurance'
+          ? 'wa_ins.jpg'
+          : product === 'personal_loan'
+            ? 'wa_loa.jpg'
+            : '';
+    if (!fileName) {
+      if (message.waType === 'image' && message.mediaUrl) return message;
+      return message.waType === 'image' ? { ...message, waType: 'text' } : message;
     }
-    if (message.mediaUrl) return message;
-    return { ...message, waType: 'text' };
+
+    let id = await this.templateMediaId(settings, fromId, fileName);
+    if (!id) {
+      this.mediaIdCache.delete(`${fromId}:${fileName}`);
+      id = await this.templateMediaId(settings, fromId, fileName);
+    }
+    if (id) return { ...message, waType: 'image', mediaId: id, filename: fileName, mediaUrl: undefined, mime: 'image/jpeg' };
+    console.error('WhatsappService.withTemplateImage no media id', fileName);
+    return { ...message, waType: 'text', mediaUrl: undefined, mediaId: undefined };
   }
 
   private templateImagePath(fileName: string): string {
     const safe = fileName === 'wa_ins.jpg' ? 'wa_ins.jpg' : 'wa_loa.jpg';
-    const bases = [join(process.cwd(), 'src', 'whatsapp', 'media'), join(process.cwd(), 'dist', 'whatsapp', 'media'), join(__dirname, 'media')];
+    const bases = [
+      join(__dirname, 'media'),
+      join(__dirname, '..', 'whatsapp', 'media'),
+      join(process.cwd(), 'src', 'whatsapp', 'media'),
+      join(process.cwd(), 'dist', 'whatsapp', 'media'),
+      join(process.cwd(), 'server', 'src', 'whatsapp', 'media'),
+      join(process.cwd(), 'server', 'dist', 'whatsapp', 'media'),
+      join(process.cwd(), '..', 'az_web', 'public', 'images', 'whatsapp'),
+      join(process.cwd(), 'az_web', 'public', 'images', 'whatsapp'),
+      join(process.cwd(), '..', 'az_web', 'public', 'images', 'service'),
+      join(process.cwd(), 'az_web', 'public', 'images', 'service'),
+    ];
     for (const dir of bases) {
-      const full = join(dir, safe);
-      if (existsSync(full)) return full;
+      const jpg = join(dir, safe);
+      if (existsSync(jpg)) return jpg;
+      const png = join(dir, safe.replace(/\.jpg$/i, '.png'));
+      if (existsSync(png)) return png;
     }
     return '';
+  }
+
+  private warmTemplateMedia(settings: WhatsappSettings) {
+    const fromId = settings.phoneNumberId.replace(/\D/g, '');
+    if (!fromId || !settings.accessToken) return;
+    void this.templateMediaId(settings, fromId, 'wa_loa.jpg');
+    void this.templateMediaId(settings, fromId, 'wa_ins.jpg');
   }
 
   private async templateMediaId(settings: WhatsappSettings, fromId: string, fileName: string): Promise<string> {
@@ -719,11 +888,15 @@ export class WhatsappService {
     const hit = this.mediaIdCache.get(key);
     if (hit && hit.until > Date.now()) return hit.id;
     const path = this.templateImagePath(fileName);
-    if (!path) return '';
+    if (!path) {
+      console.error('WhatsappService.templateImagePath missing', fileName);
+      return '';
+    }
+    const png = path.toLowerCase().endsWith('.png');
     const uploaded = await this.uploadWhatsappMedia(settings, fromId, {
       buffer: readFileSync(path),
-      originalname: fileName,
-      mimetype: 'image/jpeg',
+      originalname: png ? fileName.replace(/\.jpg$/i, '.png') : fileName,
+      mimetype: png ? 'image/png' : 'image/jpeg',
     });
     if (!uploaded.id) {
       console.error('WhatsappService.templateMediaId', uploaded.error);

@@ -4,7 +4,11 @@
   "sourceRoot": "src",
   "compilerOptions": {
     "deleteOutDir": true,
-    "assets": ["whatsapp/media/**/*"],
+    "assets": [
+      "whatsapp/media/**/*.jpg",
+      "whatsapp/media/**/*.jpeg",
+      "whatsapp/media/**/*.png"
+    ],
     "watchAssets": true
   }
 }

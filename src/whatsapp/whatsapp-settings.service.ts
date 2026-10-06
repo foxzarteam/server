@@ -84,6 +84,7 @@ function pickStored(parsed: Partial<WhatsappSettings> | null): WhatsappSettings 
 
 @Injectable()
 export class WhatsappSettingsService {
+  private effectiveCache: { until: number; value: WhatsappSettings } | null = null;
   constructor(
     @Inject(SUPABASE_CLIENT) private readonly supabase: SupabaseClient,
     private readonly config: ConfigService,
@@ -112,9 +113,12 @@ export class WhatsappSettingsService {
 
   /** DB value wins. Env is only a fallback so existing webhook tokens keep working. */
   async getEffective(): Promise<WhatsappSettings> {
+    if (this.effectiveCache && this.effectiveCache.until > Date.now()) {
+      return this.effectiveCache.value;
+    }
     const stored = await this.getStored();
     const env = (name: string) => (this.config.get<string>(name) ?? '').trim();
-    return {
+    const value: WhatsappSettings = {
       accessToken: cleanAccessToken(stored.accessToken || env('WHATSAPP_ACCESS_TOKEN')),
       phoneNumberId: stored.phoneNumberId || env('WHATSAPP_PHONE_NUMBER_ID'),
       businessAccountId: stored.businessAccountId || env('WHATSAPP_BUSINESS_ACCOUNT_ID'),
@@ -122,6 +126,8 @@ export class WhatsappSettingsService {
       verifyToken: stored.verifyToken || env('WHATSAPP_VERIFY_TOKEN'),
       displayPhone: stored.displayPhone || digitsOnly(env('WHATSAPP_DISPLAY_PHONE')),
     };
+    this.effectiveCache = { until: Date.now() + 60_000, value };
+    return value;
   }
 
   toPublic(settings: WhatsappSettings): WhatsappSettingsPublic {
@@ -160,6 +166,7 @@ export class WhatsappSettingsService {
 
     const err = await this.persist(next);
     if (err) throw new BadRequestException('Could not save WhatsApp settings.');
+    this.effectiveCache = null;
     return { settings: next, warning };
   }
 
@@ -187,6 +194,7 @@ export class WhatsappSettingsService {
       console.error('WhatsappSettingsService.save', error.message);
       return error.message;
     }
+    this.effectiveCache = null;
     return null;
   }
 
