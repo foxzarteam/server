@@ -25,24 +25,4 @@ export class UpdateWhatsappSettingsDto {
   @IsString()
   @MaxLength(200)
   verifyToken?: string;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(200)
-  geminiApiKey?: string;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(80)
-  geminiModel?: string;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(300)
-  groqApiKey?: string;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(80)
-  groqModel?: string;
 }

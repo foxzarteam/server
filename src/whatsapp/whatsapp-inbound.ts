@@ -2,6 +2,7 @@ export type InboundWhatsappMessage = {
   phone: string;
   messageId: string;
   text: string;
+  buttonId: string;
   profileName: string;
   type: string;
   /** Meta phone number id that received this message. */
@@ -55,15 +56,16 @@ export function extractInboundMessages(body: unknown): InboundWhatsappMessage[] 
 
         const type = String(msg.type ?? 'unknown').slice(0, 40);
         let text = '';
+        let buttonId = '';
         if (type === 'text') text = String(asRecord(msg.text)?.body ?? '').trim();
-        else if (type === 'button') text = String(asRecord(msg.button)?.text ?? '').trim();
-        else if (type === 'interactive') {
+        else if (type === 'button') {
+          text = String(asRecord(msg.button)?.text ?? '').trim();
+          buttonId = String(asRecord(msg.button)?.payload ?? '').trim();
+        } else if (type === 'interactive') {
           const interactive = asRecord(msg.interactive);
-          text = String(
-            asRecord(interactive?.button_reply)?.title ??
-              asRecord(interactive?.list_reply)?.title ??
-              '',
-          ).trim();
+          const reply = asRecord(interactive?.button_reply) || asRecord(interactive?.list_reply);
+          text = String(reply?.title ?? '').trim();
+          buttonId = String(reply?.id ?? '').trim();
         }
 
         const contact = contacts
@@ -78,6 +80,7 @@ export function extractInboundMessages(body: unknown): InboundWhatsappMessage[] 
           phone,
           messageId,
           text: text.slice(0, 4000),
+          buttonId: buttonId.slice(0, 80),
           profileName,
           type,
           phoneNumberId,

@@ -1,11 +1,11 @@
-import { Body, Controller, Delete, Get, HttpCode, HttpStatus, NotFoundException, Param, Post, Put, Query, Req, Res, UseGuards } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Delete, Get, HttpCode, HttpStatus, NotFoundException, Param, Post, Put, Query, Req, Res, UploadedFile, UseGuards, UseInterceptors } from '@nestjs/common';
 import type { RawBodyRequest } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import type { Request, Response } from 'express';
 import { AdminCrmGuard } from '../common/admin-crm.guard';
 import { UpdateWhatsappSettingsDto } from './whatsapp.dto';
-import { defaultGroqModel } from './groq-client';
-import { WhatsappService, defaultGeminiModel } from './whatsapp.service';
-import { WhatsappSettings, WhatsappSettingsService } from './whatsapp-settings.service';
+import { WhatsappService } from './whatsapp.service';
+import { WhatsappSettingsService } from './whatsapp-settings.service';
 import { whatsappHubChallenge } from './whatsapp-verify';
 
 function webhookRawBody(req: RawBodyRequest<Request>): Buffer {
@@ -41,7 +41,7 @@ export class WhatsappController {
   @HttpCode(HttpStatus.OK)
   async adminSettings() {
     const stored = await this.settings.getStored();
-    return { success: true, data: await this.presentSettings(stored) };
+    return { success: true, data: this.settings.toPublic(stored) };
   }
 
   @Put('admin/settings')
@@ -50,27 +50,10 @@ export class WhatsappController {
   async updateAdminSettings(@Body() dto: UpdateWhatsappSettingsDto) {
     const saved = await this.settings.update(dto);
     this.whatsapp.clearLinkCache();
-    let settings = saved.settings;
-    let modelWarning = '';
-    if (settings.groqApiKey) {
-      const resolved = await this.whatsapp.resolveGroqModel(settings.groqApiKey, settings.groqModel);
-      if (resolved.model && resolved.model !== settings.groqModel) {
-        settings = await this.settings.setGroqModel(resolved.model);
-      }
-      modelWarning = resolved.error || '';
-    }
-    if (settings.geminiApiKey) {
-      const resolved = await this.whatsapp.resolveGeminiModel(settings.geminiApiKey, settings.geminiModel);
-      if (resolved.model && resolved.model !== settings.geminiModel) {
-        settings = await this.settings.setGeminiModel(resolved.model);
-      }
-      modelWarning = [modelWarning, resolved.error || ''].filter(Boolean).join(' ');
-    }
-    const warning = [saved.warning, modelWarning].filter(Boolean).join(' ');
     return {
       success: true,
-      data: await this.presentSettings(settings),
-      ...(warning ? { warning } : {}),
+      data: this.settings.toPublic(saved.settings),
+      ...(saved.warning ? { warning: saved.warning } : {}),
     };
   }
 
@@ -89,6 +72,20 @@ export class WhatsappController {
     const data = await this.whatsapp.getForAdmin(id);
     if (!data) throw new NotFoundException('Chat not found.');
     return { success: true, data };
+  }
+
+  @Post('admin/enquiries/:id/reply')
+  @UseGuards(AdminCrmGuard)
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 16 * 1024 * 1024 } }))
+  @HttpCode(HttpStatus.OK)
+  async adminReply(
+    @Param('id') id: string,
+    @Body() body: { text?: string },
+    @UploadedFile() file?: { buffer: Buffer; originalname: string; mimetype: string; size: number },
+  ) {
+    const result = await this.whatsapp.adminReply(id, String(body?.text ?? ''), file);
+    if (!result.ok) throw new BadRequestException(result.error || 'Could not send.');
+    return { success: true, data: result.data };
   }
 
   @Delete('admin/enquiries/:id')
@@ -131,20 +128,5 @@ export class WhatsappController {
       return res.status(403).type('text/plain').send('Forbidden');
     }
     return res.status(200).type('text/plain').send('');
-  }
-
-  private async presentSettings(settings: WhatsappSettings) {
-    const data = this.settings.toPublic(settings);
-    const [geminiModels, groqModels] = await Promise.all([
-      settings.geminiApiKey ? this.whatsapp.listChatModels(settings.geminiApiKey) : Promise.resolve([]),
-      settings.groqApiKey ? this.whatsapp.listGroqModels(settings.groqApiKey) : Promise.resolve([]),
-    ]);
-    return {
-      ...data,
-      geminiModels,
-      geminiModel: data.geminiModel || defaultGeminiModel(geminiModels),
-      groqModels,
-      groqModel: data.groqModel || defaultGroqModel(groqModels),
-    };
   }
 }

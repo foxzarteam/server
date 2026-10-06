@@ -4,40 +4,24 @@ import { TABLE_LEADS, TABLE_WP_ENQUIRIES } from '../common/constants';
 import { isDraftLead, normalizeStoredCategory, productLabel, statusLabel } from '../leads/lead-present';
 import { SUPABASE_CLIENT } from '../config/supabase';
 import { allowRateLimitedAction } from '../security/rate-limit';
-import {
-  closingReply,
-  collectChatFacts,
-  conversationClosed,
-  factsInstruction,
-  isAbuse,
-  isGreeting,
-  isSideQuestion,
-  nextMissingField,
-  nudgeSameField,
-  parseChatFacts,
-  scriptedNavyaReply,
-  type ChatFacts,
-} from './whatsapp-facts';
 import { canonicalWhatsappPhone, extractInboundMessages, InboundWhatsappMessage } from './whatsapp-inbound';
 import { WhatsappSettings, WhatsappSettingsService } from './whatsapp-settings.service';
 import { whatsappSignatureOk } from './whatsapp-verify';
 import {
-  defaultGeminiModel,
-  geminiContents,
-  generateGemini,
-  listGeminiChatModels,
-  navyaInstruction,
-  smoothReply,
-} from './gemini-client';
-import { defaultGroqModel, generateGroq, listGroqChatModels } from './groq-client';
-
-export { defaultGeminiModel };
+  alreadyWelcomed,
+  insuranceText,
+  personalLoanText,
+  productChoice,
+  welcomeInteractive,
+  welcomeText,
+} from './whatsapp-templates';
 
 const GRAPH_VERSION = 'v21.0';
 const MAX_MESSAGES = 1000;
 const EXISTING_MARK = 'EXISTING\n';
 const STATUS_LOOKUP_RETRY =
   'Namaste ji 🙏 Aapki application ka status abhi nahi nikal paaya. Kripya thodi der baad ek baar message karein.';
+const MAX_ADMIN_FILE = 16 * 1024 * 1024;
 
 function existingStatusText(name: string, lines: { product: string; status: string }[]): string {
   const who = name ? `${name} ji` : 'ji';
@@ -46,47 +30,6 @@ function existingStatusText(name: string, lines: { product: string; status: stri
       ? `Aapki ${lines[0].product} application ka status: ${lines[0].status}.`
       : `Aapki applications ka status:\n${lines.map((line) => `${line.product}: ${line.status}`).join('\n')}`;
   return `Namaste ${who} 🙏\n\n${body}\n\nApni Zaroorat team isi WhatsApp number pe aapko update degi.`;
-}
-
-function firstAiReply(
-  tasks: { task: Promise<{ text: string; error?: string }>; stop: () => void; replyBy: 'groq' | 'gemini' }[],
-): Promise<{ text: string; error?: string; replyBy?: 'groq' | 'gemini' }> {
-  return new Promise((resolve) => {
-    let left = tasks.length;
-    let done = false;
-    const errors: string[] = [];
-    if (!left) {
-      resolve({ text: '', error: 'AI returned an empty reply.' });
-      return;
-    }
-    const finish = (result: { text: string; error?: string; replyBy?: 'groq' | 'gemini' }) => {
-      if (done) return;
-      done = true;
-      resolve(result);
-    };
-    tasks.forEach((item, index) => {
-      item.task
-        .then((result) => {
-          if (done) return;
-          if (result.text) {
-            tasks.forEach((other, otherIndex) => {
-              if (otherIndex !== index) other.stop();
-            });
-            finish({ ...result, replyBy: item.replyBy });
-            return;
-          }
-          if (result.error) errors.push(result.error);
-          left -= 1;
-          if (left === 0) finish({ text: '', error: errors.join(' | ').slice(0, 500) });
-        })
-        .catch((error: unknown) => {
-          if (done) return;
-          errors.push(error instanceof Error ? error.message : 'AI request failed');
-          left -= 1;
-          if (left === 0) finish({ text: '', error: errors.join(' | ').slice(0, 500) });
-        });
-    });
-  });
 }
 
 async function metaErrorText(res: Response): Promise<string> {
@@ -107,6 +50,38 @@ async function metaErrorText(res: Response): Promise<string> {
   return text.slice(0, 500);
 }
 
+function graphWaType(mime: string): NonNullable<ChatMessage['waType']> {
+  if (mime.startsWith('image/')) return 'image';
+  if (mime.startsWith('audio/')) return 'audio';
+  if (mime.startsWith('video/')) return 'video';
+  return 'document';
+}
+
+function graphMessageBody(phone: string, message: ChatMessage): Record<string, unknown> | null {
+  const base = {
+    messaging_product: 'whatsapp',
+    recipient_type: 'individual',
+    to: phone,
+  };
+  if (message.waType === 'interactive' || message.kind === 'welcome') {
+    return { ...base, ...welcomeInteractive(message.text || welcomeText('')) };
+  }
+  if (message.mediaId && (message.waType === 'image' || message.waType === 'document' || message.waType === 'audio' || message.waType === 'video')) {
+    const kind = message.waType;
+    const media: Record<string, string> = { id: message.mediaId };
+    if (message.text && kind !== 'audio') media.caption = message.text.slice(0, 1024);
+    if (kind === 'document' && message.filename) media.filename = message.filename;
+    return { ...base, type: kind, [kind]: media };
+  }
+  const body = message.text.replace(/\uFFFD/g, '').trim().slice(0, 4000);
+  if (!body) return null;
+  return {
+    ...base,
+    type: 'text',
+    text: { preview_url: true, body },
+  };
+}
+
 type ChatMessage = {
   id: string;
   role: 'user' | 'assistant';
@@ -116,9 +91,12 @@ type ChatMessage = {
   sending?: boolean;
   sendingAt?: string;
   sendError?: string;
-  aiError?: string;
-  /** Which model wrote this reply. Only set on AI replies. */
-  replyBy?: 'groq' | 'gemini';
+  replyBy?: 'template' | 'admin';
+  kind?: 'welcome' | 'personal_loan' | 'insurance' | 'status' | 'admin';
+  waType?: 'text' | 'interactive' | 'image' | 'document' | 'audio' | 'video';
+  mediaId?: string;
+  filename?: string;
+  mime?: string;
 };
 
 type ChatDoc = {
@@ -127,7 +105,6 @@ type ChatDoc = {
   messages: ChatMessage[];
   /** Empty means a new customer. A saved status means that message was already sent. */
   leadNote?: string;
-  facts?: ChatFacts;
 };
 
 type EnquiryRow = {
@@ -154,7 +131,7 @@ export type WhatsappEnquiryDetail = {
   profileName: string;
   lastChatAt: string | null;
   createdAt: string;
-  messages: { id: string; role: 'user' | 'assistant'; text: string; at: string; sendError?: string; aiError?: string; replyBy?: 'groq' | 'gemini' }[];
+  messages: { id: string; role: 'user' | 'assistant'; text: string; at: string; sendError?: string; replyBy?: string; kind?: string; waType?: string; filename?: string }[];
 };
 
 function asChat(raw: unknown): ChatDoc {
@@ -166,38 +143,61 @@ function asChat(raw: unknown): ChatDoc {
       value = {};
     }
   }
-  const obj = value && typeof value === 'object'
-    ? (value as { profileName?: unknown; messages?: unknown; waPhoneNumberId?: unknown; leadNote?: unknown; facts?: unknown })
-    : {};
-  const messages = Array.isArray(obj.messages) ? obj.messages : [];
-  const clean: ChatMessage[] = [];
-  for (const item of messages) {
-    if (!item || typeof item !== 'object') continue;
-    const row = item as Partial<ChatMessage>;
-    const role = row.role === 'assistant' ? 'assistant' : row.role === 'user' ? 'user' : null;
-    const id = String(row.id ?? '').trim();
-    if (!role || !id) continue;
-    clean.push({
-      id: id.slice(0, 200),
-      role,
-      text: String(row.text ?? '').slice(0, 4000),
-      at: String(row.at ?? ''),
-      ...(row.sent ? { sent: true } : {}),
-      ...(row.sending ? { sending: true } : {}),
-      ...(row.sendingAt ? { sendingAt: String(row.sendingAt) } : {}),
-      ...(row.sendError ? { sendError: String(row.sendError).slice(0, 500) } : {}),
-      ...(row.aiError ? { aiError: String(row.aiError).slice(0, 500) } : {}),
-      ...(row.replyBy === 'groq' || row.replyBy === 'gemini' ? { replyBy: row.replyBy } : {}),
-    });
+    const obj = value && typeof value === 'object'
+      ? (value as { profileName?: unknown; messages?: unknown; waPhoneNumberId?: unknown; leadNote?: unknown })
+      : {};
+    const messages = Array.isArray(obj.messages) ? obj.messages : [];
+    const clean: ChatMessage[] = [];
+    for (const item of messages) {
+      if (!item || typeof item !== 'object') continue;
+      const row = item as Partial<ChatMessage>;
+      const role = row.role === 'assistant' ? 'assistant' : row.role === 'user' ? 'user' : null;
+      const id = String(row.id ?? '').trim();
+      if (!role || !id) continue;
+      const rawBy = String((row as { replyBy?: string }).replyBy ?? '');
+      const replyBy = rawBy === 'admin' ? 'admin' : rawBy === 'template' || rawBy === 'groq' || rawBy === 'gemini' ? 'template' : undefined;
+      const kind =
+        row.kind === 'welcome' ||
+        row.kind === 'personal_loan' ||
+        row.kind === 'insurance' ||
+        row.kind === 'status' ||
+        row.kind === 'admin'
+          ? row.kind
+          : undefined;
+      const waType =
+        row.waType === 'interactive' ||
+        row.waType === 'image' ||
+        row.waType === 'document' ||
+        row.waType === 'audio' ||
+        row.waType === 'video'
+          ? row.waType
+          : row.waType === 'text'
+            ? 'text'
+            : undefined;
+      clean.push({
+        id: id.slice(0, 200),
+        role,
+        text: String(row.text ?? '').slice(0, 4000),
+        at: String(row.at ?? ''),
+        ...(row.sent ? { sent: true } : {}),
+        ...(row.sending ? { sending: true } : {}),
+        ...(row.sendingAt ? { sendingAt: String(row.sendingAt) } : {}),
+        ...(row.sendError ? { sendError: String(row.sendError).slice(0, 500) } : {}),
+        ...(replyBy ? { replyBy } : {}),
+        ...(kind ? { kind } : {}),
+        ...(waType ? { waType } : {}),
+        ...(row.mediaId ? { mediaId: String(row.mediaId).slice(0, 200) } : {}),
+        ...(row.filename ? { filename: String(row.filename).slice(0, 180) } : {}),
+        ...(row.mime ? { mime: String(row.mime).slice(0, 80) } : {}),
+      });
+    }
+    return {
+      profileName: String(obj.profileName ?? '').slice(0, 120),
+      waPhoneNumberId: String(obj.waPhoneNumberId ?? '').replace(/\D/g, '').slice(0, 30),
+      messages: clean.slice(-MAX_MESSAGES),
+      ...(typeof obj.leadNote === 'string' ? { leadNote: obj.leadNote.slice(0, 1500) } : {}),
+    };
   }
-  return {
-    profileName: String(obj.profileName ?? '').slice(0, 120),
-    waPhoneNumberId: String(obj.waPhoneNumberId ?? '').replace(/\D/g, '').slice(0, 30),
-    messages: clean.slice(-MAX_MESSAGES),
-    ...(typeof obj.leadNote === 'string' ? { leadNote: obj.leadNote.slice(0, 1500) } : {}),
-    facts: parseChatFacts(obj.facts),
-  };
-}
 
 @Injectable()
 export class WhatsappService {
@@ -210,84 +210,6 @@ export class WhatsappService {
 
   private get table() {
     return this.supabase.from(TABLE_WP_ENQUIRIES);
-  }
-
-  async listChatModels(apiKey: string): Promise<string[]> {
-    const key = apiKey.trim().replace(/\s+/g, '');
-    if (!key) return [];
-    return listGeminiChatModels(key);
-  }
-
-  async listGroqModels(apiKey: string): Promise<string[]> {
-    const key = apiKey.trim().replace(/\s+/g, '');
-    if (!key) return [];
-    return listGroqChatModels(key);
-  }
-
-  /** Keeps the saved Groq model when Groq still lists it. Otherwise picks the fastest listed chat model. */
-  async resolveGroqModel(apiKey: string, requested: string): Promise<{ model: string; error?: string }> {
-    const key = apiKey.trim().replace(/\s+/g, '');
-    const wanted = requested.trim();
-    if (!key) return { model: wanted, error: 'Groq API key is not saved.' };
-    const models = await listGroqChatModels(key);
-    if (!models.length) {
-      return { model: wanted, error: 'Groq API key was rejected or no chat model was returned.' };
-    }
-    if (wanted && models.includes(wanted)) return { model: wanted };
-    const replacement = defaultGroqModel(models);
-    if (wanted && wanted !== replacement) {
-      return { model: replacement, error: `${wanted} is not available on this Groq key. Using ${replacement} instead.` };
-    }
-    return { model: replacement };
-  }
-
-  /** Confirms the admin model with a real generate call. Picks a listed free-tier model only when that call says the model is unavailable. */
-  async resolveGeminiModel(
-    apiKey: string,
-    requested: string,
-  ): Promise<{ model: string; error?: string }> {
-    const key = apiKey.trim().replace(/\s+/g, '');
-    const wanted = requested.trim();
-    if (!key) return { model: wanted, error: 'Gemini API key is not saved.' };
-    const models = await listGeminiChatModels(key);
-    if (wanted) {
-      const test = await generateGemini(
-        key,
-        wanted,
-        'Reply with the single word OK.',
-        [{ role: 'user', parts: [{ text: 'Hi' }] }],
-        true,
-      );
-      if (test.text) return { model: wanted };
-      if (!test.unavailable) {
-        return { model: wanted, error: test.error || `${wanted} did not return a reply.` };
-      }
-      const replacement = await this.firstWorkingGeminiModel(key, models.filter((model) => model !== wanted));
-      if (replacement) {
-        return {
-          model: replacement,
-          error: `${wanted} is not available for this API key. ${test.error || ''} Using ${replacement} instead.`.replace(/\s+/g, ' ').trim(),
-        };
-      }
-      return { model: wanted, error: test.error || `${wanted} is not available for this API key.` };
-    }
-    const replacement = await this.firstWorkingGeminiModel(key, models);
-    if (replacement) return { model: replacement };
-    return { model: '', error: 'No Gemini model on this API key returned a reply. Check the key and Free Tier access.' };
-  }
-
-  private async firstWorkingGeminiModel(key: string, models: string[]): Promise<string> {
-    for (const model of models.slice(0, 3)) {
-      const test = await generateGemini(
-        key,
-        model,
-        'Reply with the single word OK.',
-        [{ role: 'user', parts: [{ text: 'Hi' }] }],
-        true,
-      );
-      if (test.text) return model;
-    }
-    return '';
   }
 
   async handleWebhook(rawBody: Buffer, signatureHeader?: string): Promise<'ok' | 'forbidden'> {
@@ -394,14 +316,16 @@ export class WhatsappService {
       profileName: chat.profileName,
       lastChatAt: row.last_chat_at,
       createdAt: row.created_at,
-      messages: chat.messages.map(({ id: messageId, role, text, at, sendError, aiError, replyBy }) => ({
-        id: messageId,
-        role,
-        text,
-        at,
-        ...(sendError ? { sendError } : {}),
-        ...(aiError ? { aiError } : {}),
-        ...(replyBy ? { replyBy } : {}),
+      messages: chat.messages.map((item) => ({
+        id: item.id,
+        role: item.role,
+        text: item.text,
+        at: item.at,
+        ...(item.sendError ? { sendError: item.sendError } : {}),
+        ...(item.replyBy ? { replyBy: item.replyBy } : {}),
+        ...(item.kind ? { kind: item.kind } : {}),
+        ...(item.waType ? { waType: item.waType } : {}),
+        ...(item.filename ? { filename: item.filename } : {}),
       })),
     };
   }
@@ -429,7 +353,7 @@ export class WhatsappService {
       message.phoneNumberId,
     );
     if (!appended) return;
-    await this.flushUnsent(settings, message.phone, message.phoneNumberId);
+    await this.flushUnsent(settings, message.phone);
     if (!appended.added) {
       await this.ensureReply(settings, appended.row, message, assistantId);
       return;
@@ -447,13 +371,13 @@ export class WhatsappService {
     const assistant = row.chat.messages.find((item) => item.id === assistantId);
     if (assistant?.sent) return;
     if (assistant) {
-      await this.deliver(settings, row.phone, assistantId, assistant.text, row.chat.waPhoneNumberId);
+      await this.deliver(settings, row.phone, assistant);
       return;
     }
     await this.answerCustomer(settings, row, message, assistantId, false);
   }
 
-  /** Existing number gets one status template. A new number is answered by Navya. */
+  /** Existing lead: one status template. New number: welcome buttons or product template. Else wait for admin. */
   private async answerCustomer(
     settings: WhatsappSettings,
     row: EnquiryRow,
@@ -464,149 +388,77 @@ export class WhatsappService {
     const route = await this.routeCustomer(message.phone, row.chat.leadNote, row.chat.messages);
     if (route.action === 'silent') return;
     if (route.action === 'template') {
-      await this.storeAndSend(settings, row, message.profileName, assistantId, route.text, message.phoneNumberId);
+      await this.storeAndSend(settings, row, message.profileName, {
+        id: assistantId,
+        role: 'assistant',
+        text: route.text,
+        at: new Date().toISOString(),
+        replyBy: 'template',
+        kind: 'status',
+        waType: 'text',
+      });
       return;
     }
-    const limited = rateLimit && !allowRateLimitedAction(`wa-in:${message.phone}`, 20, 10 * 60_000);
-    const facts = collectChatFacts(row.chat.facts, row.chat.messages, message.profileName || row.chat.profileName);
-    const reply = limited
-      ? { text: 'Please wait a few minutes before sending more messages.' }
-      : await this.buildReply(settings, row.chat.messages, message, facts);
-    await this.storeAndSend(
-      settings,
-      row,
-      message.profileName,
-      assistantId,
-      reply.text,
-      message.phoneNumberId,
-      reply.aiError,
-      reply.replyBy,
-    );
-  }
-
-  private async buildReply(
-    settings: WhatsappSettings,
-    history: ChatMessage[],
-    message: InboundWhatsappMessage,
-    facts: ChatFacts,
-  ): Promise<{ text: string; aiError?: string; replyBy?: 'groq' | 'gemini' }> {
-    const textLike = message.type === 'text' || message.type === 'button' || message.type === 'interactive';
-    if (!textLike || !message.text) {
-      return { text: 'Please send your question as a text message.' };
+    if (rateLimit && !allowRateLimitedAction(`wa-in:${message.phone}`, 20, 10 * 60_000)) {
+      await this.storeAndSend(settings, row, message.profileName, {
+        id: assistantId,
+        role: 'assistant',
+        text: 'Please wait a few minutes before sending more messages.',
+        at: new Date().toISOString(),
+        replyBy: 'template',
+        waType: 'text',
+      });
+      return;
     }
-
-    const greeted = history.some(
-      (item) => item.role === 'assistant' && /navya|personal loan chahiye/i.test(item.text),
-    );
-    const closed = conversationClosed(history);
-    const prior = history[history.length - 1]?.role === 'user' ? history.slice(0, -1) : history;
-    const before = collectChatFacts({}, prior, message.profileName);
-    const pending = nextMissingField(facts);
-    if (pending === 'done') {
-      return { text: closingReply(facts, message.profileName, closed) };
+    const name = message.profileName || row.chat.profileName;
+    const choice = productChoice(message.buttonId, message.text);
+    if (choice === 'personal_loan') {
+      await this.storeAndSend(settings, row, name, {
+        id: assistantId,
+        role: 'assistant',
+        text: personalLoanText(name),
+        at: new Date().toISOString(),
+        replyBy: 'template',
+        kind: 'personal_loan',
+        waType: 'text',
+      });
+      return;
     }
-
-    const progressed = nextMissingField(before) !== pending;
-    if (progressed || isGreeting(message.text)) {
-      const scripted = scriptedNavyaReply(facts, message.profileName, greeted, closed);
-      if (scripted) return { text: scripted };
+    if (choice === 'insurance') {
+      await this.storeAndSend(settings, row, name, {
+        id: assistantId,
+        role: 'assistant',
+        text: insuranceText(name),
+        at: new Date().toISOString(),
+        replyBy: 'template',
+        kind: 'insurance',
+        waType: 'text',
+      });
+      return;
     }
-
-    const offTopic = isSideQuestion(message.text) || isAbuse(message.text);
-    const nextAsk = nudgeSameField(facts, message.profileName, greeted);
-    if (!offTopic) return { text: nextAsk };
-
-    if (!settings.groqApiKey && !settings.geminiApiKey) {
-      return { text: nextAsk, aiError: 'No AI key is saved in Settings.' };
+    if (!alreadyWelcomed(row.chat.messages)) {
+      await this.storeAndSend(settings, row, name, {
+        id: assistantId,
+        role: 'assistant',
+        text: welcomeText(name),
+        at: new Date().toISOString(),
+        replyBy: 'template',
+        kind: 'welcome',
+        waType: 'interactive',
+      });
     }
-
-    const note = this.customerNote(message, facts, true);
-    const groqStop = new AbortController();
-    const groqTask = settings.groqApiKey ? this.askGroq(settings, history, note, groqStop.signal) : null;
-    if (!groqTask) {
-      const gemini = await this.askGemini(settings, history, note);
-      if (gemini.text) return { text: smoothReply(gemini.text), replyBy: 'gemini' };
-      return { text: nextAsk, aiError: gemini.error || 'Gemini returned an empty reply.' };
-    }
-    if (!settings.geminiApiKey) {
-      const groq = await groqTask;
-      if (groq.text) return { text: smoothReply(groq.text), replyBy: 'groq' };
-      return { text: nextAsk, aiError: groq.error || 'Groq returned an empty reply.' };
-    }
-
-    const quick = await Promise.race([
-      groqTask.then((result) => ({ ...result, slow: false })),
-      new Promise<{ text: string; error?: string; slow: boolean }>((resolve) => {
-        setTimeout(() => resolve({ text: '', slow: true }), 1_500);
-      }),
-    ]);
-    if (quick.text) return { text: smoothReply(quick.text), replyBy: 'groq' };
-
-    const geminiStop = new AbortController();
-    const geminiTask = this.askGemini(settings, history, note, geminiStop.signal);
-    if (!quick.slow) {
-      groqStop.abort();
-      if (quick.error) console.error('WhatsappService.reply Groq failed, trying Gemini');
-      const gemini = await geminiTask;
-      if (gemini.text) return { text: smoothReply(gemini.text), replyBy: 'gemini' };
-      return {
-        text: nextAsk,
-        aiError: [quick.error, gemini.error].filter(Boolean).join(' | ').slice(0, 500),
-      };
-    }
-
-    console.error('WhatsappService.reply Groq slow, Gemini started');
-    const winner = await firstAiReply([
-      { task: groqTask, stop: () => groqStop.abort(), replyBy: 'groq' },
-      { task: geminiTask, stop: () => geminiStop.abort(), replyBy: 'gemini' },
-    ]);
-    if (winner.text) return { text: smoothReply(winner.text), replyBy: winner.replyBy };
-    return { text: nextAsk, aiError: winner.error || 'AI returned an empty reply.' };
-  }
-
-  private async askGroq(
-    settings: WhatsappSettings,
-    history: ChatMessage[],
-    note: string,
-    signal?: AbortSignal,
-  ): Promise<{ text: string; error?: string }> {
-    const key = settings.groqApiKey.trim().replace(/\s+/g, '');
-    const contents = geminiContents(history).map((turn) => ({
-      role: turn.role === 'model' ? ('assistant' as const) : ('user' as const),
-      text: turn.parts.map((part) => part.text).join('\n'),
-    }));
-    if (!key) return { text: '', error: 'Groq API key is not saved.' };
-    if (contents.length === 0) return { text: '', error: 'No customer text to send to Groq.' };
-
-    const system = navyaInstruction(note);
-    const configured = settings.groqModel.trim() || defaultGroqModel([]);
-    const selected = await generateGroq(key, configured, system, contents, false, signal);
-    if (selected.text) return { text: selected.text };
-    return { text: '', error: selected.error || 'Groq returned an empty reply.' };
-  }
-
-  private customerNote(message: InboundWhatsappMessage, facts: ChatFacts, offTopic = false): string {
-    const knownName = message.profileName.trim();
-    const pending = nextMissingField(facts);
-    const base = knownName
-      ? `Customer WhatsApp number: ${message.phone}. Profile name on WhatsApp: ${knownName}. Confirm this name; do not ask for the phone number.`
-      : `Customer WhatsApp number: ${message.phone}. No profile name. Ask their name when that step comes. Do not ask for the phone number.`;
-    const extra = offTopic
-      ? `\nLast customer message is NOT an answer for "${pending}". Do not save it as city, income, tenure, or PAN. If they are rude, stay calm: you are here to check eligibility and give the best solution. If they ask EMI or rate, do not invent a number; pehle details share karein, team verify karke eligibility ke hisaab se best option batayegi. Then ask only: ${pending}.`
-      : '';
-    return `${base}\n\n${factsInstruction(facts, pending)}${extra}`;
   }
 
   /**
-   * Existing lead: one fixed status message, then silence. New lead: Navya may chat.
+   * Existing lead: one fixed status message, then silence. New lead: templates only.
    * Leads are only read. A failed lookup is not saved, so the next message can try again.
    */
   private async routeCustomer(
     phone: string,
     savedLeadNote: string | undefined,
     messages: ChatMessage[],
-  ): Promise<{ action: 'ai' } | { action: 'silent' } | { action: 'template'; text: string }> {
-    if (savedLeadNote === '') return { action: 'ai' };
+  ): Promise<{ action: 'new' } | { action: 'silent' } | { action: 'template'; text: string }> {
+    if (savedLeadNote === '') return { action: 'new' };
     if (savedLeadNote?.startsWith(EXISTING_MARK)) {
       const text = savedLeadNote.slice(EXISTING_MARK.length).trim();
       const told = messages.some((item) => item.role === 'assistant' && item.text.trim() === text);
@@ -617,7 +469,7 @@ export class WhatsappService {
     if (template === null) return { action: 'template', text: STATUS_LOOKUP_RETRY };
 
     await this.rememberLeadNote(phone, template ? `${EXISTING_MARK}${template}` : '', savedLeadNote !== undefined);
-    return template ? { action: 'template', text: template } : { action: 'ai' };
+    return template ? { action: 'template', text: template } : { action: 'new' };
   }
 
   /** Saves the first lookup so later replies do not query leads again. */
@@ -679,111 +531,113 @@ export class WhatsappService {
     return existingStatusText(name, lines);
   }
 
-  private async askGemini(
-    settings: WhatsappSettings,
-    history: ChatMessage[],
-    note: string,
-    signal?: AbortSignal,
-  ): Promise<{ text: string; error?: string }> {
-    const key = settings.geminiApiKey.trim().replace(/\s+/g, '');
-    const contents = geminiContents(history);
-    if (!key) return { text: '', error: 'Gemini API key is not saved.' };
-    if (contents.length === 0) return { text: '', error: 'No customer text to send to Gemini.' };
-
-    const system = navyaInstruction(note);
-    const configured = settings.geminiModel.trim();
-    const errors: string[] = [];
-    if (configured) {
-      const selected = await generateGemini(key, configured, system, contents, true, false, signal);
-      if (selected.text) return { text: selected.text };
-      return { text: '', error: selected.error || 'Gemini returned an empty reply.' };
+  async adminReply(
+    id: string,
+    text: string,
+    file?: { buffer: Buffer; originalname: string; mimetype: string; size: number },
+  ): Promise<{ ok: boolean; error?: string; data?: WhatsappEnquiryDetail }> {
+    const row = await this.getRowById(id);
+    if (!row) return { ok: false, error: 'Chat not found.' };
+    const settings = await this.settings.getEffective();
+    const caption = text.trim().slice(0, 4000);
+    const assistantId = `admin:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
+    const message: ChatMessage = {
+      id: assistantId,
+      role: 'assistant',
+      text: caption || (file ? file.originalname : ''),
+      at: new Date().toISOString(),
+      replyBy: 'admin',
+      kind: 'admin',
+      waType: 'text',
+    };
+    if (file) {
+      if (file.size > MAX_ADMIN_FILE) return { ok: false, error: 'File is too large (max 16 MB).' };
+      const uploaded = await this.uploadWhatsappMedia(settings, row.chat.waPhoneNumberId, file);
+      if (!uploaded.id) return { ok: false, error: uploaded.error || 'Could not upload this file to WhatsApp.' };
+      const waType = graphWaType(file.mimetype);
+      message.waType = waType;
+      message.mediaId = uploaded.id;
+      message.filename = file.originalname.slice(0, 180);
+      message.mime = file.mimetype.slice(0, 80);
+      if (!message.text) message.text = waType === 'image' ? 'Photo' : file.originalname;
+    } else if (!caption) {
+      return { ok: false, error: 'Type a message or attach a file.' };
     }
-
-    const available = await listGeminiChatModels(key);
-    const fallback = available.find(Boolean) || '';
-    if (fallback) {
-      const result = await generateGemini(key, fallback, system, contents, true, false, signal);
-      if (result.text) return { text: result.text };
-      if (result.error) errors.push(result.error);
-    }
-    return { text: '', error: errors.join(' | ').slice(0, 500) || 'Gemini returned an empty reply.' };
+    await this.storeAndSend(settings, row, row.chat.profileName, message);
+    const data = await this.getForAdmin(row.id);
+    return data ? { ok: true, data } : { ok: false, error: 'Sent, but chat could not be reloaded.' };
   }
 
+  private async getRowById(id: string): Promise<EnquiryRow | null> {
+    if (!/^[0-9a-f-]{36}$/i.test(id)) return null;
+    const { data, error } = await this.table
+      .select('id, phone, chat, last_chat_at, created_at, updated_at')
+      .eq('id', id)
+      .maybeSingle();
+    if (error || !data) {
+      if (error) console.error('WhatsappService.getRowById', error.message);
+      return null;
+    }
+    const row = data as EnquiryRow;
+    return { ...row, chat: asChat(row.chat) };
+  }
 
   private async storeAndSend(
     settings: WhatsappSettings,
     row: EnquiryRow,
     profileName: string,
-    assistantId: string,
-    text: string,
-    waPhoneNumberId = '',
-    aiError = '',
-    replyBy?: 'groq' | 'gemini',
+    message: ChatMessage,
   ) {
-    const already = row.chat.messages.some((item) => item.id === assistantId);
+    const already = row.chat.messages.some((item) => item.id === message.id);
     if (!already) {
-      const appended = await this.appendMessage(
-        row.phone,
-        profileName,
-        {
-          id: assistantId,
-          role: 'assistant',
-          text,
-          at: new Date().toISOString(),
-          ...(aiError ? { aiError: aiError.slice(0, 500) } : {}),
-          ...(replyBy ? { replyBy } : {}),
-        },
-        waPhoneNumberId || row.chat.waPhoneNumberId,
-      );
+      const appended = await this.appendMessage(row.phone, profileName, message, row.chat.waPhoneNumberId);
       if (!appended) return;
+      row = appended.row;
     }
-    await this.deliver(settings, row.phone, assistantId, text, waPhoneNumberId || row.chat.waPhoneNumberId);
+    const saved = row.chat.messages.find((item) => item.id === message.id) || message;
+    await this.deliver(settings, row.phone, saved);
   }
 
   /** Resend replies that were saved but never delivered (Meta will not always retry). */
-  private async flushUnsent(settings: WhatsappSettings, phone: string, waPhoneNumberId = '') {
+  private async flushUnsent(settings: WhatsappSettings, phone: string) {
     const row = await this.readByPhone(phone);
     if (!row) return;
-    const fromId = waPhoneNumberId || row.chat.waPhoneNumberId;
     const pending = row.chat.messages.filter((item) => item.role === 'assistant' && !item.sent).slice(-5);
     for (const item of pending) {
-      await this.deliver(settings, phone, item.id, item.text, fromId);
+      await this.deliver(settings, phone, item);
     }
   }
 
   /** Only one worker sends a given reply. A stale claim can be taken again after a crash. */
-  private async deliver(
-    settings: WhatsappSettings,
-    phone: string,
-    messageId: string,
-    text: string,
-    waPhoneNumberId = '',
-  ) {
-    const claimed = await this.claimSend(phone, messageId);
+  private async deliver(settings: WhatsappSettings, phone: string, message: ChatMessage) {
+    const claimed = await this.claimSend(phone, message.id);
     if (!claimed) return;
-    const result = await this.sendWhatsapp(settings, phone, text, waPhoneNumberId);
-    if (result.ok) await this.markSent(phone, messageId);
+    const row = await this.readByPhone(phone);
+    const result = await this.sendWhatsapp(settings, phone, message, row?.chat.waPhoneNumberId || '');
+    if (result.ok) await this.markSent(phone, message.id);
     else {
-      await this.releaseSend(phone, messageId);
-      if (result.error) await this.noteSendError(phone, messageId, result.error);
+      await this.releaseSend(phone, message.id);
+      if (result.error) await this.noteSendError(phone, message.id, result.error);
     }
   }
 
   private async sendWhatsapp(
     settings: WhatsappSettings,
     phone: string,
-    text: string,
+    message: ChatMessage,
     waPhoneNumberId = '',
   ): Promise<{ ok: boolean; error?: string }> {
     const token = settings.accessToken.trim().replace(/^bearer\s+/i, '').trim();
     const fromId = (waPhoneNumberId || settings.phoneNumberId).replace(/\D/g, '');
-    if (!token || !fromId || !text.trim()) {
+    if (!token || !fromId) {
       const error = !token
         ? 'WhatsApp access token is missing in Settings.'
         : 'WhatsApp phone number ID is missing in Settings.';
       console.error('WhatsappService.sendWhatsapp', error);
       return { ok: false, error };
     }
+    const payload = graphMessageBody(phone, message);
+    if (!payload) return { ok: false, error: 'Nothing to send.' };
     const url = `https://graph.facebook.com/${GRAPH_VERSION}/${encodeURIComponent(fromId)}/messages`;
     try {
       const res = await fetch(url, {
@@ -792,13 +646,7 @@ export class WhatsappService {
           Authorization: `Bearer ${token}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({
-          messaging_product: 'whatsapp',
-          recipient_type: 'individual',
-          to: phone,
-          type: 'text',
-          text: { preview_url: false, body: text.replace(/\uFFFD/g, '').trim().slice(0, 4000) },
-        }),
+        body: JSON.stringify(payload),
         signal: AbortSignal.timeout(15_000),
       });
       if (!res.ok) {
@@ -808,9 +656,36 @@ export class WhatsappService {
       }
       return { ok: true };
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'WhatsApp send failed';
-      console.error('WhatsappService.sendWhatsapp', message);
-      return { ok: false, error: message.slice(0, 300) };
+      const fail = error instanceof Error ? error.message : 'WhatsApp send failed';
+      console.error('WhatsappService.sendWhatsapp', fail);
+      return { ok: false, error: fail.slice(0, 300) };
+    }
+  }
+
+  private async uploadWhatsappMedia(
+    settings: WhatsappSettings,
+    waPhoneNumberId: string,
+    file: { buffer: Buffer; originalname: string; mimetype: string },
+  ): Promise<{ id: string; error?: string }> {
+    const token = settings.accessToken.trim().replace(/^bearer\s+/i, '').trim();
+    const fromId = (waPhoneNumberId || settings.phoneNumberId).replace(/\D/g, '');
+    if (!token || !fromId) return { id: '', error: 'WhatsApp access token or phone number ID is missing.' };
+    const form = new FormData();
+    form.append('messaging_product', 'whatsapp');
+    form.append('type', file.mimetype);
+    form.append('file', new Blob([new Uint8Array(file.buffer)], { type: file.mimetype }), file.originalname);
+    try {
+      const res = await fetch(`https://graph.facebook.com/${GRAPH_VERSION}/${encodeURIComponent(fromId)}/media`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+        body: form,
+        signal: AbortSignal.timeout(30_000),
+      });
+      if (!res.ok) return { id: '', error: await metaErrorText(res) };
+      const data = (await res.json()) as { id?: string };
+      return data.id ? { id: data.id } : { id: '', error: 'WhatsApp did not return a media id.' };
+    } catch (error) {
+      return { id: '', error: error instanceof Error ? error.message : 'Media upload failed' };
     }
   }
 
@@ -845,13 +720,11 @@ export class WhatsappService {
       }
 
       const messages = [...(current?.chat.messages ?? []), message].slice(-MAX_MESSAGES);
-      const facts = collectChatFacts(current?.chat.facts, messages, profileName.trim() || current?.chat.profileName || '');
       const chat: ChatDoc = {
         profileName: profileName.trim() || current?.chat.profileName || '',
         waPhoneNumberId: (waPhoneNumberId || current?.chat.waPhoneNumberId || '').replace(/\D/g, '').slice(0, 30),
         messages,
         ...(current?.chat.leadNote !== undefined ? { leadNote: current.chat.leadNote } : {}),
-        facts,
       };
       const now = new Date().toISOString();
       const lastChatAt = message.at || now;
@@ -900,7 +773,6 @@ export class WhatsappService {
       waPhoneNumberId: (waPhoneNumberId || latest.chat.waPhoneNumberId || '').replace(/\D/g, '').slice(0, 30),
       messages,
       ...(latest.chat.leadNote !== undefined ? { leadNote: latest.chat.leadNote } : {}),
-      facts: collectChatFacts(latest.chat.facts, messages, profileName.trim() || latest.chat.profileName || ''),
     };
     const now = new Date().toISOString();
     const { data, error } = await this.table

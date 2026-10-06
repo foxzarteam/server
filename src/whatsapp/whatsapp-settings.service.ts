@@ -15,10 +15,6 @@ export type WhatsappSettings = {
   businessAccountId: string;
   appSecret: string;
   verifyToken: string;
-  geminiApiKey: string;
-  geminiModel: string;
-  groqApiKey: string;
-  groqModel: string;
   displayPhone: string;
 };
 
@@ -31,14 +27,6 @@ export type WhatsappSettingsPublic = {
   appSecretHint: string;
   verifyTokenConfigured: boolean;
   verifyTokenHint: string;
-  geminiApiKeyConfigured: boolean;
-  geminiApiKeyHint: string;
-  geminiModel: string;
-  geminiModels: string[];
-  groqApiKeyConfigured: boolean;
-  groqApiKeyHint: string;
-  groqModel: string;
-  groqModels: string[];
   displayPhone: string;
 };
 
@@ -48,10 +36,6 @@ const EMPTY: WhatsappSettings = {
   businessAccountId: '',
   appSecret: '',
   verifyToken: '',
-  geminiApiKey: '',
-  geminiModel: '',
-  groqApiKey: '',
-  groqModel: '',
   displayPhone: '',
 };
 
@@ -82,15 +66,20 @@ function cleanAccessToken(raw: string): string {
     .trim();
 }
 
-function cleanGeminiKey(raw: string): string {
-  return String(raw ?? '')
-    .trim()
-    .replace(/^["']+|["']+$/g, '')
-    .replace(/\s+/g, '');
-}
-
 function digitsOnly(value: string): string {
   return value.replace(/\D/g, '');
+}
+
+function pickStored(parsed: Partial<WhatsappSettings> | null): WhatsappSettings {
+  if (!parsed) return { ...EMPTY };
+  return {
+    accessToken: String(parsed.accessToken ?? ''),
+    phoneNumberId: digitsOnly(String(parsed.phoneNumberId ?? '')),
+    businessAccountId: digitsOnly(String(parsed.businessAccountId ?? '')),
+    appSecret: String(parsed.appSecret ?? ''),
+    verifyToken: String(parsed.verifyToken ?? ''),
+    displayPhone: digitsOnly(String(parsed.displayPhone ?? '')),
+  };
 }
 
 @Injectable()
@@ -118,7 +107,7 @@ export class WhatsappSettingsService {
       console.error('WhatsappSettingsService.getStored: could not decrypt settings');
       return { ...EMPTY };
     }
-    return { ...EMPTY, ...parsed };
+    return pickStored(parsed);
   }
 
   /** DB value wins. Env is only a fallback so existing webhook tokens keep working. */
@@ -131,10 +120,6 @@ export class WhatsappSettingsService {
       businessAccountId: stored.businessAccountId || env('WHATSAPP_BUSINESS_ACCOUNT_ID'),
       appSecret: stored.appSecret || env('WHATSAPP_APP_SECRET'),
       verifyToken: stored.verifyToken || env('WHATSAPP_VERIFY_TOKEN'),
-      geminiApiKey: cleanGeminiKey(stored.geminiApiKey || env('GEMINI_API_KEY')),
-      geminiModel: stored.geminiModel || env('GEMINI_MODEL'),
-      groqApiKey: cleanGeminiKey(stored.groqApiKey || env('GROQ_API_KEY')),
-      groqModel: stored.groqModel || env('GROQ_MODEL'),
       displayPhone: stored.displayPhone || digitsOnly(env('WHATSAPP_DISPLAY_PHONE')),
     };
   }
@@ -149,14 +134,6 @@ export class WhatsappSettingsService {
       appSecretHint: hint(settings.appSecret),
       verifyTokenConfigured: Boolean(settings.verifyToken),
       verifyTokenHint: hint(settings.verifyToken),
-      geminiApiKeyConfigured: Boolean(settings.geminiApiKey),
-      geminiApiKeyHint: hint(settings.geminiApiKey),
-      geminiModel: settings.geminiModel,
-      geminiModels: [],
-      groqApiKeyConfigured: Boolean(settings.groqApiKey),
-      groqApiKeyHint: hint(settings.groqApiKey),
-      groqModel: settings.groqModel,
-      groqModels: [],
       displayPhone: settings.displayPhone,
     };
   }
@@ -169,10 +146,6 @@ export class WhatsappSettingsService {
       businessAccountId: digitsOnly(keep(dto.businessAccountId, prev.businessAccountId)),
       appSecret: keepLongSecret(dto.appSecret, prev.appSecret),
       verifyToken: keep(dto.verifyToken, prev.verifyToken),
-      geminiApiKey: cleanGeminiKey(keepLongSecret(dto.geminiApiKey, prev.geminiApiKey)),
-      geminiModel: keep(dto.geminiModel, prev.geminiModel),
-      groqApiKey: cleanGeminiKey(keepLongSecret(dto.groqApiKey, prev.groqApiKey)),
-      groqModel: keep(dto.groqModel, prev.groqModel),
       displayPhone: prev.displayPhone,
     };
 
@@ -185,59 +158,9 @@ export class WhatsappSettingsService {
       else warning = 'Saved, but the business phone number could not be read from Meta. Check the access token and phone number ID.';
     }
 
-    const { error } = await this.supabase.from(TABLE_APP_SETTINGS).upsert(
-      {
-        key: SETTINGS_KEY,
-        value: encryptSettingsJson(next),
-        updated_at: new Date().toISOString(),
-      },
-      { onConflict: 'key' },
-    );
-
-    if (error) {
-      console.error('WhatsappSettingsService.update', error.message);
-      throw new BadRequestException('Could not save WhatsApp settings.');
-    }
-
+    const err = await this.persist(next);
+    if (err) throw new BadRequestException('Could not save WhatsApp settings.');
     return { settings: next, warning };
-  }
-
-  async setGeminiModel(model: string): Promise<WhatsappSettings> {
-    const prev = await this.getStored();
-    const next = { ...prev, geminiModel: model.trim() };
-    this.assertShape(next);
-    const { error } = await this.supabase.from(TABLE_APP_SETTINGS).upsert(
-      {
-        key: SETTINGS_KEY,
-        value: encryptSettingsJson(next),
-        updated_at: new Date().toISOString(),
-      },
-      { onConflict: 'key' },
-    );
-    if (error) {
-      console.error('WhatsappSettingsService.setGeminiModel', error.message);
-      throw new BadRequestException('Could not save WhatsApp settings.');
-    }
-    return next;
-  }
-
-  async setGroqModel(model: string): Promise<WhatsappSettings> {
-    const prev = await this.getStored();
-    const next = { ...prev, groqModel: model.trim() };
-    this.assertShape(next);
-    const { error } = await this.supabase.from(TABLE_APP_SETTINGS).upsert(
-      {
-        key: SETTINGS_KEY,
-        value: encryptSettingsJson(next),
-        updated_at: new Date().toISOString(),
-      },
-      { onConflict: 'key' },
-    );
-    if (error) {
-      console.error('WhatsappSettingsService.setGroqModel', error.message);
-      throw new BadRequestException('Could not save WhatsApp settings.');
-    }
-    return next;
   }
 
   async rememberDisplayPhone(phone: string): Promise<void> {
@@ -246,16 +169,25 @@ export class WhatsappSettingsService {
     const prev = await this.getStored();
     if (prev.displayPhone === digits) return;
     if (!prev.accessToken && !prev.phoneNumberId) return;
-    const next = { ...prev, displayPhone: digits };
+    const err = await this.persist({ ...prev, displayPhone: digits });
+    if (err) console.error('WhatsappSettingsService.rememberDisplayPhone', err);
+  }
+
+  private async persist(settings: WhatsappSettings): Promise<string | null> {
+    this.assertShape(settings);
     const { error } = await this.supabase.from(TABLE_APP_SETTINGS).upsert(
       {
         key: SETTINGS_KEY,
-        value: encryptSettingsJson(next),
+        value: encryptSettingsJson(settings),
         updated_at: new Date().toISOString(),
       },
       { onConflict: 'key' },
     );
-    if (error) console.error('WhatsappSettingsService.rememberDisplayPhone', error.message);
+    if (error) {
+      console.error('WhatsappSettingsService.save', error.message);
+      return error.message;
+    }
+    return null;
   }
 
   private assertShape(settings: WhatsappSettings) {
@@ -264,12 +196,6 @@ export class WhatsappSettingsService {
     }
     if (settings.businessAccountId && !/^\d{5,30}$/.test(settings.businessAccountId)) {
       throw new BadRequestException('Business account ID must be digits.');
-    }
-    if (settings.geminiModel && !/^[A-Za-z0-9._-]{1,80}$/.test(settings.geminiModel)) {
-      throw new BadRequestException('Gemini model name is not valid.');
-    }
-    if (settings.groqModel && !/^[A-Za-z0-9._/-]{1,80}$/.test(settings.groqModel)) {
-      throw new BadRequestException('Groq model name is not valid.');
     }
     if (settings.verifyToken && settings.verifyToken.length < 8) {
       throw new BadRequestException('Webhook verify token must be at least 8 characters.');
