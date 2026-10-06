@@ -9,6 +9,14 @@ import { canonicalWhatsappPhone, extractInboundMessages } from '../src/whatsapp/
 import { decryptSettingsJson, encryptSettingsJson } from '../src/whatsapp/settings-crypto';
 import { chatModelId, defaultGeminiModel, geminiModelScore, smoothReply } from '../src/whatsapp/gemini-client';
 import { defaultGroqModel, groqModelScore } from '../src/whatsapp/groq-client';
+import {
+  closingReply,
+  collectChatFacts,
+  conversationClosed,
+  nextMissingField,
+  recapFacts,
+  scriptedNavyaReply,
+} from '../src/whatsapp/whatsapp-facts';
 
 const expected = 'az_wa_test_token_value';
 
@@ -113,5 +121,57 @@ assert.ok(groqModelScore('openai/gpt-oss-20b') > groqModelScore('openai/gpt-oss-
 assert.ok(groqModelScore('whisper-large-v3') < 0);
 assert.strictEqual(defaultGroqModel([]), 'openai/gpt-oss-20b');
 assert.strictEqual(defaultGroqModel(['openai/gpt-oss-120b', 'openai/gpt-oss-20b']), 'openai/gpt-oss-20b');
+
+const afterPincode = collectChatFacts(
+  {},
+  [
+    { role: 'user', text: 'Hi' },
+    { role: 'assistant', text: 'Pehle bataiye, aapko personal loan chahiye ya insurance?' },
+    { role: 'user', text: 'Loan' },
+    { role: 'assistant', text: 'Something went wrong. Please ek baar phir try karein.' },
+    { role: 'user', text: 'Personal loan' },
+    { role: 'assistant', text: 'Great! Pehle aapka poora naam bataiye.' },
+    { role: 'user', text: 'Atul Kumar' },
+    { role: 'assistant', text: 'Nice, Atul Kumar ji. Ab pincode ya shehar ka naam bataiye.' },
+    { role: 'user', text: '221011' },
+  ],
+  'Er.Atul',
+);
+assert.strictEqual(afterPincode.product, 'personal_loan');
+assert.strictEqual(afterPincode.name, 'Atul Kumar');
+assert.strictEqual(afterPincode.pincode, '221011');
+assert.strictEqual(nextMissingField(afterPincode), 'employment');
+const nextReply = scriptedNavyaReply(afterPincode, 'Er.Atul') ?? '';
+assert.ok(/salaried/i.test(nextReply));
+assert.ok(!/income/i.test(nextReply));
+assert.ok(!/loan amount|kitna loan/i.test(nextReply));
+const first = scriptedNavyaReply({}, 'Er.Atul') ?? '';
+assert.ok(/Navya/i.test(first));
+assert.ok(/personal loan/i.test(first));
+assert.ok(/insurance/i.test(first));
+
+const complete = {
+  product: 'personal_loan' as const,
+  name: 'Atul Kumar',
+  pincode: '221011',
+  employment: 'salaried' as const,
+  income: '30000',
+  loanAmount: '200000',
+  tenureMonths: '24',
+  pan: 'ABCDE1234F',
+};
+assert.strictEqual(nextMissingField(complete), 'done');
+const end = recapFacts(complete, 'Er.Atul');
+assert.ok(/Thank you/i.test(end));
+assert.ok(/wait kijiye/i.test(end));
+assert.ok(!/\?/.test(end));
+assert.ok(!/Navya/i.test(end));
+assert.ok(!/ABCDE1234F/.test(end));
+const afterClose = closingReply(complete, 'Er.Atul', true);
+assert.ok(/already mil chuki/i.test(afterClose));
+assert.ok(!/₹2,00,000/.test(afterClose));
+assert.ok(
+  conversationClosed([{ role: 'assistant', text: end }]),
+);
 
 console.log('test-whatsapp-webhook: all asserts passed');

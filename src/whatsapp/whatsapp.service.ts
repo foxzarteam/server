@@ -4,11 +4,21 @@ import { TABLE_LEADS, TABLE_WP_ENQUIRIES } from '../common/constants';
 import { isDraftLead, normalizeStoredCategory, productLabel, statusLabel } from '../leads/lead-present';
 import { SUPABASE_CLIENT } from '../config/supabase';
 import { allowRateLimitedAction } from '../security/rate-limit';
+import {
+  closingReply,
+  collectChatFacts,
+  conversationClosed,
+  factsInstruction,
+  isSideQuestion,
+  nextMissingField,
+  parseChatFacts,
+  scriptedNavyaReply,
+  type ChatFacts,
+} from './whatsapp-facts';
 import { canonicalWhatsappPhone, extractInboundMessages, InboundWhatsappMessage } from './whatsapp-inbound';
 import { WhatsappSettings, WhatsappSettingsService } from './whatsapp-settings.service';
 import { whatsappSignatureOk } from './whatsapp-verify';
 import {
-  CLIENT_RETRY,
   defaultGeminiModel,
   geminiContents,
   generateGemini,
@@ -114,6 +124,7 @@ type ChatDoc = {
   messages: ChatMessage[];
   /** Empty means a new customer. A saved status means that message was already sent. */
   leadNote?: string;
+  facts?: ChatFacts;
 };
 
 type EnquiryRow = {
@@ -153,7 +164,7 @@ function asChat(raw: unknown): ChatDoc {
     }
   }
   const obj = value && typeof value === 'object'
-    ? (value as { profileName?: unknown; messages?: unknown; waPhoneNumberId?: unknown; leadNote?: unknown })
+    ? (value as { profileName?: unknown; messages?: unknown; waPhoneNumberId?: unknown; leadNote?: unknown; facts?: unknown })
     : {};
   const messages = Array.isArray(obj.messages) ? obj.messages : [];
   const clean: ChatMessage[] = [];
@@ -181,6 +192,7 @@ function asChat(raw: unknown): ChatDoc {
     waPhoneNumberId: String(obj.waPhoneNumberId ?? '').replace(/\D/g, '').slice(0, 30),
     messages: clean.slice(-MAX_MESSAGES),
     ...(typeof obj.leadNote === 'string' ? { leadNote: obj.leadNote.slice(0, 1500) } : {}),
+    facts: parseChatFacts(obj.facts),
   };
 }
 
@@ -453,9 +465,10 @@ export class WhatsappService {
       return;
     }
     const limited = rateLimit && !allowRateLimitedAction(`wa-in:${message.phone}`, 20, 10 * 60_000);
+    const facts = collectChatFacts(row.chat.facts, row.chat.messages, message.profileName || row.chat.profileName);
     const reply = limited
       ? { text: 'Please wait a few minutes before sending more messages.' }
-      : await this.buildReply(settings, row.chat.messages, message);
+      : await this.buildReply(settings, row.chat.messages, message, facts);
     await this.storeAndSend(
       settings,
       row,
@@ -472,36 +485,51 @@ export class WhatsappService {
     settings: WhatsappSettings,
     history: ChatMessage[],
     message: InboundWhatsappMessage,
+    facts: ChatFacts,
   ): Promise<{ text: string; aiError?: string; replyBy?: 'groq' | 'gemini' }> {
     const textLike = message.type === 'text' || message.type === 'button' || message.type === 'interactive';
     if (!textLike || !message.text) {
       return { text: 'Please send your question as a text message.' };
     }
-    if (!settings.groqApiKey && !settings.geminiApiKey) {
-      return {
-        text: CLIENT_RETRY,
-        aiError: 'No AI key is saved in Settings.',
-      };
+
+    const greeted = history.some(
+      (item) => item.role === 'assistant' && /navya|personal loan chahiye/i.test(item.text),
+    );
+    const closed = conversationClosed(history);
+    if (nextMissingField(facts) === 'done') {
+      return { text: closingReply(facts, message.profileName, closed) };
+    }
+    const nextAsk =
+      scriptedNavyaReply(facts, message.profileName, greeted, closed) ||
+      'Jo last detail pending hai woh bata dijiye, main aage check karti hoon.';
+
+    if (!isSideQuestion(message.text)) {
+      const scripted = scriptedNavyaReply(facts, message.profileName, greeted, closed);
+      if (scripted) return { text: scripted };
     }
 
-    const note = this.customerNote(message);
+    if (!settings.groqApiKey && !settings.geminiApiKey) {
+      return { text: nextAsk, aiError: 'No AI key is saved in Settings.' };
+    }
+
+    const note = this.customerNote(message, facts);
     const groqStop = new AbortController();
     const groqTask = settings.groqApiKey ? this.askGroq(settings, history, note, groqStop.signal) : null;
     if (!groqTask) {
       const gemini = await this.askGemini(settings, history, note);
       if (gemini.text) return { text: smoothReply(gemini.text), replyBy: 'gemini' };
-      return { text: CLIENT_RETRY, aiError: gemini.error || 'Gemini returned an empty reply.' };
+      return { text: nextAsk, aiError: gemini.error || 'Gemini returned an empty reply.' };
     }
     if (!settings.geminiApiKey) {
       const groq = await groqTask;
       if (groq.text) return { text: smoothReply(groq.text), replyBy: 'groq' };
-      return { text: CLIENT_RETRY, aiError: groq.error || 'Groq returned an empty reply.' };
+      return { text: nextAsk, aiError: groq.error || 'Groq returned an empty reply.' };
     }
 
     const quick = await Promise.race([
       groqTask.then((result) => ({ ...result, slow: false })),
       new Promise<{ text: string; error?: string; slow: boolean }>((resolve) => {
-        setTimeout(() => resolve({ text: '', slow: true }), 2_000);
+        setTimeout(() => resolve({ text: '', slow: true }), 1_500);
       }),
     ]);
     if (quick.text) return { text: smoothReply(quick.text), replyBy: 'groq' };
@@ -514,7 +542,7 @@ export class WhatsappService {
       const gemini = await geminiTask;
       if (gemini.text) return { text: smoothReply(gemini.text), replyBy: 'gemini' };
       return {
-        text: CLIENT_RETRY,
+        text: nextAsk,
         aiError: [quick.error, gemini.error].filter(Boolean).join(' | ').slice(0, 500),
       };
     }
@@ -525,7 +553,7 @@ export class WhatsappService {
       { task: geminiTask, stop: () => geminiStop.abort(), replyBy: 'gemini' },
     ]);
     if (winner.text) return { text: smoothReply(winner.text), replyBy: winner.replyBy };
-    return { text: CLIENT_RETRY, aiError: winner.error || 'AI returned an empty reply.' };
+    return { text: nextAsk, aiError: winner.error || 'AI returned an empty reply.' };
   }
 
   private async askGroq(
@@ -549,11 +577,12 @@ export class WhatsappService {
     return { text: '', error: selected.error || 'Groq returned an empty reply.' };
   }
 
-  private customerNote(message: InboundWhatsappMessage): string {
+  private customerNote(message: InboundWhatsappMessage, facts: ChatFacts): string {
     const knownName = message.profileName.trim();
-    return knownName
+    const base = knownName
       ? `Customer WhatsApp number: ${message.phone}. Profile name on WhatsApp: ${knownName}. Confirm this name; do not ask for the phone number.`
       : `Customer WhatsApp number: ${message.phone}. No profile name. Ask their name when that step comes. Do not ask for the phone number.`;
+    return `${base}\n\n${factsInstruction(facts, nextMissingField(facts))}`;
   }
 
   /**
@@ -803,11 +832,14 @@ export class WhatsappService {
         return { row: current, added: false };
       }
 
+      const messages = [...(current?.chat.messages ?? []), message].slice(-MAX_MESSAGES);
+      const facts = collectChatFacts(current?.chat.facts, messages, profileName.trim() || current?.chat.profileName || '');
       const chat: ChatDoc = {
         profileName: profileName.trim() || current?.chat.profileName || '',
         waPhoneNumberId: (waPhoneNumberId || current?.chat.waPhoneNumberId || '').replace(/\D/g, '').slice(0, 30),
-        messages: [...(current?.chat.messages ?? []), message].slice(-MAX_MESSAGES),
+        messages,
         ...(current?.chat.leadNote !== undefined ? { leadNote: current.chat.leadNote } : {}),
+        facts,
       };
       const now = new Date().toISOString();
       const lastChatAt = message.at || now;
@@ -850,11 +882,13 @@ export class WhatsappService {
     if (latest.chat.messages.some((item) => item.id === message.id)) {
       return { row: latest, added: false };
     }
+    const messages = [...latest.chat.messages, message].slice(-MAX_MESSAGES);
     const chat: ChatDoc = {
       profileName: profileName.trim() || latest.chat.profileName || '',
       waPhoneNumberId: (waPhoneNumberId || latest.chat.waPhoneNumberId || '').replace(/\D/g, '').slice(0, 30),
-      messages: [...latest.chat.messages, message].slice(-MAX_MESSAGES),
+      messages,
       ...(latest.chat.leadNote !== undefined ? { leadNote: latest.chat.leadNote } : {}),
+      facts: collectChatFacts(latest.chat.facts, messages, profileName.trim() || latest.chat.profileName || ''),
     };
     const now = new Date().toISOString();
     const { data, error } = await this.table

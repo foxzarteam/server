@@ -1,6 +1,6 @@
 export const DEFAULT_GROQ_MODEL = 'openai/gpt-oss-20b';
 
-const GROQ_TIMEOUT_MS = 4_500;
+const GROQ_TIMEOUT_MS = 3_200;
 
 type GroqModel = { id?: string };
 type GroqContent = string | { text?: string }[] | null;
@@ -105,8 +105,8 @@ export async function generateGroq(
       body: JSON.stringify({
         model,
         messages,
-        temperature: 0.4,
-        max_tokens: 280,
+        temperature: 0.3,
+        max_tokens: 160,
         ...(!plain && /gpt-oss/i.test(model) ? { reasoning_effort: 'low' } : {}),
       }),
       signal: requestSignal(GROQ_TIMEOUT_MS, signal),
