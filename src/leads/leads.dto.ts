@@ -112,7 +112,7 @@ export class CreateLeadDto {
   @Matches(INS_TYPE_SLUG_PATTERN, { message: 'Invalid insurance type' })
   insType?: string;
 
-  /** Ignored. Employment type is asked only in the chatbots, not stored on the lead. */
+  /** Optional. Stored on personal loan when salaried or self_employed. */
   @IsOptional()
   @IsString()
   employmentType?: string;
@@ -330,7 +330,7 @@ export class AdminCreateLeadDto {
   @Matches(INS_TYPE_SLUG_PATTERN, { message: 'Invalid insurance type' })
   insType?: string;
 
-  /** Ignored. Employment type is asked only in the chatbots, not stored on the lead. */
+  /** Optional. Stored on personal loan when salaried or self_employed. */
   @IsOptional()
   @IsString()
   employmentType?: string;

@@ -1,6 +1,7 @@
 import {
   CanActivate,
   ExecutionContext,
+  ForbiddenException,
   Injectable,
   UnauthorizedException,
 } from '@nestjs/common';
@@ -90,7 +91,7 @@ export class AdminOnlyGuard implements CanActivate {
   canActivate(context: ExecutionContext): boolean {
     const req = context.switchToHttp().getRequest<ActorRequest>();
     if (String(req.adminActor?.role ?? '').toLowerCase() !== 'admin') {
-      throw new UnauthorizedException('Admin role required');
+      throw new ForbiddenException('Admin role required');
     }
     return true;
   }

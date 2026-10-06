@@ -9,15 +9,8 @@ import { WhatsappSettingsService } from './whatsapp-settings.service';
 import { whatsappHubChallenge } from './whatsapp-verify';
 
 function webhookRawBody(req: RawBodyRequest<Request>): Buffer {
-  if (Buffer.isBuffer(req.rawBody) && req.rawBody.length > 0) return req.rawBody;
-  if (Buffer.isBuffer(req.body) && req.body.length > 0) return req.body;
-  if (req.body && typeof req.body === 'object') {
-    try {
-      return Buffer.from(JSON.stringify(req.body));
-    } catch {
-      return Buffer.from('');
-    }
-  }
+  if (Buffer.isBuffer(req.rawBody)) return req.rawBody;
+  if (Buffer.isBuffer(req.body)) return req.body;
   return Buffer.from('');
 }
 

@@ -27,8 +27,7 @@ export function whatsappHubChallenge(input: {
 }
 
 /**
- * Meta X-Hub-Signature-256. Empty app secret means verification is not configured yet.
- * A configured secret with a missing or wrong signature returns false.
+ * Meta X-Hub-Signature-256. Missing app secret or bad signature is rejected.
  */
 export function whatsappSignatureOk(
   rawBody: Buffer,
@@ -36,7 +35,7 @@ export function whatsappSignatureOk(
   appSecret: string,
 ): boolean {
   const secret = String(appSecret ?? '').trim();
-  if (!secret) return true;
+  if (!secret) return false;
   const header = String(signatureHeader ?? '').trim();
   const match = /^sha256=([0-9a-f]{64})$/i.exec(header);
   if (!match) return false;

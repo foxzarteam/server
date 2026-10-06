@@ -11,7 +11,7 @@ export const TABLE_WALLET = 'wallet';
 /** Admin/staff panel users (`public.auth`). */
 export const TABLE_AUTH = 'auth';
 export const TABLE_CONTACT = 'contact';
-/** Encrypted integration secrets (WhatsApp + Gemini). One row per key. */
+/** Encrypted integration secrets (WhatsApp Cloud API). One row per key. */
 export const TABLE_APP_SETTINGS = 'app_settings';
 /** One WhatsApp conversation per phone. */
 export const TABLE_WP_ENQUIRIES = 'wp_enquiries';

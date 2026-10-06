@@ -1,6 +1,8 @@
 const SITE = 'https://apnizaroorat.com';
-const LOAN_URL = `${SITE}/products/personal-loan`;
+const LOAN_URL = `${SITE}/products/personal-loan/`;
 const INSURANCE_URL = `${SITE}/products/insurance/`;
+const LOAN_IMAGE = `${SITE}/images/whatsapp/wa_loa.jpg`;
+const INSURANCE_IMAGE = `${SITE}/images/whatsapp/wa_ins.jpg`;
 const BTN_LOAN = 'personal_loan';
 const BTN_INSURANCE = 'insurance';
 
@@ -16,11 +18,19 @@ export function welcomeText(profileName: string): string {
 }
 
 export function personalLoanText(profileName: string): string {
-  return `Bahut accha choice, ${who(profileName)}! 🎉\nPersonal loan free me apply kijiye — paperless process, fast approval, aur kam EMI rate.\nAbhi apply karein:\n${LOAN_URL}`;
+  return `Great, ${who(profileName)}! 💰\nAapke liye bilkul affordable EMI par Personal Loan ke best options available hain.\nApni loan eligibility jaanne ke liye abhi apply karein 👇\n${LOAN_URL}`;
 }
 
 export function insuranceText(profileName: string): string {
-  return `Great, ${who(profileName)}! 🛡️\nHealth, bike, life — sab tarah ke insurance options hamare paas hain. Paperless process, team aapki help karegi.\nAbhi apply karein:\n${INSURANCE_URL}`;
+  return `Great, ${who(profileName)}! 🛡️\nAapke liye affordable plans par Health, Bike, Life aur har tarah ke insurance options available hain.\nApni zaroorat ke hisaab se insurance ke liye abhi apply karein 👇\n${INSURANCE_URL}`;
+}
+
+export function productImageUrl(choice: ProductChoice): string {
+  return choice === 'insurance' ? INSURANCE_IMAGE : LOAN_IMAGE;
+}
+
+export function productImageFilename(choice: ProductChoice): string {
+  return choice === 'insurance' ? 'wa_ins.jpg' : 'wa_loa.jpg';
 }
 
 export function welcomeInteractive(body: string) {

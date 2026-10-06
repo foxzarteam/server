@@ -10,7 +10,7 @@ export function leadFullNameError(name?: string | null): string | null {
   return null;
 }
 
-/** Personal-loan income check. Employment type is collected only in the chatbots. */
+/** Personal-loan income check. Employment type is optional on website apply. */
 export function personalLoanEmploymentError(dto: {
   netMonthlyIncome?: number | null;
 }): string | null {
@@ -18,5 +18,15 @@ export function personalLoanEmploymentError(dto: {
   if (income == null || !Number.isFinite(Number(income)) || Number(income) < 1) {
     return 'Net monthly income is required for personal loan.';
   }
+  return null;
+}
+
+export function storedEmploymentType(raw?: string | null): 'salaried' | 'self_employed' | null {
+  const v = String(raw ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, '_');
+  if (v === 'salaried') return 'salaried';
+  if (v === 'self_employed' || v === 'selfemployed') return 'self_employed';
   return null;
 }

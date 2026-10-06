@@ -12,8 +12,11 @@ import {
   insuranceText,
   personalLoanText,
   productChoice,
+  productImageFilename,
+  productImageUrl,
   welcomeInteractive,
   welcomeText,
+  type ProductChoice,
 } from './whatsapp-templates';
 
 const GRAPH_VERSION = 'v21.0';
@@ -22,6 +25,8 @@ const EXISTING_MARK = 'EXISTING\n';
 const STATUS_LOOKUP_RETRY =
   'Namaste ji 🙏 Aapki application ka status abhi nahi nikal paaya. Kripya thodi der baad ek baar message karein.';
 const MAX_ADMIN_FILE = 16 * 1024 * 1024;
+const ADMIN_UPLOAD_MIME =
+  /^(image\/(jpeg|png|webp)|application\/pdf|audio\/(mpeg|ogg)|video\/mp4|application\/msword|application\/vnd\.openxmlformats-officedocument\.wordprocessingml\.document)$/i;
 
 function existingStatusText(name: string, lines: { product: string; status: string }[]): string {
   const who = name ? `${name} ji` : 'ji';
@@ -66,19 +71,25 @@ function graphMessageBody(phone: string, message: ChatMessage): Record<string, u
   if (message.waType === 'interactive' || message.kind === 'welcome') {
     return { ...base, ...welcomeInteractive(message.text || welcomeText('')) };
   }
-  if (message.mediaId && (message.waType === 'image' || message.waType === 'document' || message.waType === 'audio' || message.waType === 'video')) {
+  if (message.waType === 'image' || message.waType === 'document' || message.waType === 'audio' || message.waType === 'video') {
     const kind = message.waType;
-    const media: Record<string, string> = { id: message.mediaId };
-    if (message.text && kind !== 'audio') media.caption = message.text.slice(0, 1024);
-    if (kind === 'document' && message.filename) media.filename = message.filename;
-    return { ...base, type: kind, [kind]: media };
+    const media: Record<string, string> = {};
+    if (message.mediaId) media.id = message.mediaId;
+    else if (message.mediaUrl && kind === 'image') media.link = message.mediaUrl;
+    if (!media.id && !media.link) {
+      /* fall through to text */
+    } else {
+      if (message.text && kind !== 'audio') media.caption = message.text.slice(0, 1024);
+      if (kind === 'document' && message.filename) media.filename = message.filename;
+      return { ...base, type: kind, [kind]: media };
+    }
   }
   const body = message.text.replace(/\uFFFD/g, '').trim().slice(0, 4000);
   if (!body) return null;
   return {
     ...base,
     type: 'text',
-    text: { preview_url: true, body },
+    text: { preview_url: false, body },
   };
 }
 
@@ -95,6 +106,7 @@ type ChatMessage = {
   kind?: 'welcome' | 'personal_loan' | 'insurance' | 'status' | 'admin';
   waType?: 'text' | 'interactive' | 'image' | 'document' | 'audio' | 'video';
   mediaId?: string;
+  mediaUrl?: string;
   filename?: string;
   mime?: string;
 };
@@ -187,6 +199,9 @@ function asChat(raw: unknown): ChatDoc {
         ...(kind ? { kind } : {}),
         ...(waType ? { waType } : {}),
         ...(row.mediaId ? { mediaId: String(row.mediaId).slice(0, 200) } : {}),
+        ...(row.mediaUrl && /^https:\/\//i.test(String(row.mediaUrl))
+          ? { mediaUrl: String(row.mediaUrl).slice(0, 500) }
+          : {}),
         ...(row.filename ? { filename: String(row.filename).slice(0, 180) } : {}),
         ...(row.mime ? { mime: String(row.mime).slice(0, 80) } : {}),
       });
@@ -279,7 +294,9 @@ export class WhatsappService {
         id: row.id,
         phone: row.phone,
         profileName: chat.profileName,
-        lastMessage: last?.text ?? '',
+        lastMessage:
+          last?.text?.trim() ||
+          (last?.waType === 'image' ? 'Photo' : last?.filename || last?.waType || ''),
         lastChatAt: row.last_chat_at,
         createdAt: row.created_at,
       };
@@ -412,28 +429,8 @@ export class WhatsappService {
     }
     const name = message.profileName || row.chat.profileName;
     const choice = productChoice(message.buttonId, message.text);
-    if (choice === 'personal_loan') {
-      await this.storeAndSend(settings, row, name, {
-        id: assistantId,
-        role: 'assistant',
-        text: personalLoanText(name),
-        at: new Date().toISOString(),
-        replyBy: 'template',
-        kind: 'personal_loan',
-        waType: 'text',
-      });
-      return;
-    }
-    if (choice === 'insurance') {
-      await this.storeAndSend(settings, row, name, {
-        id: assistantId,
-        role: 'assistant',
-        text: insuranceText(name),
-        at: new Date().toISOString(),
-        replyBy: 'template',
-        kind: 'insurance',
-        waType: 'text',
-      });
+    if (choice === 'personal_loan' || choice === 'insurance') {
+      await this.storeAndSend(settings, row, name, this.productTemplateMessage(assistantId, name, choice));
       return;
     }
     if (!alreadyWelcomed(row.chat.messages)) {
@@ -544,7 +541,7 @@ export class WhatsappService {
     const message: ChatMessage = {
       id: assistantId,
       role: 'assistant',
-      text: caption || (file ? file.originalname : ''),
+      text: caption,
       at: new Date().toISOString(),
       replyBy: 'admin',
       kind: 'admin',
@@ -552,14 +549,14 @@ export class WhatsappService {
     };
     if (file) {
       if (file.size > MAX_ADMIN_FILE) return { ok: false, error: 'File is too large (max 16 MB).' };
+      if (!ADMIN_UPLOAD_MIME.test(file.mimetype)) return { ok: false, error: 'This file type is not allowed.' };
       const uploaded = await this.uploadWhatsappMedia(settings, row.chat.waPhoneNumberId, file);
       if (!uploaded.id) return { ok: false, error: uploaded.error || 'Could not upload this file to WhatsApp.' };
       const waType = graphWaType(file.mimetype);
       message.waType = waType;
       message.mediaId = uploaded.id;
-      message.filename = file.originalname.slice(0, 180);
       message.mime = file.mimetype.slice(0, 80);
-      if (!message.text) message.text = waType === 'image' ? 'Photo' : file.originalname;
+      if (waType !== 'image') message.filename = file.originalname.slice(0, 180);
     } else if (!caption) {
       return { ok: false, error: 'Type a message or attach a file.' };
     }
@@ -580,6 +577,21 @@ export class WhatsappService {
     }
     const row = data as EnquiryRow;
     return { ...row, chat: asChat(row.chat) };
+  }
+
+  private productTemplateMessage(id: string, name: string, choice: ProductChoice): ChatMessage {
+    return {
+      id,
+      role: 'assistant',
+      text: choice === 'insurance' ? insuranceText(name) : personalLoanText(name),
+      at: new Date().toISOString(),
+      replyBy: 'template',
+      kind: choice,
+      waType: 'image',
+      mediaUrl: productImageUrl(choice),
+      filename: productImageFilename(choice),
+      mime: 'image/jpeg',
+    };
   }
 
   private async storeAndSend(
@@ -638,6 +650,29 @@ export class WhatsappService {
     }
     const payload = graphMessageBody(phone, message);
     if (!payload) return { ok: false, error: 'Nothing to send.' };
+    const sent = await this.postGraphMessage(token, fromId, payload);
+    if (sent.ok) return sent;
+    if (payload.type === 'image') {
+      const body = message.text.replace(/\uFFFD/g, '').trim().slice(0, 4000);
+      if (body) {
+        const fallback = await this.postGraphMessage(token, fromId, {
+          messaging_product: 'whatsapp',
+          recipient_type: 'individual',
+          to: phone,
+          type: 'text',
+          text: { preview_url: false, body },
+        });
+        if (fallback.ok) return fallback;
+      }
+    }
+    return sent;
+  }
+
+  private async postGraphMessage(
+    token: string,
+    fromId: string,
+    payload: Record<string, unknown>,
+  ): Promise<{ ok: boolean; error?: string }> {
     const url = `https://graph.facebook.com/${GRAPH_VERSION}/${encodeURIComponent(fromId)}/messages`;
     try {
       const res = await fetch(url, {

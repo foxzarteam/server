@@ -172,20 +172,24 @@ export class LeadsController {
 
     let created: Record<string, unknown> | null;
     try {
-      created = await this.leadsService.create({
-        pan: dto.pan,
-        mobileNumber: dto.mobileNumber,
-        fullName: dto.fullName,
-        email: dto.email,
-        pincode: dto.pincode,
-        requiredAmount: dto.requiredAmount,
-        category: dto.category,
-        loanAmt: dto.loanAmt,
-        insType: dto.insType,
-        netMonthlyIncome: dto.netMonthlyIncome,
-        loanTenureMonths: dto.loanTenureMonths,
-        consentAccepted: true,
-      });
+      created = await this.leadsService.create(
+        {
+          pan: dto.pan,
+          mobileNumber: dto.mobileNumber,
+          fullName: dto.fullName,
+          email: dto.email,
+          pincode: dto.pincode,
+          requiredAmount: dto.requiredAmount,
+          category: dto.category,
+          loanAmt: dto.loanAmt,
+          insType: dto.insType,
+          netMonthlyIncome: dto.netMonthlyIncome,
+          loanTenureMonths: dto.loanTenureMonths,
+          employmentType: dto.employmentType,
+          consentAccepted: true,
+        },
+        { agentId: isAgent && actor?.sub ? actor.sub : undefined },
+      );
     } catch (err) {
       if (err instanceof LeadRuleError) {
         return {
@@ -246,10 +250,17 @@ export class LeadsController {
   ) {
     try {
       const actorRole = String(req.adminActor?.role ?? '').toLowerCase();
+      const staffStatus = String(dto.status ?? '').trim().toLowerCase();
       const patch =
         actorRole === 'admin'
           ? dto
-          : { ...dto, status: undefined, commissionType: undefined, commissionValue: undefined };
+          : {
+              ...dto,
+              status: !staffStatus || staffStatus === 'approved' ? undefined : dto.status,
+              commissionType: undefined,
+              commissionValue: undefined,
+              agentId: undefined,
+            };
       const lead = await this.leadsService.updateById(id, patch, req.adminActor);
       if (!lead) {
         throw new NotFoundException('Lead not found or update failed');

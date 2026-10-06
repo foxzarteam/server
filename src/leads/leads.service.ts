@@ -55,6 +55,7 @@ import {
 import {
   leadFullNameError,
   personalLoanEmploymentError as checkPersonalLoanEmployment,
+  storedEmploymentType,
 } from './personal-loan-employment';
 import { LEAD_DRAFT_PAN } from './lead-draft';
 import {
@@ -817,6 +818,8 @@ export class LeadsService {
       payload.loan_amt = amounts.loanAmt;
       payload.net_monthly_income = dto.netMonthlyIncome;
       payload.loan_tenure_months = dto.loanTenureMonths ?? null;
+      const employment = storedEmploymentType(dto.employmentType);
+      if (employment) payload.employment_type = employment;
     }
     if (category === 'insurance') {
       payload.required_amount = null;
@@ -848,6 +851,7 @@ export class LeadsService {
           netMonthlyIncome:
             category === 'personal_loan' ? dto.netMonthlyIncome ?? null : null,
           loanTenureMonths: category === 'personal_loan' ? dto.loanTenureMonths ?? null : null,
+          employmentType: category === 'personal_loan' ? dto.employmentType : undefined,
           clientIp: meta?.clientIp ?? undefined,
           agentId: !byMobile.agent_id && agentId ? agentId : undefined,
           consentAccepted: true,
@@ -1026,6 +1030,8 @@ export class LeadsService {
       if (dto.loanTenureMonths != null) {
         payload.loan_tenure_months = dto.loanTenureMonths;
       }
+      const employment = storedEmploymentType(dto.employmentType);
+      if (employment) payload.employment_type = employment;
     }
     if (category === 'insurance' && dto.insType) {
       payload.ins_type = dto.insType;
@@ -1104,6 +1110,7 @@ export class LeadsService {
           insType: dto.insType,
           netMonthlyIncome: dto.netMonthlyIncome,
           loanTenureMonths: dto.loanTenureMonths,
+          employmentType: dto.employmentType,
           consentAccepted: true,
         },
         { agentId: uid },
@@ -1291,6 +1298,9 @@ export class LeadsService {
     }
     if (dto.loanTenureMonths !== undefined) {
       payload.loan_tenure_months = dto.loanTenureMonths ?? null;
+    }
+    if (dto.employmentType !== undefined) {
+      payload.employment_type = storedEmploymentType(dto.employmentType);
     }
     const hasPartner = Boolean(String(payload.agent_id ?? existing.agent_id ?? '').trim());
     const approved = isApprovedLeadStatus(payload.status ?? existing.status);

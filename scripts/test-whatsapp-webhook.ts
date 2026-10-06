@@ -62,7 +62,7 @@ const secret = 'test_app_secret';
 const goodSig = `sha256=${createHmac('sha256', secret).update(body).digest('hex')}`;
 assert.strictEqual(whatsappSignatureOk(body, goodSig, secret), true);
 assert.strictEqual(whatsappSignatureOk(body, goodSig, 'other'), false);
-assert.strictEqual(whatsappSignatureOk(body, undefined, ''), true);
+assert.strictEqual(whatsappSignatureOk(body, undefined, ''), false);
 assert.strictEqual(whatsappSignatureOk(body, 'sha256=abcd', secret), false);
 
 const inbound = extractInboundMessages({
@@ -131,7 +131,10 @@ assert.strictEqual(productChoice('insurance', 'Insurance'), 'insurance');
 assert.ok(/Personal Loan/.test(welcomeText('Gaurav')));
 assert.ok(!/Navya/i.test(welcomeText('Gaurav')));
 assert.ok(/apnizaroorat.com\/products\/personal-loan/.test(personalLoanText('Gaurav')));
+assert.ok(/affordable EMI/.test(personalLoanText('Gaurav')));
 assert.ok(/apnizaroorat.com\/products\/insurance\//.test(insuranceText('Gaurav')));
+assert.ok(/Health, Bike, Life/.test(insuranceText('Gaurav')));
+assert.ok(!/50 Lakh/i.test(personalLoanText('Gaurav')));
 assert.ok(alreadyWelcomed([{ role: 'assistant', kind: 'welcome', text: welcomeText('Gaurav') }]));
 assert.ok(!alreadyWelcomed([{ role: 'user', text: 'Hi' }]));
 

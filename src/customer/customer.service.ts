@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import { isApprovedLeadStatus } from '../common/lead-status';
 import { LeadsService } from '../leads/leads.service';
 import { isDraftLead } from '../leads/lead-present';
 import { OtpService } from '../otp/otp.service';
@@ -124,6 +125,10 @@ export class CustomerService {
     if (leadMobile !== mobileNumber.trim()) {
       return { ok: false, message: 'Application not found' };
     }
+    const status = String(lead.status ?? '').trim().toLowerCase();
+    if (isApprovedLeadStatus(status) || status === 'in_process') {
+      return { ok: false, message: 'This application cannot be deleted. Please contact support.' };
+    }
     const ok = await this.leadsService.deleteById(id.trim());
     if (!ok) {
       return { ok: false, message: 'Failed to delete application' };
@@ -151,10 +156,8 @@ export class CustomerService {
       };
     }
 
-    const [, applications] = await Promise.all([
-      this.otpService.markPhoneVerified(mobile),
-      this.getApplications(mobile),
-    ]);
+    await this.otpService.markPhoneVerified(mobile);
+    const applications = await this.getApplications(mobile);
 
     if (applications.length === 0) {
       return {

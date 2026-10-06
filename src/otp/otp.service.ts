@@ -134,6 +134,25 @@ export class OtpService {
       return { success: true, message: MSG_OTP_VERIFIED };
     }
 
+    const { data: already, error: alreadyErr } = await this.otpSessions
+      .select('id')
+      .eq('mobile_number', mobile)
+      .eq('is_verified', true)
+      .gte('created_at', startOfTodayIstIso())
+      .limit(1);
+
+    if (alreadyErr) {
+      if (process.env.NODE_ENV !== 'production') {
+        console.error('OtpService.markPhoneVerified already', alreadyErr);
+      }
+      return { success: false, message: MSG_OTP_VERIFY_FAILED };
+    }
+
+    if (Array.isArray(already) && already.length > 0) {
+      await this.markLeadsVerifiedForMobile(mobile);
+      return { success: true, message: MSG_OTP_VERIFIED };
+    }
+
     // No pending send row (e.g. rate-limit insert was skipped) — one verified row only
     const { error: insertErr } = await this.otpSessions.insert({
       mobile_number: mobile,
