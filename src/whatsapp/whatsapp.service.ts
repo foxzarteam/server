@@ -1,4 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
+import { existsSync, readFileSync } from 'fs';
+import { join } from 'path';
 import { SupabaseClient } from '@supabase/supabase-js';
 import { TABLE_LEADS, TABLE_WP_ENQUIRIES } from '../common/constants';
 import { isDraftLead, normalizeStoredCategory, productLabel, statusLabel } from '../leads/lead-present';
@@ -23,6 +25,8 @@ import {
 } from './whatsapp-templates';
 
 const GRAPH_VERSION = 'v21.0';
+const GRAPH_SEND_MS = 10_000;
+const GRAPH_UPLOAD_MS = 20_000;
 const MAX_MESSAGES = 1000;
 const EXISTING_MARK = 'EXISTING\n';
 const STATUS_LOOKUP_RETRY =
@@ -221,6 +225,7 @@ function asChat(raw: unknown): ChatDoc {
 @Injectable()
 export class WhatsappService {
   private linkCache: { until: number; url: string | null } | null = null;
+  private mediaIdCache = new Map<string, { id: string; until: number }>();
 
   constructor(
     @Inject(SUPABASE_CLIENT) private readonly supabase: SupabaseClient,
@@ -250,14 +255,19 @@ export class WhatsappService {
       }
     }
 
-    for (const message of extractInboundMessages(payload)) {
+    const inbound = extractInboundMessages(payload);
+    void this.dispatchInbound(settings, inbound);
+    return 'ok';
+  }
+
+  private async dispatchInbound(settings: WhatsappSettings, inbound: InboundWhatsappMessage[]) {
+    for (const message of inbound) {
       try {
         await this.handleInbound(settings, message);
       } catch (error) {
         console.error('WhatsappService.handleInbound', message.messageId, error);
       }
     }
-    return 'ok';
   }
 
   async publicLink(): Promise<string | null> {
@@ -374,13 +384,8 @@ export class WhatsappService {
       message.phoneNumberId,
     );
     if (!appended) return;
-    await this.flushUnsent(settings, message.phone);
-    if (!appended.added) {
-      await this.ensureReply(settings, appended.row, message, assistantId);
-      return;
-    }
-
-    await this.answerCustomer(settings, appended.row, message, assistantId, true);
+    await this.answerCustomer(settings, appended.row, message, assistantId, appended.added);
+    void this.flushUnsent(settings, message.phone);
   }
 
   private async ensureReply(
@@ -663,24 +668,69 @@ export class WhatsappService {
       console.error('WhatsappService.sendWhatsapp', error);
       return { ok: false, error };
     }
-    const payload = graphMessageBody(phone, message);
+    const outbound = await this.withTemplateImage(settings, fromId, message);
+    const payload = graphMessageBody(phone, outbound);
     if (!payload) return { ok: false, error: 'Nothing to send.' };
     const sent = await this.postGraphMessage(token, fromId, payload);
     if (sent.ok) return sent;
     if (payload.type === 'image') {
-      const body = message.text.replace(/\uFFFD/g, '').trim().slice(0, 4000);
+      const body = outbound.text.replace(/\uFFFD/g, '').trim().slice(0, 4000);
       if (body) {
-        const fallback = await this.postGraphMessage(token, fromId, {
+        return this.postGraphMessage(token, fromId, {
           messaging_product: 'whatsapp',
           recipient_type: 'individual',
           to: phone,
           type: 'text',
           text: { preview_url: false, body },
         });
-        if (fallback.ok) return fallback;
       }
     }
     return sent;
+  }
+
+  private async withTemplateImage(
+    settings: WhatsappSettings,
+    fromId: string,
+    message: ChatMessage,
+  ): Promise<ChatMessage> {
+    if (message.waType !== 'image' || message.mediaId) return message;
+    const fileName = message.filename || '';
+    if (fileName === 'wa_loa.jpg' || fileName === 'wa_ins.jpg') {
+      const id = await this.templateMediaId(settings, fromId, fileName);
+      if (id) return { ...message, mediaId: id, mediaUrl: undefined };
+      return { ...message, waType: 'text', mediaUrl: undefined, filename: undefined };
+    }
+    if (message.mediaUrl) return message;
+    return { ...message, waType: 'text' };
+  }
+
+  private templateImagePath(fileName: string): string {
+    const safe = fileName === 'wa_ins.jpg' ? 'wa_ins.jpg' : 'wa_loa.jpg';
+    const bases = [join(process.cwd(), 'src', 'whatsapp', 'media'), join(process.cwd(), 'dist', 'whatsapp', 'media'), join(__dirname, 'media')];
+    for (const dir of bases) {
+      const full = join(dir, safe);
+      if (existsSync(full)) return full;
+    }
+    return '';
+  }
+
+  private async templateMediaId(settings: WhatsappSettings, fromId: string, fileName: string): Promise<string> {
+    const key = `${fromId}:${fileName}`;
+    const hit = this.mediaIdCache.get(key);
+    if (hit && hit.until > Date.now()) return hit.id;
+    const path = this.templateImagePath(fileName);
+    if (!path) return '';
+    const uploaded = await this.uploadWhatsappMedia(settings, fromId, {
+      buffer: readFileSync(path),
+      originalname: fileName,
+      mimetype: 'image/jpeg',
+    });
+    if (!uploaded.id) {
+      console.error('WhatsappService.templateMediaId', uploaded.error);
+      return '';
+    }
+    this.mediaIdCache.set(key, { id: uploaded.id, until: Date.now() + 20 * 60 * 60 * 1000 });
+    return uploaded.id;
   }
 
   private async postGraphMessage(
@@ -697,7 +747,7 @@ export class WhatsappService {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify(payload),
-        signal: AbortSignal.timeout(15_000),
+        signal: AbortSignal.timeout(GRAPH_SEND_MS),
       });
       if (!res.ok) {
         const error = await metaErrorText(res);
@@ -729,7 +779,7 @@ export class WhatsappService {
         method: 'POST',
         headers: { Authorization: `Bearer ${token}` },
         body: form,
-        signal: AbortSignal.timeout(30_000),
+        signal: AbortSignal.timeout(GRAPH_UPLOAD_MS),
       });
       if (!res.ok) return { id: '', error: await metaErrorText(res) };
       const data = (await res.json()) as { id?: string };
