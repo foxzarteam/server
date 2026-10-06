@@ -17,6 +17,7 @@ import {
   personalLoanText,
   productChoice,
   productImageFilename,
+  productImageUrl,
   thankYouText,
   welcomeInteractive,
   welcomeText,
@@ -935,6 +936,7 @@ export class WhatsappService implements OnModuleInit {
       waType: 'image',
       filename: fileName,
       mime: 'image/jpeg',
+      mediaUrl: productImageUrl(choice),
     };
   }
 
@@ -1034,8 +1036,8 @@ export class WhatsappService implements OnModuleInit {
 
     const id = await this.templateMediaId(settings, fromId, fileName);
     if (id) return { ...message, waType: 'image', mediaId: id, filename: fileName, mediaUrl: undefined, mime: 'image/jpeg' };
-    console.error('WhatsappService.withTemplateImage no media id', fileName);
-    return { ...message, waType: 'text', mediaUrl: undefined, mediaId: undefined };
+    const link = productImageUrl(fileName === 'wa_ins.jpg' ? 'insurance' : 'personal_loan');
+    return { ...message, waType: 'image', filename: fileName, mime: 'image/jpeg', mediaUrl: link, mediaId: undefined };
   }
 
   private templateImagePath(fileName: string): string {
