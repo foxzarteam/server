@@ -24,8 +24,9 @@ import {
 } from './whatsapp-templates';
 
 const GRAPH_VERSION = 'v21.0';
-const GRAPH_SEND_MS = 12_000;
-const GRAPH_UPLOAD_MS = 20_000;
+const GRAPH_SEND_MS = 8_000;
+const GRAPH_UPLOAD_MS = 8_000;
+const LEAD_LOOKUP_MS = 1_500;
 const MAX_MESSAGES = 1000;
 const EXISTING_MARK = 'EXISTING\n';
 const STATUS_LOOKUP_RETRY =
@@ -225,6 +226,7 @@ function asChat(raw: unknown): ChatDoc {
 export class WhatsappService {
   private linkCache: { until: number; url: string | null } | null = null;
   private mediaIdCache = new Map<string, { id: string; until: number }>();
+  private mediaUploadInflight = new Map<string, Promise<string>>();
   private leadRouteCache = new Map<string, { until: number; action: 'new' } | { until: number; action: 'existing'; text: string }>();
   private sentIds = new Set<string>();
   private inflight = new Set<string>();
@@ -465,7 +467,7 @@ export class WhatsappService {
     const name = message.profileName || row?.chat.profileName || '';
     const choice = productChoice(message.buttonId, message.text);
     if (choice === 'personal_loan' || choice === 'insurance') {
-      return this.productTemplateMessage(assistantId, name, choice, settings, message.phoneNumberId);
+      return this.productTemplateMessage(assistantId, name, choice);
     }
     if (!alreadyWelcomed(messages)) {
       return {
@@ -545,7 +547,7 @@ export class WhatsappService {
         settings,
         row,
         name,
-        this.productTemplateMessage(assistantId, name, choice, settings, message.phoneNumberId),
+        this.productTemplateMessage(assistantId, name, choice),
       );
       return;
     }
@@ -593,7 +595,8 @@ export class WhatsappService {
     }
 
     if (savedLeadNote === undefined && alreadyWelcomed(messages)) {
-      return { action: 'new' };
+      const known = this.leadRouteCache.get(canonicalWhatsappPhone(phone));
+      if (known && known.until > Date.now() && known.action === 'new') return { action: 'new' };
     }
     const cached = this.leadRouteCache.get(canonicalWhatsappPhone(phone));
     if (cached && cached.until > Date.now()) {
@@ -602,7 +605,8 @@ export class WhatsappService {
       return told || !cached.text ? { action: 'silent' } : { action: 'template', text: cached.text };
     }
 
-    const template = await this.existingStatusTemplate(phone);
+    const template = await this.existingStatusTemplateFast(phone);
+    if (template === 'timeout') return { action: 'new' };
     if (template === null) return { action: 'template', text: STATUS_LOOKUP_RETRY };
 
     const key = canonicalWhatsappPhone(phone);
@@ -629,6 +633,15 @@ export class WhatsappService {
       .eq('id', current.id)
       .eq('updated_at', current.updated_at);
     if (error) console.error('WhatsappService.rememberLeadNote', error.message);
+  }
+
+  /** If CRM is slow, send the welcome instead of stalling the WhatsApp reply. */
+  private async existingStatusTemplateFast(phone: string): Promise<string | null | 'timeout'> {
+    const timeout = new Promise<'timeout'>((resolve) => {
+      setTimeout(() => resolve('timeout'), LEAD_LOOKUP_MS);
+    });
+    const result = await Promise.race([this.existingStatusTemplate(phone), timeout]);
+    return result === 'timeout' ? 'timeout' : result;
   }
 
   /** Read-only. Returns the fixed status message, "" for a new number, or null if the lookup failed. */
@@ -725,16 +738,8 @@ export class WhatsappService {
     return { ...row, chat: asChat(row.chat) };
   }
 
-  private productTemplateMessage(
-    id: string,
-    name: string,
-    choice: ProductChoice,
-    settings: WhatsappSettings,
-    inboundPhoneNumberId = '',
-  ): ChatMessage {
+  private productTemplateMessage(id: string, name: string, choice: ProductChoice): ChatMessage {
     const fileName = productImageFilename(choice);
-    const fromId = (inboundPhoneNumberId || settings.phoneNumberId).replace(/\D/g, '');
-    if (fromId) void this.templateMediaId(settings, fromId, fileName);
     return {
       id,
       role: 'assistant',
@@ -755,13 +760,18 @@ export class WhatsappService {
     message: ChatMessage,
   ) {
     const already = row.chat.messages.some((item) => item.id === message.id);
-    if (!already) {
-      const appended = await this.appendMessage(row.phone, profileName, message, row.chat.waPhoneNumberId);
-      if (!appended) return;
-      row = appended.row;
+    if (already) {
+      const saved = row.chat.messages.find((item) => item.id === message.id) || message;
+      await this.deliver(settings, row.phone, saved);
+      return;
     }
-    const saved = row.chat.messages.find((item) => item.id === message.id) || message;
-    await this.deliver(settings, row.phone, saved);
+    const result = await this.sendWhatsapp(settings, row.phone, message, row.chat.waPhoneNumberId);
+    if (result.ok) {
+      message.sent = true;
+    } else if (result.error) {
+      message.sendError = result.error;
+    }
+    await this.appendMessage(row.phone, profileName, message, row.chat.waPhoneNumberId);
   }
 
   /** Resend replies that were saved but never delivered (Meta will not always retry). */
@@ -843,11 +853,7 @@ export class WhatsappService {
       return message.waType === 'image' ? { ...message, waType: 'text' } : message;
     }
 
-    let id = await this.templateMediaId(settings, fromId, fileName);
-    if (!id) {
-      this.mediaIdCache.delete(`${fromId}:${fileName}`);
-      id = await this.templateMediaId(settings, fromId, fileName);
-    }
+    const id = await this.templateMediaId(settings, fromId, fileName);
     if (id) return { ...message, waType: 'image', mediaId: id, filename: fileName, mediaUrl: undefined, mime: 'image/jpeg' };
     console.error('WhatsappService.withTemplateImage no media id', fileName);
     return { ...message, waType: 'text', mediaUrl: undefined, mediaId: undefined };
@@ -870,8 +876,6 @@ export class WhatsappService {
     for (const dir of bases) {
       const jpg = join(dir, safe);
       if (existsSync(jpg)) return jpg;
-      const png = join(dir, safe.replace(/\.jpg$/i, '.png'));
-      if (existsSync(png)) return png;
     }
     return '';
   }
@@ -887,23 +891,34 @@ export class WhatsappService {
     const key = `${fromId}:${fileName}`;
     const hit = this.mediaIdCache.get(key);
     if (hit && hit.until > Date.now()) return hit.id;
-    const path = this.templateImagePath(fileName);
-    if (!path) {
-      console.error('WhatsappService.templateImagePath missing', fileName);
-      return '';
+    const pending = this.mediaUploadInflight.get(key);
+    if (pending) return pending;
+
+    const work = (async () => {
+      const path = this.templateImagePath(fileName);
+      if (!path) {
+        console.error('WhatsappService.templateImagePath missing', fileName);
+        return '';
+      }
+      const uploaded = await this.uploadWhatsappMedia(settings, fromId, {
+        buffer: readFileSync(path),
+        originalname: fileName,
+        mimetype: 'image/jpeg',
+      });
+      if (!uploaded.id) {
+        console.error('WhatsappService.templateMediaId', uploaded.error);
+        return '';
+      }
+      this.mediaIdCache.set(key, { id: uploaded.id, until: Date.now() + 20 * 60 * 60 * 1000 });
+      return uploaded.id;
+    })();
+
+    this.mediaUploadInflight.set(key, work);
+    try {
+      return await work;
+    } finally {
+      this.mediaUploadInflight.delete(key);
     }
-    const png = path.toLowerCase().endsWith('.png');
-    const uploaded = await this.uploadWhatsappMedia(settings, fromId, {
-      buffer: readFileSync(path),
-      originalname: png ? fileName.replace(/\.jpg$/i, '.png') : fileName,
-      mimetype: png ? 'image/png' : 'image/jpeg',
-    });
-    if (!uploaded.id) {
-      console.error('WhatsappService.templateMediaId', uploaded.error);
-      return '';
-    }
-    this.mediaIdCache.set(key, { id: uploaded.id, until: Date.now() + 20 * 60 * 60 * 1000 });
-    return uploaded.id;
   }
 
   private async postGraphMessage(
