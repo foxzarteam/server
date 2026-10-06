@@ -150,7 +150,7 @@ export type WhatsappEnquiryDetail = {
   profileName: string;
   lastChatAt: string | null;
   createdAt: string;
-  messages: { id: string; role: 'user' | 'assistant'; text: string; at: string; sendError?: string; replyBy?: string; kind?: string; waType?: string; filename?: string }[];
+  messages: { id: string; role: 'user' | 'assistant'; text: string; at: string; sendError?: string; replyBy?: string; kind?: string; waType?: string; filename?: string; mime?: string; hasMedia?: boolean }[];
 };
 
 function asChat(raw: unknown): ChatDoc {
@@ -234,6 +234,7 @@ export class WhatsappService implements OnModuleInit {
   private inflight = new Set<string>();
   private flowMem = new Map<string, FlowMem>();
   private phoneTail = new Map<string, Promise<void>>();
+  private persistTail = new Map<string, Promise<void>>();
 
   constructor(
     @Inject(SUPABASE_CLIENT) private readonly supabase: SupabaseClient,
@@ -334,7 +335,7 @@ export class WhatsappService implements OnModuleInit {
         profileName: chat.profileName,
         lastMessage:
           last?.text?.trim() ||
-          (last?.waType === 'image' ? 'Photo' : last?.filename || last?.waType || ''),
+          (last?.waType === 'image' ? 'Photo' : last?.filename || (last?.waType === 'document' ? 'File' : last?.waType) || ''),
         lastChatAt: row.last_chat_at,
         createdAt: row.created_at,
       };
@@ -381,8 +382,62 @@ export class WhatsappService implements OnModuleInit {
         ...(item.kind ? { kind: item.kind } : {}),
         ...(item.waType ? { waType: item.waType } : {}),
         ...(item.filename ? { filename: item.filename } : {}),
+        ...(item.mime ? { mime: item.mime } : {}),
+        ...(item.mediaId || item.filename === 'wa_ins.jpg' || item.filename === 'wa_loa.jpg' ? { hasMedia: true } : {}),
       })),
     };
+  }
+
+  async adminMedia(
+    enquiryId: string,
+    messageId: string,
+  ): Promise<{ buffer: Buffer; mime: string; filename?: string } | null> {
+    if (!/^[0-9a-f-]{36}$/i.test(enquiryId)) return null;
+    const id = String(messageId ?? '').trim().slice(0, 200);
+    if (!id) return null;
+    const row = await this.getRowById(enquiryId);
+    if (!row) return null;
+    const item = row.chat.messages.find((message) => message.id === id);
+    if (!item) return null;
+
+    if (!item.mediaId && (item.filename === 'wa_ins.jpg' || item.filename === 'wa_loa.jpg')) {
+      const path = this.templateImagePath(item.filename);
+      if (!path) return null;
+      return { buffer: readFileSync(path), mime: 'image/jpeg', filename: item.filename };
+    }
+    if (!item.mediaId) return null;
+
+    const settings = await this.settings.getEffective();
+    const token = settings.accessToken.trim().replace(/^bearer\s+/i, '').trim();
+    if (!token) return null;
+    try {
+      const metaRes = await fetch(
+        `https://graph.facebook.com/${GRAPH_VERSION}/${encodeURIComponent(item.mediaId)}`,
+        {
+          headers: { Authorization: `Bearer ${token}` },
+          signal: AbortSignal.timeout(8_000),
+        },
+      );
+      if (!metaRes.ok) return null;
+      const meta = (await metaRes.json()) as { url?: string; mime_type?: string };
+      const url = String(meta.url ?? '').trim();
+      if (!/^https:\/\//i.test(url)) return null;
+      const bin = await fetch(url, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'User-Agent': 'ApniZarooratWhatsApp/1.0',
+        },
+        signal: AbortSignal.timeout(20_000),
+      });
+      if (!bin.ok) return null;
+      const buffer = Buffer.from(await bin.arrayBuffer());
+      if (!buffer.length || buffer.length > MAX_ADMIN_FILE) return null;
+      const mime = String(item.mime || meta.mime_type || bin.headers.get('content-type') || 'application/octet-stream').slice(0, 80);
+      return { buffer, mime, filename: item.filename };
+    } catch (error) {
+      console.error('WhatsappService.adminMedia', error);
+      return null;
+    }
   }
 
   private userText(message: InboundWhatsappMessage): string {
@@ -401,17 +456,19 @@ export class WhatsappService implements OnModuleInit {
       const userMessage: ChatMessage = {
         id: message.messageId,
         role: 'user',
-        text: this.userText(message),
+        text: message.text || (message.waType === 'image' ? 'Photo' : message.filename || message.waType || this.userText(message)),
         at: new Date().toISOString(),
+        ...(message.waType ? { waType: message.waType } : {}),
+        ...(message.mediaId ? { mediaId: message.mediaId } : {}),
+        ...(message.mime ? { mime: message.mime } : {}),
+        ...(message.filename ? { filename: message.filename } : {}),
       };
 
       const choice = productChoice(message.buttonId, message.text);
+      if (!choice) await this.ensureFlow(phone);
+
       let reply = this.decideReply(phone, message, assistantId);
-      if (
-        reply &&
-        !choice &&
-        !allowRateLimitedAction(`wa-in:${phone}`, 20, 10 * 60_000)
-      ) {
+      if (reply && !choice && !allowRateLimitedAction(`wa-in:${phone}`, 20, 10 * 60_000)) {
         reply = {
           id: assistantId,
           role: 'assistant',
@@ -421,6 +478,7 @@ export class WhatsappService implements OnModuleInit {
           waType: 'text',
         };
       }
+
       if (reply) {
         const result = await this.sendWhatsapp(settings, phone, reply, message.phoneNumberId);
         if (result.ok) {
@@ -432,10 +490,32 @@ export class WhatsappService implements OnModuleInit {
         }
       }
 
-      void this.persistInbound(phone, message.profileName, userMessage, reply, message.phoneNumberId);
+      this.queuePersist(phone, () =>
+        this.persistInbound(phone, message.profileName, userMessage, reply, message.phoneNumberId),
+      );
     } finally {
       this.inflight.delete(message.messageId);
     }
+  }
+
+  /** Wait for any in-flight save, then load welcome/product flags from DB once. */
+  private async ensureFlow(phone: string) {
+    if (this.flowMem.get(phone)?.welcomed) return;
+    await (this.persistTail.get(phone) ?? Promise.resolve());
+    if (this.flowMem.get(phone)?.welcomed) return;
+    await this.hydrateFlow(phone);
+  }
+
+  private async hydrateFlow(phone: string) {
+    const row = await this.readByPhone(phone);
+    const messages = row?.chat.messages ?? [];
+    const offered = alreadyOfferedProduct(messages);
+    const thanked = alreadyThanked(messages);
+    this.flowMem.set(phone, {
+      welcomed: alreadyWelcomed(messages) || offered || thanked,
+      offered,
+      thanked,
+    });
   }
 
   private decideReply(phone: string, message: InboundWhatsappMessage, assistantId: string): ChatMessage | null {
@@ -445,26 +525,26 @@ export class WhatsappService implements OnModuleInit {
     if (choice === 'personal_loan' || choice === 'insurance') {
       return this.productTemplateMessage(assistantId, name, choice);
     }
-    if (!mem?.welcomed) {
+    if (mem?.welcomed || mem?.offered) {
+      if (mem.offered || mem.thanked) return null;
       return {
         id: assistantId,
         role: 'assistant',
-        text: welcomeText(name),
+        text: thankYouText(name),
         at: new Date().toISOString(),
         replyBy: 'template',
-        kind: 'welcome',
-        waType: 'interactive',
+        kind: 'thanks',
+        waType: 'text',
       };
     }
-    if (mem.offered || mem.thanked) return null;
     return {
       id: assistantId,
       role: 'assistant',
-      text: thankYouText(name),
+      text: welcomeText(name),
       at: new Date().toISOString(),
       replyBy: 'template',
-      kind: 'thanks',
-      waType: 'text',
+      kind: 'welcome',
+      waType: 'interactive',
     };
   }
 
@@ -479,17 +559,23 @@ export class WhatsappService implements OnModuleInit {
     this.flowMem.set(phone, prev);
   }
 
-  private persistInbound(
+  private queuePersist(phone: string, fn: () => Promise<void>) {
+    const prev = this.persistTail.get(phone) ?? Promise.resolve();
+    const next = prev.then(fn).catch((error) => {
+      console.error('WhatsappService.persistInbound', error);
+    });
+    this.persistTail.set(phone, next);
+  }
+
+  private async persistInbound(
     phone: string,
     profileName: string,
     userMessage: ChatMessage,
     reply: ChatMessage | null,
     waPhoneNumberId: string,
   ) {
-    void (async () => {
-      await this.appendMessage(phone, profileName, userMessage, waPhoneNumberId);
-      if (reply) await this.appendMessage(phone, profileName, reply, waPhoneNumberId);
-    })().catch((error) => console.error('WhatsappService.persistInbound', error));
+    await this.appendMessage(phone, profileName, userMessage, waPhoneNumberId);
+    if (reply) await this.appendMessage(phone, profileName, reply, waPhoneNumberId);
   }
 
   private rememberSent(id: string) {
@@ -873,7 +959,13 @@ export class WhatsappService implements OnModuleInit {
     const payload = graphMessageBody(phone, outbound);
     if (!payload) return { ok: false, error: 'Nothing to send.' };
     const sent = await this.postGraphMessage(token, fromId, payload);
-    if (sent.ok) return sent;
+    if (sent.ok) {
+      if (outbound.mediaId) message.mediaId = outbound.mediaId;
+      if (outbound.waType) message.waType = outbound.waType;
+      if (outbound.filename) message.filename = outbound.filename;
+      if (outbound.mime) message.mime = outbound.mime;
+      return sent;
+    }
     if (payload.type === 'image') {
       const body = outbound.text.replace(/\uFFFD/g, '').trim().slice(0, 4000);
       if (body) {

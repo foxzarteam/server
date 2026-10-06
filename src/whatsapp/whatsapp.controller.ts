@@ -67,6 +67,24 @@ export class WhatsappController {
     return { success: true, data };
   }
 
+  @Get('admin/enquiries/:id/media/:messageId')
+  @UseGuards(AdminCrmGuard)
+  async adminMedia(
+    @Param('id') id: string,
+    @Param('messageId') messageId: string,
+    @Res() res: Response,
+  ) {
+    const file = await this.whatsapp.adminMedia(id, decodeURIComponent(messageId || ''));
+    if (!file) {
+      return res.status(404).json({ success: false, error: 'Media not found.' });
+    }
+    const safeName = (file.filename || 'file').replace(/[^\w.\-]+/g, '_').slice(0, 120);
+    res.setHeader('Content-Type', file.mime || 'application/octet-stream');
+    res.setHeader('Cache-Control', 'private, max-age=120');
+    res.setHeader('Content-Disposition', `inline; filename="${safeName}"`);
+    return res.send(file.buffer);
+  }
+
   @Post('admin/enquiries/:id/reply')
   @UseGuards(AdminCrmGuard)
   @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 16 * 1024 * 1024 } }))

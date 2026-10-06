@@ -7,6 +7,10 @@ export type InboundWhatsappMessage = {
   type: string;
   /** Meta phone number id that received this message. */
   phoneNumberId: string;
+  waType?: 'image' | 'document' | 'audio' | 'video';
+  mediaId?: string;
+  mime?: string;
+  filename?: string;
 };
 
 type UnknownRecord = Record<string, unknown>;
@@ -57,6 +61,10 @@ export function extractInboundMessages(body: unknown): InboundWhatsappMessage[] 
         const type = String(msg.type ?? 'unknown').slice(0, 40);
         let text = '';
         let buttonId = '';
+        let waType: InboundWhatsappMessage['waType'];
+        let mediaId = '';
+        let mime = '';
+        let filename = '';
         if (type === 'text') text = String(asRecord(msg.text)?.body ?? '').trim();
         else if (type === 'button') {
           text = String(asRecord(msg.button)?.text ?? '').trim();
@@ -66,6 +74,20 @@ export function extractInboundMessages(body: unknown): InboundWhatsappMessage[] 
           const reply = asRecord(interactive?.button_reply) || asRecord(interactive?.list_reply);
           text = String(reply?.title ?? '').trim();
           buttonId = String(reply?.id ?? '').trim();
+        } else {
+          const mediaKey = type === 'voice' ? 'voice' : type;
+          const media = asRecord(msg[mediaKey]);
+          const id = String(media?.id ?? '').trim();
+          if (id && id.length <= 200) {
+            mediaId = id;
+            mime = String(media?.mime_type ?? '').trim().slice(0, 80);
+            filename = String(media?.filename ?? '').trim().slice(0, 180);
+            text = String(media?.caption ?? '').trim();
+            if (type === 'image' || type === 'sticker') waType = 'image';
+            else if (type === 'document') waType = 'document';
+            else if (type === 'audio' || type === 'voice') waType = 'audio';
+            else if (type === 'video') waType = 'video';
+          }
         }
 
         const contact = contacts
@@ -84,6 +106,10 @@ export function extractInboundMessages(body: unknown): InboundWhatsappMessage[] 
           profileName,
           type,
           phoneNumberId,
+          ...(waType ? { waType } : {}),
+          ...(mediaId ? { mediaId } : {}),
+          ...(mime ? { mime } : {}),
+          ...(filename ? { filename } : {}),
         });
       }
     }
