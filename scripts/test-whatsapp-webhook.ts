@@ -12,6 +12,7 @@ import {
   insuranceText,
   personalLoanText,
   productChoice,
+  thankYouText,
   welcomeText,
 } from '../src/whatsapp/whatsapp-templates';
 
@@ -131,11 +132,15 @@ assert.strictEqual(productChoice('insurance', 'Insurance'), 'insurance');
 assert.ok(/Personal Loan/.test(welcomeText('Gaurav')));
 assert.ok(!/Navya/i.test(welcomeText('Gaurav')));
 assert.ok(/apnizaroorat.com\/products\/personal-loan/.test(personalLoanText('Gaurav')));
-assert.ok(/affordable EMI/.test(personalLoanText('Gaurav')));
+assert.ok(/\n\nAapke liye/.test(personalLoanText('Gaurav')));
+assert.ok(/\n\nAapke liye/.test(insuranceText('Gaurav')));
 assert.ok(/apnizaroorat.com\/products\/insurance\//.test(insuranceText('Gaurav')));
 assert.ok(/Health, Bike, Life/.test(insuranceText('Gaurav')));
 assert.ok(!/50 Lakh/i.test(personalLoanText('Gaurav')));
 assert.ok(alreadyWelcomed([{ role: 'assistant', kind: 'welcome', text: welcomeText('Gaurav') }]));
 assert.ok(!alreadyWelcomed([{ role: 'user', text: 'Hi' }]));
+assert.ok(/Thank you/.test(thankYouText('Gaurav')));
+assert.ok(/jald hi contact/.test(thankYouText('Gaurav')));
+assert.ok(/apnizaroorat.com\//.test(thankYouText('Gaurav')));
 
 console.log('test-whatsapp-webhook: all asserts passed');

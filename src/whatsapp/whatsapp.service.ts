@@ -8,12 +8,15 @@ import { canonicalWhatsappPhone, extractInboundMessages, InboundWhatsappMessage 
 import { WhatsappSettings, WhatsappSettingsService } from './whatsapp-settings.service';
 import { whatsappSignatureOk } from './whatsapp-verify';
 import {
+  alreadyOfferedProduct,
+  alreadyThanked,
   alreadyWelcomed,
   insuranceText,
   personalLoanText,
   productChoice,
   productImageFilename,
   productImageUrl,
+  thankYouText,
   welcomeInteractive,
   welcomeText,
   type ProductChoice,
@@ -103,7 +106,7 @@ type ChatMessage = {
   sendingAt?: string;
   sendError?: string;
   replyBy?: 'template' | 'admin';
-  kind?: 'welcome' | 'personal_loan' | 'insurance' | 'status' | 'admin';
+  kind?: 'welcome' | 'personal_loan' | 'insurance' | 'status' | 'admin' | 'thanks';
   waType?: 'text' | 'interactive' | 'image' | 'document' | 'audio' | 'video';
   mediaId?: string;
   mediaUrl?: string;
@@ -173,7 +176,8 @@ function asChat(raw: unknown): ChatDoc {
         row.kind === 'personal_loan' ||
         row.kind === 'insurance' ||
         row.kind === 'status' ||
-        row.kind === 'admin'
+        row.kind === 'admin' ||
+        row.kind === 'thanks'
           ? row.kind
           : undefined;
       const waType =
@@ -443,7 +447,18 @@ export class WhatsappService {
         kind: 'welcome',
         waType: 'interactive',
       });
+      return;
     }
+    if (alreadyOfferedProduct(row.chat.messages) || alreadyThanked(row.chat.messages)) return;
+    await this.storeAndSend(settings, row, name, {
+      id: assistantId,
+      role: 'assistant',
+      text: thankYouText(name),
+      at: new Date().toISOString(),
+      replyBy: 'template',
+      kind: 'thanks',
+      waType: 'text',
+    });
   }
 
   /**

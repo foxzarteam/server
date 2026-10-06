@@ -18,11 +18,11 @@ export function welcomeText(profileName: string): string {
 }
 
 export function personalLoanText(profileName: string): string {
-  return `Great, ${who(profileName)}! 💰\nAapke liye bilkul affordable EMI par Personal Loan ke best options available hain.\nApni loan eligibility jaanne ke liye abhi apply karein 👇\n${LOAN_URL}`;
+  return `Great, ${who(profileName)}! 💰\n\nAapke liye bilkul affordable EMI par Personal Loan ke best options available hain.\n\nApni loan eligibility jaanne ke liye abhi apply karein 👇\n${LOAN_URL}`;
 }
 
 export function insuranceText(profileName: string): string {
-  return `Great, ${who(profileName)}! 🛡️\nAapke liye affordable plans par Health, Bike, Life aur har tarah ke insurance options available hain.\nApni zaroorat ke hisaab se insurance ke liye abhi apply karein 👇\n${INSURANCE_URL}`;
+  return `Great, ${who(profileName)}! 🛡️\n\nAapke liye affordable plans par Health, Bike, Life aur har tarah ke insurance options available hain.\n\nApni zaroorat ke hisaab se insurance ke liye abhi apply karein 👇\n${INSURANCE_URL}`;
 }
 
 export function productImageUrl(choice: ProductChoice): string {
@@ -58,6 +58,20 @@ export function productChoice(buttonId: string, text: string): ProductChoice | '
   if (/\binsurance|insurence|insurnace\b/.test(t) && !/\bloan\b/.test(t)) return 'insurance';
   if (/\bpersonal loan\b/.test(t) || t === 'loan') return 'personal_loan';
   return '';
+}
+
+export function thankYouText(profileName: string): string {
+  return `Thank you, ${who(profileName)} 🙏\n\nAapka message hume mil gaya hai. Hamari team aapse jald hi contact karegi. Tab tak hamari website visit karein 👇\nhttps://apnizaroorat.com/`;
+}
+
+export function alreadyThanked(messages: { role: string; kind?: string }[]): boolean {
+  return messages.some((item) => item.role === 'assistant' && item.kind === 'thanks');
+}
+
+export function alreadyOfferedProduct(messages: { role: string; kind?: string }[]): boolean {
+  return messages.some(
+    (item) => item.role === 'assistant' && (item.kind === 'personal_loan' || item.kind === 'insurance'),
+  );
 }
 
 export function alreadyWelcomed(messages: { role: string; kind?: string; text: string }[]): boolean {
