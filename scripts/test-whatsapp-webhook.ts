@@ -13,7 +13,9 @@ import {
   closingReply,
   collectChatFacts,
   conversationClosed,
+  isSideQuestion,
   nextMissingField,
+  parseChatFacts,
   recapFacts,
   scriptedNavyaReply,
 } from '../src/whatsapp/whatsapp-facts';
@@ -173,5 +175,36 @@ assert.ok(!/₹2,00,000/.test(afterClose));
 assert.ok(
   conversationClosed([{ role: 'assistant', text: end }]),
 );
+
+const emiLine = 'Pele bta kitna emi rate h tumara lakh pe';
+assert.ok(isSideQuestion(emiLine));
+assert.ok(!parseChatFacts({ city: emiLine }).city);
+const emiFacts = collectChatFacts(
+  {},
+  [
+    { role: 'user', text: 'Hi' },
+    { role: 'assistant', text: 'Pehle bataiye, aapko personal loan chahiye ya insurance?' },
+    { role: 'user', text: 'Loan' },
+    { role: 'assistant', text: 'Great! WhatsApp pe naam Gaurav Patel dikh raha hai. Yahi poora naam use karun, ya aap alag naam likh denge?' },
+    { role: 'user', text: 'haan' },
+    { role: 'assistant', text: 'Nice, Gaurav Patel ji. Ab pincode ya shehar ka naam bataiye.' },
+    { role: 'user', text: emiLine },
+  ],
+  'Gaurav Patel',
+);
+assert.strictEqual(emiFacts.product, 'personal_loan');
+assert.ok(!emiFacts.city);
+assert.ok(!emiFacts.pincode);
+assert.strictEqual(nextMissingField(emiFacts), 'pincode');
+const cityFacts = collectChatFacts(
+  emiFacts,
+  [
+    { role: 'assistant', text: 'Nice, Gaurav Patel ji. Ab pincode ya shehar ka naam bataiye.' },
+    { role: 'user', text: 'Lucknow' },
+  ],
+  'Gaurav Patel',
+);
+assert.strictEqual(cityFacts.city, 'Lucknow');
+assert.strictEqual(nextMissingField(cityFacts), 'employment');
 
 console.log('test-whatsapp-webhook: all asserts passed');

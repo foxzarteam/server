@@ -13,6 +13,8 @@ export type ChatFacts = {
 };
 
 const SKIP_NAMES = /^(hi|hii|hello|hey|ok|okay|haan|han|yes|no|na|ji|sir|mam|loan|insurance|personal|thanks|thankyou|namaste)$/i;
+const ABUSE = /\b(dog|kutta|gandu|chutiya|madarchod|bhosd|randi|idiot|stupid|fuck|shit)\b|you are (a )?(dog|idiot|stupid)|\bmc\b|\bbc\b/i;
+const OFF_TOPIC = /[?]|\b(emi|interest|rate|document|charges|fees|process|kaise|kab mil|kitne din|lakh pe|per lakh)\b|(pehle|pele).{0,24}(bta|bata|batao|bataiye|bol)/i;
 
 export function parseChatFacts(raw: unknown): ChatFacts {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
@@ -33,20 +35,37 @@ export function parseChatFacts(raw: unknown): ChatFacts {
   str('tenureMonths');
   str('pan');
   str('insDetail');
-  return out;
+  return sanitizeFacts(out);
 }
 
 function looksLikeName(text: string): string {
   const clean = text.replace(/[^\p{L}.\s]/gu, ' ').replace(/\s+/g, ' ').trim();
   if (!clean || SKIP_NAMES.test(clean) || clean.length < 3 || clean.length > 60) return '';
-  if (/\b(loan|insurance|pincode|salary|business|income|personal)\b/i.test(clean)) return '';
+  if (/\b(loan|insurance|pincode|salary|business|income|personal|emi|rate|kitna|pele|pehle)\b/i.test(clean)) return '';
   const words = clean.split(' ');
   if (words.length === 1 && words[0].length < 4) return '';
+  if (words.length > 4) return '';
   return clean.replace(/(^|\s)\p{L}/gu, (letter) => letter.toUpperCase());
 }
 
+function looksLikeCity(text: string): string {
+  if (isOffTopicText(text) || isAbuse(text)) return '';
+  const city = text.replace(/[^\p{L}\s]/gu, ' ').replace(/\s+/g, ' ').trim();
+  const words = city.split(' ').filter(Boolean);
+  if (words.length < 1 || words.length > 3) return '';
+  if (city.length < 3 || city.length > 28) return '';
+  if (SKIP_NAMES.test(city)) return '';
+  if (/\b(emi|rate|loan|insurance|kitna|pele|pehle|bta|bata|tumhara|tumara|income|salary|pan|month|lakh)\b/i.test(city)) {
+    return '';
+  }
+  return city.replace(/(^|\s)\p{L}/gu, (letter) => letter.toUpperCase());
+}
+
 function pincodeOf(text: string): string {
-  const match = text.replace(/\s/g, '').match(/\b([1-9]\d{5})\b/);
+  const compact = text.replace(/\s/g, '');
+  if (/^[1-9]\d{5}$/.test(compact)) return compact;
+  if (text.trim().length > 24) return '';
+  const match = compact.match(/([1-9]\d{5})/);
   return match ? match[1] : '';
 }
 
@@ -69,8 +88,10 @@ function moneyOf(text: string): string {
 function tenureOf(text: string): string {
   const years = text.toLowerCase().match(/\b([1-6])\s*(?:year|yr|saal)\b/);
   if (years) return String(Number(years[1]) * 12);
-  const months = text.toLowerCase().match(/\b(1[2-9]|[2-6]\d|72)\s*(?:month|mahina|mahine)?\b/);
-  return months ? months[1] : '';
+  const withUnit = text.toLowerCase().match(/\b(1[2-9]|[2-6]\d|72)\s*(?:month|mahina|mahine)\b/);
+  if (withUnit) return withUnit[1];
+  const only = text.trim().match(/^(1[2-9]|[2-6]\d|72)$/);
+  return only ? only[1] : '';
 }
 
 function productOf(text: string): ChatFacts['product'] {
@@ -98,33 +119,56 @@ function insTypeOf(text: string): string {
   return '';
 }
 
+function askedField(ask: string): string {
+  const t = ask.toLowerCase();
+  if (/personal loan chahiye ya insurance|loan chahiye ya insurance/.test(t)) return 'product';
+  if (/pincode|pin code|\bshehar\b|\bcity\b|\barea\b/.test(t)) return 'pincode';
+  if (/self or family|vehicle|age range|kiske naam|short detail/.test(t)) return 'insDetail';
+  if (/\bnaam\b|\bname\b|use karun/.test(t)) return 'name';
+  if (/\bsalaried\b|\bbusiness\b|\bnaukri\b|\bjob\b/.test(t)) return 'employment';
+  if (/\bincome\b|\bkamai\b|\bearn\b|in-hand|in hand/.test(t)) return 'income';
+  if (/kitna loan|loan amount|kitna chahte|₹25,000|25000/.test(t)) return 'amount';
+  if (/\btenure\b|kitne month/.test(t)) return 'tenure';
+  if (/kis tarah ka insurance|insurance chahiye, jaise/.test(t)) return 'insType';
+  if (/self or family|vehicle|age range|kiske naam|short detail/.test(t)) return 'insDetail';
+  if (/\bpan\b/.test(t)) return 'pan';
+  return '';
+}
+
 function applyAnswer(facts: ChatFacts, lastAsk: string, answer: string, profileName = ''): ChatFacts {
   const next = { ...facts };
-  const ask = lastAsk.toLowerCase();
   const text = answer.trim();
-  if (!text) return next;
+  if (!text || isOffTopicText(text) || isAbuse(text)) return next;
 
-  const product = productOf(text);
-  if (!next.product && product) next.product = product;
-
+  const field = askedField(lastAsk);
   const pan = panOf(text);
-  if (pan) next.pan = pan;
+  if (pan && (field === 'pan' || text.replace(/\s/g, '').toUpperCase() === pan)) next.pan = pan;
 
-  const pin = pincodeOf(text);
-  const onlyPin = /^[1-9]\d{5}$/.test(text.replace(/\s/g, ''));
-  if (pin && (/pincode|pin code|shehar|city|area/.test(ask) || onlyPin)) next.pincode = pin;
-
-  const job = employmentOf(text);
-  if (!next.employment && job && (/salaried|business|naukri|job|kaam/.test(ask) || Boolean(next.name || next.pincode))) {
-    next.employment = job;
+  if (field === 'product' || (!field && !next.product)) {
+    const product = productOf(text);
+    if (product) next.product = product;
   }
 
-  const kind = insTypeOf(text);
-  if (!next.insType && kind && (/insurance|cover|kis tarah/.test(ask) || next.product === 'insurance')) {
-    next.insType = kind;
+  if (field === 'pincode') {
+    const pin = pincodeOf(text);
+    if (pin) next.pincode = pin;
+    else {
+      const city = looksLikeCity(text);
+      if (city) next.city = city;
+    }
   }
 
-  if (!next.name && /naam|name|use karun/.test(ask)) {
+  if (field === 'employment') {
+    const job = employmentOf(text);
+    if (job) next.employment = job;
+  }
+
+  if (field === 'insType') {
+    const kind = insTypeOf(text);
+    if (kind) next.insType = kind;
+  }
+
+  if (field === 'name') {
     if (/^(haan|han|yes|ok|okay|ji|yahi)$/i.test(text) && profileName.trim()) {
       next.name = looksLikeName(profileName) || profileName.trim();
     } else {
@@ -133,33 +177,61 @@ function applyAnswer(facts: ChatFacts, lastAsk: string, answer: string, profileN
     }
   }
 
-  if (!next.income && /income|kamai|earn|in-hand|in hand/.test(ask)) {
+  if (field === 'income') {
     const money = moneyOf(text);
     if (money) next.income = money;
   }
 
-  if (!next.loanAmount && /kitna loan|loan amount|kitna chahte|₹25,000|25000/.test(ask)) {
+  if (field === 'amount') {
     const money = moneyOf(text);
     const amount = Number(money);
     if (money && amount >= 25000 && amount <= 5_000_000) next.loanAmount = money;
   }
 
-  if (!next.tenureMonths && /tenure|month|mahina|kitne month/.test(ask)) {
+  if (field === 'tenure') {
     const months = tenureOf(text);
     if (months) next.tenureMonths = months;
   }
 
-  if (!next.insDetail && /self or family|vehicle|age|kiske naam|short detail/.test(ask)) {
+  if (field === 'insDetail' && !isOffTopicText(text)) {
     const detail = text.slice(0, 80);
-    if (detail.length >= 2) next.insDetail = detail;
+    if (detail.length >= 2 && detail.length <= 40 && !/[?]/.test(detail)) next.insDetail = detail;
   }
 
-  if (!next.city && /shehar|city/.test(ask) && !pin) {
-    const city = text.replace(/[^A-Za-z\s]/g, ' ').replace(/\s+/g, ' ').trim();
-    if (city.length >= 3 && city.length <= 40) next.city = city;
-  }
+  return sanitizeFacts(next);
+}
 
-  return next;
+function sanitizeFacts(facts: ChatFacts): ChatFacts {
+  const out: ChatFacts = { ...facts };
+  if (out.city && !looksLikeCity(out.city)) delete out.city;
+  if (out.name && (isOffTopicText(out.name) || isAbuse(out.name))) delete out.name;
+  if (out.pincode && !/^[1-9]\d{5}$/.test(out.pincode)) delete out.pincode;
+  if (out.insDetail && (isOffTopicText(out.insDetail) || isAbuse(out.insDetail) || out.insDetail.split(' ').length > 8)) {
+    delete out.insDetail;
+  }
+  const tenure = Number(out.tenureMonths);
+  if (out.tenureMonths && (tenure < 12 || tenure > 72)) delete out.tenureMonths;
+  return out;
+}
+
+export function isAbuse(text: string): boolean {
+  return ABUSE.test(text.trim());
+}
+
+export function isOffTopicText(text: string): boolean {
+  const t = text.trim();
+  if (!t) return false;
+  if (isAbuse(t)) return true;
+  return OFF_TOPIC.test(t);
+}
+
+export function isGreeting(text: string): boolean {
+  return /^(hi+|hii+|hello|hey|namaste|ok|okay|haan|han|ji)[\s!.]*$/i.test(text.trim());
+}
+
+export function nudgeSameField(facts: ChatFacts, profileName: string, greeted = true): string {
+  const question = scriptedNavyaReply(facts, profileName, greeted, false) || 'Jo detail pending hai, woh sahi se bataiye.';
+  return `Pehle apni detail share kariye. Hamari team aapki detail verify karke aapki eligibility ke hisaab se best option batayegi. Main yahi ke liye hoon. ${question}`;
 }
 
 export function collectChatFacts(
@@ -178,7 +250,7 @@ export function collectChatFacts(
     }
     if (item.role === 'user') facts = applyAnswer(facts, lastAsk, text, profileName);
   }
-  return facts;
+  return sanitizeFacts(facts);
 }
 
 export function factsComplete(facts: ChatFacts): boolean {
@@ -293,7 +365,7 @@ export function scriptedNavyaReply(
 
 export function recapFacts(facts: ChatFacts, profileName: string): string {
   const ji = who(facts, profileName);
-  const place = facts.pincode || facts.city || '';
+  const place = facts.pincode || looksLikeCity(facts.city || '') || '';
   if (facts.product === 'insurance') {
     const extra = facts.insDetail ? `, ${facts.insDetail}` : '';
     return `Thank you, ${ji} 🙏 Aapki saari detail mil gayi: ${facts.insType || 'insurance'}${extra}${place ? `, ${place}` : ''}. Main yeh Apni Zaroorat team ko de deti hoon. Team isi WhatsApp number pe aapse baat karke best option bataenge. Aap wait kijiye.`.replace(/\s+/g, ' ').trim();
@@ -325,6 +397,7 @@ export function factsInstruction(facts: ChatFacts, nextField: string): string {
 
 export function isSideQuestion(text: string): boolean {
   const t = text.trim();
+  if (/^[1-9]\d{5}$/.test(t.replace(/\s/g, ''))) return false;
   if (/^\d{4,7}$/.test(t.replace(/\D/g, '')) && t.replace(/\D/g, '').length >= 4) return false;
-  return /[?]/.test(t) || /\b(interest|rate|emi|document|charges|fees|kab|kitne din|process|kaise)\b/i.test(t);
+  return isOffTopicText(t) || isAbuse(t);
 }

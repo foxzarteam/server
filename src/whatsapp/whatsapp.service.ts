@@ -9,8 +9,11 @@ import {
   collectChatFacts,
   conversationClosed,
   factsInstruction,
+  isAbuse,
+  isGreeting,
   isSideQuestion,
   nextMissingField,
+  nudgeSameField,
   parseChatFacts,
   scriptedNavyaReply,
   type ChatFacts,
@@ -496,23 +499,28 @@ export class WhatsappService {
       (item) => item.role === 'assistant' && /navya|personal loan chahiye/i.test(item.text),
     );
     const closed = conversationClosed(history);
-    if (nextMissingField(facts) === 'done') {
+    const prior = history[history.length - 1]?.role === 'user' ? history.slice(0, -1) : history;
+    const before = collectChatFacts({}, prior, message.profileName);
+    const pending = nextMissingField(facts);
+    if (pending === 'done') {
       return { text: closingReply(facts, message.profileName, closed) };
     }
-    const nextAsk =
-      scriptedNavyaReply(facts, message.profileName, greeted, closed) ||
-      'Jo last detail pending hai woh bata dijiye, main aage check karti hoon.';
 
-    if (!isSideQuestion(message.text)) {
+    const progressed = nextMissingField(before) !== pending;
+    if (progressed || isGreeting(message.text)) {
       const scripted = scriptedNavyaReply(facts, message.profileName, greeted, closed);
       if (scripted) return { text: scripted };
     }
+
+    const offTopic = isSideQuestion(message.text) || isAbuse(message.text);
+    const nextAsk = nudgeSameField(facts, message.profileName, greeted);
+    if (!offTopic) return { text: nextAsk };
 
     if (!settings.groqApiKey && !settings.geminiApiKey) {
       return { text: nextAsk, aiError: 'No AI key is saved in Settings.' };
     }
 
-    const note = this.customerNote(message, facts);
+    const note = this.customerNote(message, facts, true);
     const groqStop = new AbortController();
     const groqTask = settings.groqApiKey ? this.askGroq(settings, history, note, groqStop.signal) : null;
     if (!groqTask) {
@@ -577,12 +585,16 @@ export class WhatsappService {
     return { text: '', error: selected.error || 'Groq returned an empty reply.' };
   }
 
-  private customerNote(message: InboundWhatsappMessage, facts: ChatFacts): string {
+  private customerNote(message: InboundWhatsappMessage, facts: ChatFacts, offTopic = false): string {
     const knownName = message.profileName.trim();
+    const pending = nextMissingField(facts);
     const base = knownName
       ? `Customer WhatsApp number: ${message.phone}. Profile name on WhatsApp: ${knownName}. Confirm this name; do not ask for the phone number.`
       : `Customer WhatsApp number: ${message.phone}. No profile name. Ask their name when that step comes. Do not ask for the phone number.`;
-    return `${base}\n\n${factsInstruction(facts, nextMissingField(facts))}`;
+    const extra = offTopic
+      ? `\nLast customer message is NOT an answer for "${pending}". Do not save it as city, income, tenure, or PAN. If they are rude, stay calm: you are here to check eligibility and give the best solution. If they ask EMI or rate, do not invent a number; pehle details share karein, team verify karke eligibility ke hisaab se best option batayegi. Then ask only: ${pending}.`
+      : '';
+    return `${base}\n\n${factsInstruction(facts, pending)}${extra}`;
   }
 
   /**
