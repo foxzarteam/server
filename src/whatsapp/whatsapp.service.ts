@@ -27,6 +27,8 @@ import {
 const GRAPH_VERSION = 'v21.0';
 const GRAPH_SEND_MS = 8_000;
 const GRAPH_UPLOAD_MS = 8_000;
+const KYC_TEMPLATE = 'application_kyc_start';
+const KYC_LANGS = ['en', 'en_US', 'hi'] as const;
 const LEAD_LOOKUP_MS = 1_500;
 const MAX_MESSAGES = 1000;
 const EXISTING_MARK = 'EXISTING\n';
@@ -246,6 +248,7 @@ export class WhatsappService implements OnModuleInit {
   private flowMem = new Map<string, FlowMem>();
   private phoneTail = new Map<string, Promise<void>>();
   private persistTail = new Map<string, Promise<void>>();
+  private kycTemplateSent = new Set<string>();
 
   constructor(
     @Inject(SUPABASE_CLIENT) private readonly supabase: SupabaseClient,
@@ -259,6 +262,30 @@ export class WhatsappService implements OnModuleInit {
   async onModuleInit() {
     const settings = await this.settings.getEffective();
     this.warmTemplateMedia(settings);
+  }
+
+  /**
+   * After a loan/insurance application is saved. Never throws — form submit must not wait on Meta.
+   */
+  notifyApplicationKycStart(input: {
+    leadId?: string;
+    phone: string;
+    name: string;
+    category?: string;
+  }): void {
+    const category = String(input.category ?? '').trim();
+    if (category && category !== 'personal_loan' && category !== 'insurance') return;
+    const phone = canonicalWhatsappPhone(input.phone);
+    const leadKey = String(input.leadId ?? '').trim() || `${phone}:${category || 'app'}`;
+    if (this.kycTemplateSent.has(leadKey)) return;
+    this.kycTemplateSent.add(leadKey);
+    if (this.kycTemplateSent.size > 8000) {
+      const first = this.kycTemplateSent.values().next().value;
+      if (first) this.kycTemplateSent.delete(first);
+    }
+    void this.sendKycStartTemplate(phone, input.name).catch((error) => {
+      console.error('WhatsappService.notifyApplicationKycStart', error);
+    });
   }
 
   async handleWebhook(rawBody: Buffer, signatureHeader?: string): Promise<'ok' | 'forbidden'> {
@@ -981,6 +1008,49 @@ export class WhatsappService implements OnModuleInit {
     else {
       await this.releaseSend(phone, message.id);
       if (result.error) await this.noteSendError(phone, message.id, result.error);
+    }
+  }
+
+  private kycBodyName(name: string): string {
+    const first = name.trim().split(/\s+/)[0] || 'Customer';
+    const clean = first.replace(/[\r\n\t]/g, '').trim().slice(0, 60);
+    return clean || 'Customer';
+  }
+
+  private async sendKycStartTemplate(phone: string, name: string): Promise<void> {
+    if (!/^[0-9]{8,15}$/.test(phone)) return;
+    const settings = this.settings.peekEffective() ?? (await this.settings.getEffective());
+    const token = settings.accessToken.trim().replace(/^bearer\s+/i, '').trim();
+    const fromId = settings.phoneNumberId.replace(/\D/g, '');
+    if (!token || !fromId) {
+      console.error('WhatsappService.sendKycStartTemplate missing WhatsApp settings');
+      return;
+    }
+    const who = this.kycBodyName(name);
+    const withName = [
+      {
+        type: 'body',
+        parameters: [{ type: 'text', text: who }],
+      },
+    ];
+    for (const lang of KYC_LANGS) {
+      for (const components of [withName, undefined]) {
+        const payload: Record<string, unknown> = {
+          messaging_product: 'whatsapp',
+          recipient_type: 'individual',
+          to: phone,
+          type: 'template',
+          template: {
+            name: KYC_TEMPLATE,
+            language: { code: lang },
+            ...(components ? { components } : {}),
+          },
+        };
+        const sent = await this.postGraphMessage(token, fromId, payload);
+        if (sent.ok) return;
+        console.error('WhatsappService.sendKycStartTemplate', lang, sent.error);
+        if (sent.error && /132001|template name does not exist in the translation/i.test(sent.error)) break;
+      }
     }
   }
 

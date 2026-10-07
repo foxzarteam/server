@@ -7,5 +7,6 @@ import { WhatsappSettingsService } from './whatsapp-settings.service';
 @Module({
   controllers: [WhatsappController],
   providers: [WhatsappService, WhatsappSettingsService, AdminCrmGuard],
+  exports: [WhatsappService],
 })
 export class WhatsappModule {}
