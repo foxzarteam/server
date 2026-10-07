@@ -138,7 +138,7 @@ export class LeadsService {
     return ip ? { ip } : {};
   }
 
-  /** After loan/insurance form is saved. WhatsApp is async and cannot fail the apply. */
+  /** Admin/API create only. Public apply waits for OTP (`notifyAfterOtpVerified`). */
   private notifyApplicationWhatsapp(
     lead: Record<string, unknown> | null | undefined,
     fallbackPhone = '',
@@ -888,7 +888,6 @@ export class LeadsService {
           reason: 'public_apply_upgrade_draft',
           metadata: { pan_masked: panFields.pan },
         });
-        this.notifyApplicationWhatsapp(updated, mobile, dto.fullName);
         return { ok: true, lead: updated };
       } catch (err) {
         if (err instanceof LeadRuleError) {
@@ -913,7 +912,6 @@ export class LeadsService {
         metadata: { pan_masked: panFields.pan },
       });
     }
-    this.notifyApplicationWhatsapp(lead, mobile, dto.fullName);
     return { ok: true, lead: this.safeLead(lead)! };
   }
 

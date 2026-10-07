@@ -3,6 +3,7 @@ import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { SupabaseClient } from '@supabase/supabase-js';
 import { TABLE_LEADS, TABLE_WP_ENQUIRIES } from '../common/constants';
+import { LEAD_DRAFT_FULL_NAME } from '../leads/lead-draft';
 import { isDraftLead, normalizeStoredCategory, productLabel, statusLabel } from '../leads/lead-present';
 import { SUPABASE_CLIENT } from '../config/supabase';
 import { allowRateLimitedAction } from '../security/rate-limit';
@@ -10,6 +11,7 @@ import { canonicalWhatsappPhone, extractInboundMessages, InboundWhatsappMessage 
 import { WhatsappSettings, WhatsappSettingsService } from './whatsapp-settings.service';
 import { whatsappSignatureOk } from './whatsapp-verify';
 import {
+  alreadyKycStarted,
   alreadyOfferedProduct,
   alreadyThanked,
   alreadyWelcomed,
@@ -69,6 +71,14 @@ function isGraphTimeout(error?: string): boolean {
   return /timeout|aborted|abort/i.test(error || '');
 }
 
+function kycBodyName(name: string): string {
+  return name.trim().replace(/[\r\n\t]+/g, ' ').replace(/\s+/g, ' ').slice(0, 200) || 'Customer';
+}
+
+function kycProductName(category: string): string {
+  return normalizeStoredCategory(category) === 'insurance' ? 'Insurance' : 'Personal Loan';
+}
+
 function graphWaType(mime: string): NonNullable<ChatMessage['waType']> {
   if (mime.startsWith('image/')) return 'image';
   if (mime.startsWith('audio/')) return 'audio';
@@ -117,7 +127,7 @@ type ChatMessage = {
   sendingAt?: string;
   sendError?: string;
   replyBy?: 'template' | 'admin';
-  kind?: 'welcome' | 'personal_loan' | 'insurance' | 'status' | 'admin' | 'thanks';
+  kind?: 'welcome' | 'personal_loan' | 'insurance' | 'status' | 'admin' | 'thanks' | 'kyc';
   waType?: 'text' | 'interactive' | 'image' | 'document' | 'audio' | 'video';
   mediaId?: string;
   mediaUrl?: string;
@@ -188,7 +198,8 @@ function asChat(raw: unknown): ChatDoc {
         row.kind === 'insurance' ||
         row.kind === 'status' ||
         row.kind === 'admin' ||
-        row.kind === 'thanks'
+        row.kind === 'thanks' ||
+        row.kind === 'kyc'
           ? row.kind
           : undefined;
       const waType =
@@ -233,9 +244,14 @@ type FlowMem = {
   welcomed: boolean;
   offered: boolean;
   thanked: boolean;
+  kyc: boolean;
   product?: ProductChoice;
   ids: Set<string>;
 };
+
+function emptyFlow(): FlowMem {
+  return { welcomed: false, offered: false, thanked: false, kyc: false, ids: new Set() };
+}
 
 @Injectable()
 export class WhatsappService implements OnModuleInit {
@@ -264,36 +280,31 @@ export class WhatsappService implements OnModuleInit {
     this.warmTemplateMedia(settings);
   }
 
-  /**
-   * After a loan/insurance application is saved. Never throws — form submit must not wait on Meta.
-   */
+  /** Fire-and-forget after OTP. Login must not wait on Meta. */
+  notifyAfterOtpVerified(mobile: string): void {
+    const ten = String(mobile ?? '').replace(/\D/g, '').slice(-10);
+    const phone = canonicalWhatsappPhone(ten);
+    if (!/^[6-9]\d{9}$/.test(ten) || this.kycTemplateSent.has(phone)) return;
+    void this.sendKycForVerifiedMobile(ten, phone).catch((error) => {
+      console.error('WhatsappService.notifyAfterOtpVerified', error);
+    });
+  }
+
   notifyApplicationKycStart(input: {
     leadId?: string;
     phone: string;
     name: string;
     category?: string;
   }): void {
-    const category = String(input.category ?? '').trim();
-    if (category && category !== 'personal_loan' && category !== 'insurance') return;
-    const phone = canonicalWhatsappPhone(input.phone);
-    if (!/^[0-9]{8,15}$/.test(phone)) {
-      console.error('WhatsappService.notifyApplicationKycStart invalid phone');
-      return;
-    }
-    const leadKey = String(input.leadId ?? '').trim() || `${phone}:${category || 'app'}`;
-    if (this.kycTemplateSent.has(leadKey)) return;
-    void this.sendKycStartTemplate(phone, input.name)
-      .then((ok) => {
-        if (!ok) return;
-        this.kycTemplateSent.add(leadKey);
-        if (this.kycTemplateSent.size > 8000) {
-          const first = this.kycTemplateSent.values().next().value;
-          if (first) this.kycTemplateSent.delete(first);
-        }
-      })
-      .catch((error) => {
-        console.error('WhatsappService.notifyApplicationKycStart', error);
-      });
+    const category = normalizeStoredCategory(String(input.category ?? ''));
+    if (category !== 'personal_loan' && category !== 'insurance') return;
+    void this.dispatchKycTemplate(
+      canonicalWhatsappPhone(input.phone),
+      String(input.name ?? ''),
+      category,
+    ).catch((error) => {
+      console.error('WhatsappService.notifyApplicationKycStart', error);
+    });
   }
 
   async handleWebhook(rawBody: Buffer, signatureHeader?: string): Promise<'ok' | 'forbidden'> {
@@ -561,6 +572,8 @@ export class WhatsappService implements OnModuleInit {
     const messages = row?.chat.messages ?? [];
     const offered = alreadyOfferedProduct(messages);
     const thanked = alreadyThanked(messages);
+    const kyc = alreadyKycStarted(messages);
+    if (kyc) this.rememberKycPhone(phone);
     let product: ProductChoice | undefined;
     for (const item of messages) {
       if (item.role === 'assistant' && (item.kind === 'personal_loan' || item.kind === 'insurance')) {
@@ -568,9 +581,10 @@ export class WhatsappService implements OnModuleInit {
       }
     }
     this.flowMem.set(phone, {
-      welcomed: alreadyWelcomed(messages) || offered || thanked,
+      welcomed: alreadyWelcomed(messages) || offered || thanked || kyc,
       offered,
       thanked,
+      kyc,
       ...(product ? { product } : {}),
       ids: new Set(messages.map((item) => item.id)),
     });
@@ -579,11 +593,13 @@ export class WhatsappService implements OnModuleInit {
   private decideReply(phone: string, message: InboundWhatsappMessage, assistantId: string): ChatMessage | null {
     const name = message.profileName || '';
     const mem = this.flowMem.get(phone);
+    const kycDone = Boolean(mem?.kyc || this.kycTemplateSent.has(phone));
     const choice = productChoice(message.buttonId, message.text);
     if (choice === 'personal_loan' || choice === 'insurance') {
       if (mem?.product === choice) return null;
       return this.productTemplateMessage(assistantId, name, choice);
     }
+    if (kycDone) return null;
     if (mem?.welcomed || mem?.offered) {
       if (mem.offered || mem.thanked) return null;
       return {
@@ -608,12 +624,7 @@ export class WhatsappService implements OnModuleInit {
   }
 
   private noteFlow(phone: string, reply: ChatMessage) {
-    const prev = this.flowMem.get(phone) || {
-      welcomed: false,
-      offered: false,
-      thanked: false,
-      ids: new Set<string>(),
-    };
+    const prev = this.flowMem.get(phone) || emptyFlow();
     if (!prev.ids) prev.ids = new Set();
     if (reply.kind === 'welcome') prev.welcomed = true;
     if (reply.kind === 'personal_loan' || reply.kind === 'insurance') {
@@ -622,17 +633,17 @@ export class WhatsappService implements OnModuleInit {
       prev.product = reply.kind;
     }
     if (reply.kind === 'thanks') prev.thanked = true;
+    if (reply.kind === 'kyc') {
+      prev.kyc = true;
+      prev.welcomed = true;
+      this.rememberKycPhone(phone);
+    }
     prev.ids.add(reply.id);
     this.flowMem.set(phone, prev);
   }
 
   private rememberIds(phone: string, ids: string[]) {
-    const prev = this.flowMem.get(phone) || {
-      welcomed: false,
-      offered: false,
-      thanked: false,
-      ids: new Set<string>(),
-    };
+    const prev = this.flowMem.get(phone) || emptyFlow();
     if (!prev.ids) prev.ids = new Set();
     for (const id of ids) prev.ids.add(id);
     this.flowMem.set(phone, prev);
@@ -1019,38 +1030,95 @@ export class WhatsappService implements OnModuleInit {
     }
   }
 
-  private kycBodyName(name: string): string {
-    const first = name.trim().split(/\s+/)[0] || 'Customer';
-    const clean = first.replace(/[\r\n\t]/g, '').trim().slice(0, 60);
-    return clean || 'Customer';
+  private rememberKycPhone(phone: string) {
+    this.kycTemplateSent.add(phone);
+    if (this.kycTemplateSent.size <= 4000) return;
+    const first = this.kycTemplateSent.values().next().value;
+    if (first) this.kycTemplateSent.delete(first);
   }
 
-  private async sendKycStartTemplate(phone: string, name: string): Promise<boolean> {
-    if (!/^[0-9]{8,15}$/.test(phone)) return false;
-    const settings = await this.settings.getEffective();
+  private async sendKycForVerifiedMobile(ten: string, phone: string): Promise<void> {
+    const { data, error } = await this.supabase
+      .from(TABLE_LEADS)
+      .select('full_name, category')
+      .eq('mobile_number', ten)
+      .eq('is_active', true)
+      .in('category', ['personal_loan', 'insurance'])
+      .neq('full_name', LEAD_DRAFT_FULL_NAME)
+      .order('updated_at', { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (error) {
+      console.error('WhatsappService.sendKycForVerifiedMobile', error.message);
+      return;
+    }
+    if (!data) return;
+    await this.dispatchKycTemplate(phone, String(data.full_name ?? ''), String(data.category ?? ''));
+  }
+
+  private async dispatchKycTemplate(phone: string, name: string, category: string): Promise<void> {
+    const cat = normalizeStoredCategory(category);
+    if (cat !== 'personal_loan' && cat !== 'insurance') return;
+    if (!/^[0-9]{8,15}$/.test(phone) || this.kycTemplateSent.has(phone)) return;
+    this.rememberKycPhone(phone);
+
+    const settings = this.settings.peekEffective() ?? (await this.settings.getEffective());
     const token = settings.accessToken.trim().replace(/^bearer\s+/i, '').trim();
     const fromId = settings.phoneNumberId.replace(/\D/g, '');
     if (!token || !fromId) {
-      console.error('WhatsappService.sendKycStartTemplate missing WhatsApp settings');
-      return false;
+      this.kycTemplateSent.delete(phone);
+      console.error('WhatsappService.dispatchKycTemplate missing WhatsApp settings');
+      return;
     }
-    const sent = await this.postGraphMessage(token, fromId, {
-      messaging_product: 'whatsapp',
-      to: phone,
-      type: 'template',
-      template: {
-        name: KYC_TEMPLATE,
-        language: { code: KYC_TEMPLATE_LANG },
-        components: [
-          {
-            type: 'body',
-            parameters: [{ type: 'text', text: this.kycBodyName(name) }],
-          },
-        ],
-      },
-    });
-    if (!sent.ok) console.error('WhatsappService.sendKycStartTemplate', sent.error);
-    return sent.ok;
+
+    const who = kycBodyName(name);
+    const product = kycProductName(cat);
+    const langs = [KYC_TEMPLATE_LANG, 'en'];
+    let lastError = '';
+    let ok = false;
+    for (const lang of langs) {
+      const sent = await this.postGraphMessage(token, fromId, {
+        messaging_product: 'whatsapp',
+        to: phone,
+        type: 'template',
+        template: {
+          name: KYC_TEMPLATE,
+          language: { code: lang },
+          components: [
+            {
+              type: 'body',
+              parameters: [
+                { type: 'text', text: who },
+                { type: 'text', text: product },
+              ],
+            },
+          ],
+        },
+      });
+      if (sent.ok) {
+        ok = true;
+        break;
+      }
+      lastError = sent.error || lastError;
+    }
+    if (!ok) {
+      this.kycTemplateSent.delete(phone);
+      console.error('WhatsappService.dispatchKycTemplate', lastError);
+      return;
+    }
+
+    const message: ChatMessage = {
+      id: `kyc:${phone}`,
+      role: 'assistant',
+      text: `${who} · ${product}`,
+      at: new Date().toISOString(),
+      sent: true,
+      replyBy: 'template',
+      kind: 'kyc',
+      waType: 'text',
+    };
+    this.noteFlow(phone, message);
+    void this.appendMessage(phone, name, message);
   }
 
   private async sendWhatsapp(

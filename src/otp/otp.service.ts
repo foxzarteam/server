@@ -1,7 +1,7 @@
 import { Inject, Injectable } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
 import { SupabaseClient } from '@supabase/supabase-js';
 import { SUPABASE_CLIENT } from '../config/supabase';
+import { WhatsappService } from '../whatsapp/whatsapp.service';
 import { getFirebaseAdmin, normalizeIndianMobile } from '../firebase/firebase-admin';
 import {
   MSG_OTP_DAILY_LIMIT,
@@ -23,7 +23,10 @@ import type { OtpResult, SendOtpDto, VerifyFirebaseOtpDto } from './otp.dto';
 
 @Injectable()
 export class OtpService {
-  constructor(@Inject(SUPABASE_CLIENT) private readonly supabase: SupabaseClient) {}
+  constructor(
+    @Inject(SUPABASE_CLIENT) private readonly supabase: SupabaseClient,
+    private readonly whatsapp: WhatsappService,
+  ) {}
 
   private get otpSessions() {
     return this.supabase.from(TABLE_OTP_SESSIONS);
@@ -182,6 +185,7 @@ export class OtpService {
     if (error && process.env.NODE_ENV !== 'production') {
       console.error('OtpService.markLeadsVerifiedForMobile', error.message);
     }
+    this.whatsapp.notifyAfterOtpVerified(mobile);
   }
 
   async verifyFirebaseToken(dto: VerifyFirebaseOtpDto): Promise<OtpResult> {

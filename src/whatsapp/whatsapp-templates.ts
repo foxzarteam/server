@@ -81,3 +81,7 @@ export function alreadyWelcomed(messages: { role: string; kind?: string; text: s
       (item.kind === 'welcome' || /personal loan chahiye ya insurance/i.test(item.text)),
   );
 }
+
+export function alreadyKycStarted(messages: { role: string; kind?: string }[]): boolean {
+  return messages.some((item) => item.role === 'assistant' && item.kind === 'kyc');
+}
