@@ -139,14 +139,18 @@ export class LeadsService {
   }
 
   /** After loan/insurance form is saved. WhatsApp is async and cannot fail the apply. */
-  private notifyApplicationWhatsapp(lead: Record<string, unknown> | null | undefined): void {
+  private notifyApplicationWhatsapp(
+    lead: Record<string, unknown> | null | undefined,
+    fallbackPhone = '',
+    fallbackName = '',
+  ): void {
     if (!lead) return;
     const category = normalizeStoredCategory(String(lead.category ?? ''));
     if (category !== 'personal_loan' && category !== 'insurance') return;
     this.whatsapp.notifyApplicationKycStart({
       leadId: String(lead.id ?? ''),
-      phone: String(lead.mobile_number ?? lead.mobileNumber ?? ''),
-      name: String(lead.full_name ?? lead.fullName ?? ''),
+      phone: String(lead.mobile_number ?? lead.mobileNumber ?? fallbackPhone ?? ''),
+      name: String(lead.full_name ?? lead.fullName ?? fallbackName ?? ''),
       category,
     });
   }
@@ -884,7 +888,7 @@ export class LeadsService {
           reason: 'public_apply_upgrade_draft',
           metadata: { pan_masked: panFields.pan },
         });
-        this.notifyApplicationWhatsapp(updated);
+        this.notifyApplicationWhatsapp(updated, mobile, dto.fullName);
         return { ok: true, lead: updated };
       } catch (err) {
         if (err instanceof LeadRuleError) {
@@ -909,7 +913,7 @@ export class LeadsService {
         metadata: { pan_masked: panFields.pan },
       });
     }
-    this.notifyApplicationWhatsapp(lead);
+    this.notifyApplicationWhatsapp(lead, mobile, dto.fullName);
     return { ok: true, lead: this.safeLead(lead)! };
   }
 
@@ -1072,7 +1076,7 @@ export class LeadsService {
         metadata: { pan_masked: panFields.pan },
       });
     }
-    this.notifyApplicationWhatsapp(data);
+    this.notifyApplicationWhatsapp(data, dto.mobileNumber, dto.fullName);
     return this.safeLead({ ...data, otp_verified: true });
   }
 
