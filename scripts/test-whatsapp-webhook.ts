@@ -7,7 +7,10 @@ import { createHmac } from 'crypto';
 import { whatsappHubChallenge, whatsappSignatureOk } from '../src/whatsapp/whatsapp-verify';
 import { canonicalWhatsappPhone, extractInboundMessages } from '../src/whatsapp/whatsapp-inbound';
 import { decryptSettingsJson, encryptSettingsJson } from '../src/whatsapp/settings-crypto';
+import { asChat } from '../src/whatsapp/whatsapp-chat';
+import { kycBodyName, kycGraphPayload, kycProductName } from '../src/whatsapp/whatsapp-kyc';
 import {
+  alreadyKycStarted,
   alreadyWelcomed,
   insuranceText,
   personalLoanText,
@@ -142,5 +145,19 @@ assert.ok(!alreadyWelcomed([{ role: 'user', text: 'Hi' }]));
 assert.ok(/Thank you/.test(thankYouText('Gaurav')));
 assert.ok(/jald hi contact/.test(thankYouText('Gaurav')));
 assert.ok(/apnizaroorat.com\//.test(thankYouText('Gaurav')));
+
+assert.strictEqual(kycBodyName('  Raju   Patel\n'), 'Raju Patel');
+assert.strictEqual(kycProductName('personal_loan'), 'Personal Loan');
+assert.strictEqual(kycProductName('insurance'), 'Insurance');
+const kycPayload = kycGraphPayload('919876543210', 'Raju Patel', 'insurance', 'en_GB') as {
+  template: { name: string; language: { code: string }; components: { parameters: { text: string }[] }[] };
+};
+assert.strictEqual(kycPayload.template.name, 'application_kyc_start');
+assert.strictEqual(kycPayload.template.language.code, 'en_GB');
+assert.strictEqual(kycPayload.template.components[0].parameters[0].text, 'Raju Patel');
+assert.strictEqual(kycPayload.template.components[0].parameters[1].text, 'Insurance');
+assert.ok(alreadyKycStarted([{ role: 'assistant', kind: 'kyc' }]));
+assert.ok(!alreadyKycStarted([{ role: 'assistant', kind: 'welcome' }]));
+assert.strictEqual(asChat({ messages: [{ id: 'kyc:1', role: 'assistant', kind: 'kyc', text: 'x' }] }).messages[0].kind, 'kyc');
 
 console.log('test-whatsapp-webhook: all asserts passed');

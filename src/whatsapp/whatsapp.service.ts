@@ -7,7 +7,28 @@ import { LEAD_DRAFT_FULL_NAME } from '../leads/lead-draft';
 import { isDraftLead, normalizeStoredCategory, productLabel, statusLabel } from '../leads/lead-present';
 import { SUPABASE_CLIENT } from '../config/supabase';
 import { allowRateLimitedAction } from '../security/rate-limit';
+import {
+  asChat,
+  emptyFlow,
+  MAX_MESSAGES,
+  type ChatDoc,
+  type ChatMessage,
+  type EnquiryRow,
+  type FlowMem,
+  type WhatsappEnquiryDetail,
+  type WhatsappEnquiryListItem,
+} from './whatsapp-chat';
+import {
+  GRAPH_UPLOAD_MS,
+  GRAPH_VERSION,
+  graphMessageBody,
+  graphWaType,
+  isGraphTimeout,
+  metaErrorText,
+  postGraphMessage,
+} from './whatsapp-graph';
 import { canonicalWhatsappPhone, extractInboundMessages, InboundWhatsappMessage } from './whatsapp-inbound';
+import { kycBodyName, kycGraphPayload, kycProductName, KYC_TEMPLATE_LANGS } from './whatsapp-kyc';
 import { WhatsappSettings, WhatsappSettingsService } from './whatsapp-settings.service';
 import { whatsappSignatureOk } from './whatsapp-verify';
 import {
@@ -21,18 +42,13 @@ import {
   productImageFilename,
   productImageUrl,
   thankYouText,
-  welcomeInteractive,
   welcomeText,
   type ProductChoice,
 } from './whatsapp-templates';
 
-const GRAPH_VERSION = 'v21.0';
-const GRAPH_SEND_MS = 8_000;
-const GRAPH_UPLOAD_MS = 8_000;
-const KYC_TEMPLATE = 'application_kyc_start';
-const KYC_TEMPLATE_LANG = 'en_GB';
+export type { WhatsappEnquiryDetail, WhatsappEnquiryListItem } from './whatsapp-chat';
+
 const LEAD_LOOKUP_MS = 1_500;
-const MAX_MESSAGES = 1000;
 const EXISTING_MARK = 'EXISTING\n';
 const STATUS_LOOKUP_RETRY =
   'Namaste ji 🙏 Aapki application ka status abhi nahi nikal paaya. Kripya thodi der baad ek baar message karein.';
@@ -47,210 +63,6 @@ function existingStatusText(name: string, lines: { product: string; status: stri
       ? `Aapki ${lines[0].product} application ka status: ${lines[0].status}.`
       : `Aapki applications ka status:\n${lines.map((line) => `${line.product}: ${line.status}`).join('\n')}`;
   return `Namaste ${who} 🙏\n\n${body}\n\nApni Zaroorat team isi WhatsApp number pe aapko update degi.`;
-}
-
-async function metaErrorText(res: Response): Promise<string> {
-  let detail = '';
-  let code: number | undefined;
-  try {
-    const data = (await res.json()) as { error?: { message?: string; code?: number } };
-    const message = String(data.error?.message ?? '').trim();
-    code = data.error?.code;
-    if (message) detail = code ? `${code}: ${message}` : message;
-  } catch {
-    detail = '';
-  }
-  let text = detail || `WhatsApp send failed (${res.status})`;
-  if (code === 100 || /authorization error/i.test(text)) {
-    text = `${text}. Access token is invalid, expired, or not allowed to send from this phone number ID.`;
-  }
-  return text.slice(0, 500);
-}
-
-function isGraphTimeout(error?: string): boolean {
-  return /timeout|aborted|abort/i.test(error || '');
-}
-
-function kycBodyName(name: string): string {
-  return name.trim().replace(/[\r\n\t]+/g, ' ').replace(/\s+/g, ' ').slice(0, 200) || 'Customer';
-}
-
-function kycProductName(category: string): string {
-  return normalizeStoredCategory(category) === 'insurance' ? 'Insurance' : 'Personal Loan';
-}
-
-function graphWaType(mime: string): NonNullable<ChatMessage['waType']> {
-  if (mime.startsWith('image/')) return 'image';
-  if (mime.startsWith('audio/')) return 'audio';
-  if (mime.startsWith('video/')) return 'video';
-  return 'document';
-}
-
-function graphMessageBody(phone: string, message: ChatMessage): Record<string, unknown> | null {
-  const base = {
-    messaging_product: 'whatsapp',
-    recipient_type: 'individual',
-    to: phone,
-  };
-  if (message.waType === 'interactive' || message.kind === 'welcome') {
-    return { ...base, ...welcomeInteractive(message.text || welcomeText('')) };
-  }
-  if (message.waType === 'image' || message.waType === 'document' || message.waType === 'audio' || message.waType === 'video') {
-    const kind = message.waType;
-    const media: Record<string, string> = {};
-    if (message.mediaId) media.id = message.mediaId;
-    else if (message.mediaUrl && kind === 'image') media.link = message.mediaUrl;
-    if (!media.id && !media.link) {
-      /* fall through to text */
-    } else {
-      if (message.text && kind !== 'audio') media.caption = message.text.slice(0, 1024);
-      if (kind === 'document' && message.filename) media.filename = message.filename;
-      return { ...base, type: kind, [kind]: media };
-    }
-  }
-  const body = message.text.replace(/\uFFFD/g, '').trim().slice(0, 4000);
-  if (!body) return null;
-  return {
-    ...base,
-    type: 'text',
-    text: { preview_url: false, body },
-  };
-}
-
-type ChatMessage = {
-  id: string;
-  role: 'user' | 'assistant';
-  text: string;
-  at: string;
-  sent?: boolean;
-  sending?: boolean;
-  sendingAt?: string;
-  sendError?: string;
-  replyBy?: 'template' | 'admin';
-  kind?: 'welcome' | 'personal_loan' | 'insurance' | 'status' | 'admin' | 'thanks' | 'kyc';
-  waType?: 'text' | 'interactive' | 'image' | 'document' | 'audio' | 'video';
-  mediaId?: string;
-  mediaUrl?: string;
-  filename?: string;
-  mime?: string;
-};
-
-type ChatDoc = {
-  profileName: string;
-  waPhoneNumberId: string;
-  messages: ChatMessage[];
-  /** Empty means a new customer. A saved status means that message was already sent. */
-  leadNote?: string;
-};
-
-type EnquiryRow = {
-  id: string;
-  phone: string;
-  chat: ChatDoc;
-  last_chat_at: string | null;
-  created_at: string;
-  updated_at: string;
-};
-
-export type WhatsappEnquiryListItem = {
-  id: string;
-  phone: string;
-  profileName: string;
-  lastMessage: string;
-  lastChatAt: string | null;
-  createdAt: string;
-};
-
-export type WhatsappEnquiryDetail = {
-  id: string;
-  phone: string;
-  profileName: string;
-  lastChatAt: string | null;
-  createdAt: string;
-  messages: { id: string; role: 'user' | 'assistant'; text: string; at: string; sendError?: string; replyBy?: string; kind?: string; waType?: string; filename?: string; mime?: string; hasMedia?: boolean }[];
-};
-
-function asChat(raw: unknown): ChatDoc {
-  let value = raw;
-  if (typeof value === 'string') {
-    try {
-      value = JSON.parse(value);
-    } catch {
-      value = {};
-    }
-  }
-    const obj = value && typeof value === 'object'
-      ? (value as { profileName?: unknown; messages?: unknown; waPhoneNumberId?: unknown; leadNote?: unknown })
-      : {};
-    const messages = Array.isArray(obj.messages) ? obj.messages : [];
-    const clean: ChatMessage[] = [];
-    for (const item of messages) {
-      if (!item || typeof item !== 'object') continue;
-      const row = item as Partial<ChatMessage>;
-      const role = row.role === 'assistant' ? 'assistant' : row.role === 'user' ? 'user' : null;
-      const id = String(row.id ?? '').trim();
-      if (!role || !id) continue;
-      const rawBy = String((row as { replyBy?: string }).replyBy ?? '');
-      const replyBy = rawBy === 'admin' ? 'admin' : rawBy === 'template' || rawBy === 'groq' || rawBy === 'gemini' ? 'template' : undefined;
-      const kind =
-        row.kind === 'welcome' ||
-        row.kind === 'personal_loan' ||
-        row.kind === 'insurance' ||
-        row.kind === 'status' ||
-        row.kind === 'admin' ||
-        row.kind === 'thanks' ||
-        row.kind === 'kyc'
-          ? row.kind
-          : undefined;
-      const waType =
-        row.waType === 'interactive' ||
-        row.waType === 'image' ||
-        row.waType === 'document' ||
-        row.waType === 'audio' ||
-        row.waType === 'video'
-          ? row.waType
-          : row.waType === 'text'
-            ? 'text'
-            : undefined;
-      clean.push({
-        id: id.slice(0, 200),
-        role,
-        text: String(row.text ?? '').slice(0, 4000),
-        at: String(row.at ?? ''),
-        ...(row.sent ? { sent: true } : {}),
-        ...(row.sending ? { sending: true } : {}),
-        ...(row.sendingAt ? { sendingAt: String(row.sendingAt) } : {}),
-        ...(row.sendError ? { sendError: String(row.sendError).slice(0, 500) } : {}),
-        ...(replyBy ? { replyBy } : {}),
-        ...(kind ? { kind } : {}),
-        ...(waType ? { waType } : {}),
-        ...(row.mediaId ? { mediaId: String(row.mediaId).slice(0, 200) } : {}),
-        ...(row.mediaUrl && /^https:\/\//i.test(String(row.mediaUrl))
-          ? { mediaUrl: String(row.mediaUrl).slice(0, 500) }
-          : {}),
-        ...(row.filename ? { filename: String(row.filename).slice(0, 180) } : {}),
-        ...(row.mime ? { mime: String(row.mime).slice(0, 80) } : {}),
-      });
-    }
-    return {
-      profileName: String(obj.profileName ?? '').slice(0, 120),
-      waPhoneNumberId: String(obj.waPhoneNumberId ?? '').replace(/\D/g, '').slice(0, 30),
-      messages: clean.slice(-MAX_MESSAGES),
-      ...(typeof obj.leadNote === 'string' ? { leadNote: obj.leadNote.slice(0, 1500) } : {}),
-    };
-  }
-
-type FlowMem = {
-  welcomed: boolean;
-  offered: boolean;
-  thanked: boolean;
-  kyc: boolean;
-  product?: ProductChoice;
-  ids: Set<string>;
-};
-
-function emptyFlow(): FlowMem {
-  return { welcomed: false, offered: false, thanked: false, kyc: false, ids: new Set() };
 }
 
 @Injectable()
@@ -1073,28 +885,10 @@ export class WhatsappService implements OnModuleInit {
 
     const who = kycBodyName(name);
     const product = kycProductName(cat);
-    const langs = [KYC_TEMPLATE_LANG, 'en'];
     let lastError = '';
     let ok = false;
-    for (const lang of langs) {
-      const sent = await this.postGraphMessage(token, fromId, {
-        messaging_product: 'whatsapp',
-        to: phone,
-        type: 'template',
-        template: {
-          name: KYC_TEMPLATE,
-          language: { code: lang },
-          components: [
-            {
-              type: 'body',
-              parameters: [
-                { type: 'text', text: who },
-                { type: 'text', text: product },
-              ],
-            },
-          ],
-        },
-      });
+    for (const lang of KYC_TEMPLATE_LANGS) {
+      const sent = await postGraphMessage(token, fromId, kycGraphPayload(phone, name, cat, lang));
       if (sent.ok) {
         ok = true;
         break;
@@ -1139,7 +933,7 @@ export class WhatsappService implements OnModuleInit {
     const outbound = await this.withTemplateImage(settings, fromId, message);
     const payload = graphMessageBody(phone, outbound);
     if (!payload) return { ok: false, error: 'Nothing to send.' };
-    const sent = await this.postGraphMessage(token, fromId, payload);
+    const sent = await postGraphMessage(token, fromId, payload);
     if (sent.ok || (payload.type === 'image' && isGraphTimeout(sent.error))) {
       if (outbound.mediaId) message.mediaId = outbound.mediaId;
       if (outbound.waType) message.waType = outbound.waType;
@@ -1236,35 +1030,6 @@ export class WhatsappService implements OnModuleInit {
       return await work;
     } finally {
       this.mediaUploadInflight.delete(key);
-    }
-  }
-
-  private async postGraphMessage(
-    token: string,
-    fromId: string,
-    payload: Record<string, unknown>,
-  ): Promise<{ ok: boolean; error?: string }> {
-    const url = `https://graph.facebook.com/${GRAPH_VERSION}/${encodeURIComponent(fromId)}/messages`;
-    try {
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(payload),
-        signal: AbortSignal.timeout(GRAPH_SEND_MS),
-      });
-      if (!res.ok) {
-        const error = await metaErrorText(res);
-        console.error('WhatsappService.sendWhatsapp', error);
-        return { ok: false, error };
-      }
-      return { ok: true };
-    } catch (error) {
-      const fail = error instanceof Error ? error.message : 'WhatsApp send failed';
-      console.error('WhatsappService.sendWhatsapp', fail);
-      return { ok: false, error: fail.slice(0, 300) };
     }
   }
 
