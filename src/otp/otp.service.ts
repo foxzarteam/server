@@ -12,7 +12,6 @@ import {
   MSG_OTP_VERIFIED,
   MSG_OTP_VERIFY_FAILED,
   OTP_MAX_SENDS_PER_DAY,
-  PHONE_VERIFICATION_WINDOW_MINUTES,
   TABLE_LEADS,
   TABLE_OTP_SESSIONS,
   getCurrentIsoTime,
@@ -198,7 +197,8 @@ export class OtpService {
       console.error('OtpService.markLeadsVerifiedForMobile', error.message);
     }
 
-    const firstVerify = Boolean(peekErr) || (Array.isArray(unverified) && unverified.length > 0);
+    if (peekErr) return;
+    const firstVerify = Array.isArray(unverified) && unverified.length > 0;
     if (!firstVerify) return;
     this.whatsapp.notifyAfterOtpVerified(mobile);
   }
@@ -235,28 +235,6 @@ export class OtpService {
       }
       return { success: false, message: MSG_OTP_VERIFY_FAILED };
     }
-  }
-
-  async hasRecentPhoneVerification(
-    mobileNumber: string,
-    withinMinutes = PHONE_VERIFICATION_WINDOW_MINUTES,
-  ): Promise<boolean> {
-    const since = new Date(Date.now() - withinMinutes * 60 * 1000).toISOString();
-    const { data, error } = await this.otpSessions
-      .select('id')
-      .eq('mobile_number', mobileNumber.trim())
-      .eq('is_verified', true)
-      .gte('verified_at', since)
-      .limit(1);
-
-    if (error) {
-      if (process.env.NODE_ENV !== 'production') {
-        console.error('OtpService.hasRecentPhoneVerification', error);
-      }
-      return false;
-    }
-
-    return Array.isArray(data) && data.length > 0;
   }
 
   /**
@@ -298,12 +276,6 @@ export class OtpService {
       out.set(mobile, list);
     }
     return out;
-  }
-
-  /** Mobiles that have at least one verified OTP session. */
-  async getVerifiedMobiles(mobiles: string[]): Promise<Set<string>> {
-    const map = await this.getVerifiedAtByMobiles(mobiles);
-    return new Set(map.keys());
   }
 
   /** CRM lead delete: drop OTP send/verify rows for this mobile. Does not touch WhatsApp. */

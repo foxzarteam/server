@@ -27,7 +27,7 @@ import {
 } from '../common/admin-crm.guard';
 import { sanitizePublicLead } from '../security/pan-crypto';
 import { allowRateLimitedAction } from '../security/rate-limit';
-import { requestClientIp } from '../common/client-ip';
+import { requestClientIp, requestRateLimitIp } from '../common/client-ip';
 import { throwLeadMutation } from './lead-http';
 import {
   AdminCreateLeadDto,
@@ -76,7 +76,7 @@ export class LeadsController {
     @Req() req: Request,
   ) {
     const mobile = dto.mobileNumber?.trim() ?? '';
-    const limitIp = requestClientIp(req) || 'unknown';
+    const limitIp = requestRateLimitIp(req) || 'unknown';
     if (
       (mobile && !allowRateLimitedAction(`lead-apply:${mobile}`, 8, 60_000)) ||
       !allowRateLimitedAction(`lead-apply-ip:${limitIp}`, 20, 60_000)

@@ -32,11 +32,14 @@ export function extractClientIp(
   headers: Record<string, string | string[] | undefined>,
   socketIp?: string | null,
   bodyIp?: string | null,
+  opts?: { trustAzHeader?: boolean },
 ): string | null {
-  const az = headerValue(headers, ['x-az-client-ip', 'X-Az-Client-Ip']);
-  if (az) {
-    const hop = firstPublicHop(az);
-    if (hop) return hop;
+  if (opts?.trustAzHeader !== false) {
+    const az = headerValue(headers, ['x-az-client-ip', 'X-Az-Client-Ip']);
+    if (az) {
+      const hop = firstPublicHop(az);
+      if (hop) return hop;
+    }
   }
 
   if (bodyIp) {
@@ -80,5 +83,15 @@ export function requestClientIp(req: IpRequest, bodyIp?: string | null): string 
     req.headers ?? {},
     req.ip ?? req.socket?.remoteAddress,
     bodyIp,
+  );
+}
+
+/** Rate limits: ignore spoofable x-az-client-ip / body IP. */
+export function requestRateLimitIp(req: IpRequest): string | null {
+  return extractClientIp(
+    req.headers ?? {},
+    req.ip ?? req.socket?.remoteAddress,
+    null,
+    { trustAzHeader: false },
   );
 }

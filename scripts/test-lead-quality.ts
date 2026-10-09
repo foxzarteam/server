@@ -3,7 +3,7 @@
  * From server/:  npm run test:leads
  */
 import assert from 'assert';
-import { extractClientIp } from '../src/common/client-ip';
+import { extractClientIp, requestRateLimitIp } from '../src/common/client-ip';
 import {
   buildLocationLabel,
   isPrivateOrLocalIp,
@@ -40,6 +40,12 @@ assert.strictEqual(
 assert.strictEqual(
   extractClientIp({ 'x-forwarded-for': '8.8.8.8' }, null, '203.0.113.99'),
   '203.0.113.99',
+);
+assert.strictEqual(
+  requestRateLimitIp({
+    headers: { 'x-az-client-ip': '203.0.113.10', 'x-forwarded-for': '198.51.100.7' },
+  }),
+  '198.51.100.7',
 );
 
 // —— private ranges ——

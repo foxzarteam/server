@@ -17,7 +17,7 @@ import {
 } from '@nestjs/common';
 import type { Request } from 'express';
 import { AdminCrmGuard, AdminOnlyGuard } from '../common/admin-crm.guard';
-import { requestClientIp } from '../common/client-ip';
+import { requestRateLimitIp } from '../common/client-ip';
 import { issuePartnerToken } from '../common/partner-session';
 import { allowRateLimitedAction } from '../security/rate-limit';
 import {
@@ -37,7 +37,7 @@ export class UsersController {
   constructor(private readonly usersService: UsersService) {}
 
   private clientIp(req: Request): string | null {
-    return requestClientIp(req);
+    return requestRateLimitIp(req);
   }
 
   private withPartnerToken(user: Record<string, unknown>) {

@@ -8,7 +8,7 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import type { Request } from 'express';
-import { requestClientIp } from '../common/client-ip';
+import { requestRateLimitIp } from '../common/client-ip';
 import { allowRateLimitedAction } from '../security/rate-limit';
 import { AdminLoginDto } from './auth.dto';
 import { AuthService } from './auth.service';
@@ -21,7 +21,7 @@ export class AuthController {
   @HttpCode(HttpStatus.OK)
   async login(@Body() dto: AdminLoginDto, @Req() req: Request) {
     const emailKey = dto.email.trim().toLowerCase();
-    const ip = requestClientIp(req) || 'unknown';
+    const ip = requestRateLimitIp(req) || 'unknown';
     if (
       !allowRateLimitedAction(`admin-login:${emailKey}`, 8, 60_000) ||
       !allowRateLimitedAction(`admin-login-ip:${ip}`, 20, 60_000)

@@ -8,7 +8,7 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import type { Request } from 'express';
-import { requestClientIp } from '../common/client-ip';
+import { requestRateLimitIp } from '../common/client-ip';
 import { allowRateLimitedAction } from '../security/rate-limit';
 import { SendOtpDto, VerifyFirebaseOtpDto } from './otp.dto';
 import { OtpService } from './otp.service';
@@ -21,7 +21,7 @@ export class OtpController {
   @Post('request-send')
   @HttpCode(HttpStatus.OK)
   async requestSend(@Body() dto: SendOtpDto, @Req() req: Request) {
-    const ip = requestClientIp(req) ?? 'unknown';
+    const ip = requestRateLimitIp(req) ?? 'unknown';
     if (!allowRateLimitedAction(`otp-request-ip:${ip}`, 12, 60_000)) {
       throw new BadRequestException('Too many OTP requests. Please try again in a minute.');
     }
@@ -30,7 +30,11 @@ export class OtpController {
 
   @Post('verify-firebase')
   @HttpCode(HttpStatus.OK)
-  async verifyFirebase(@Body() dto: VerifyFirebaseOtpDto) {
+  async verifyFirebase(@Body() dto: VerifyFirebaseOtpDto, @Req() req: Request) {
+    const ip = requestRateLimitIp(req) ?? 'unknown';
+    if (!allowRateLimitedAction(`otp-verify-ip:${ip}`, 20, 60_000)) {
+      throw new BadRequestException('Too many verification attempts. Please try again in a minute.');
+    }
     return this.otpService.verifyFirebaseToken(dto);
   }
 }

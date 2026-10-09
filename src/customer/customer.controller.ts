@@ -14,7 +14,7 @@ import {
 } from '@nestjs/common';
 import type { Request } from 'express';
 import { InternalKeyGuard } from '../common/admin-crm.guard';
-import { requestClientIp } from '../common/client-ip';
+import { requestRateLimitIp } from '../common/client-ip';
 import { allowRateLimitedAction } from '../security/rate-limit';
 
 import {
@@ -34,7 +34,7 @@ export class CustomerController {
   @HttpCode(HttpStatus.OK)
   async checkMobile(@Body() dto: CheckMobileDto, @Req() req: Request) {
     const mobile = dto.mobileNumber.trim();
-    const ip = requestClientIp(req) ?? 'unknown';
+    const ip = requestRateLimitIp(req) ?? 'unknown';
     if (!allowRateLimitedAction(`check-mobile:${mobile}:${ip}`, 5, 60_000)) {
       throw new BadRequestException('Too many attempts. Try again in a minute.');
     }
@@ -50,7 +50,7 @@ export class CustomerController {
   @HttpCode(HttpStatus.OK)
   async login(@Body() dto: CustomerLoginDto, @Req() req: Request) {
     const mobile = dto.mobileNumber.trim();
-    const ip = requestClientIp(req) ?? 'unknown';
+    const ip = requestRateLimitIp(req) ?? 'unknown';
     if (
       !allowRateLimitedAction(`customer-login:${mobile}:${ip}`, 5, 60_000) ||
       !allowRateLimitedAction(`customer-login-ip:${ip}`, 20, 60_000)

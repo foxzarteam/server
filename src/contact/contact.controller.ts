@@ -15,7 +15,7 @@ import {
 } from '@nestjs/common';
 import type { Request } from 'express';
 import { AdminCrmGuard, AdminOnlyGuard } from '../common/admin-crm.guard';
-import { requestClientIp } from '../common/client-ip';
+import { requestRateLimitIp } from '../common/client-ip';
 import { allowRateLimitedAction } from '../security/rate-limit';
 import { CreateContactDto, TaxCalculatorLeadDto, UpdateContactDto } from './contact.dto';
 import { ContactService } from './contact.service';
@@ -48,7 +48,7 @@ export class ContactController {
   @HttpCode(HttpStatus.OK)
   async createTaxCalculatorLead(@Body() dto: TaxCalculatorLeadDto, @Req() req: Request) {
     const phoneKey = dto.phone.replace(/\D/g, '').slice(0, 10);
-    const ip = requestClientIp(req) || 'unknown';
+    const ip = requestRateLimitIp(req) || 'unknown';
 
     // Silent throttle — still return success so the UI reveals nothing
     if (
