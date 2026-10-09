@@ -90,8 +90,8 @@ export function alreadyAdminMessaged(messages: { role: string; kind?: string }[]
   return messages.some((item) => item.role === 'assistant' && item.kind === 'admin');
 }
 
-export function alreadyKycDocsAsked(messages: { role: string; kind?: string }[]): boolean {
-  return messages.some((item) => item.role === 'assistant' && item.kind === 'kyc_docs');
+export function alreadyKycDocsAsked(messages: { role: string; kind?: string; sendError?: string }[]): boolean {
+  return messages.some((item) => item.role === 'assistant' && item.kind === 'kyc_docs' && !item.sendError);
 }
 
 export function isKycStartClick(buttonId: string, text: string): boolean {

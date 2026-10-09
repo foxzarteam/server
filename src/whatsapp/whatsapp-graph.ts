@@ -2,8 +2,8 @@ import type { ChatMessage } from './whatsapp-chat';
 import { welcomeInteractive, welcomeText } from './whatsapp-templates';
 
 export const GRAPH_VERSION = 'v21.0';
-export const GRAPH_SEND_MS = 8_000;
-export const GRAPH_UPLOAD_MS = 8_000;
+export const GRAPH_SEND_MS = 15_000;
+export const GRAPH_UPLOAD_MS = 15_000;
 
 export function isGraphTimeout(error?: string): boolean {
   return /timeout|aborted|abort/i.test(error || '');
@@ -68,7 +68,7 @@ export function graphMessageBody(phone: string, message: ChatMessage): Record<st
   };
 }
 
-export async function postGraphMessage(
+async function postGraphOnce(
   token: string,
   fromId: string,
   payload: Record<string, unknown>,
@@ -84,15 +84,21 @@ export async function postGraphMessage(
       body: JSON.stringify(payload),
       signal: AbortSignal.timeout(GRAPH_SEND_MS),
     });
-    if (!res.ok) {
-      const error = await metaErrorText(res);
-      console.error('WhatsappService.sendWhatsapp', error);
-      return { ok: false, error };
-    }
+    if (!res.ok) return { ok: false, error: await metaErrorText(res) };
     return { ok: true };
   } catch (error) {
     const fail = error instanceof Error ? error.message : 'WhatsApp send failed';
-    console.error('WhatsappService.sendWhatsapp', fail);
     return { ok: false, error: fail.slice(0, 300) };
   }
+}
+
+export async function postGraphMessage(
+  token: string,
+  fromId: string,
+  payload: Record<string, unknown>,
+): Promise<{ ok: boolean; error?: string }> {
+  const first = await postGraphOnce(token, fromId, payload);
+  const sent = first.ok || !isGraphTimeout(first.error) ? first : await postGraphOnce(token, fromId, payload);
+  if (!sent.ok) console.error('WhatsappService.sendWhatsapp', sent.error);
+  return sent;
 }

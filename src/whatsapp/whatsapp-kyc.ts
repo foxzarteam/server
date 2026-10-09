@@ -17,12 +17,7 @@ export const KYC_STATUS_BTN = 'Application Status Check Karein';
 export function kycChatText(name: string, category: string): string {
   const who = kycBodyName(name);
   const product = kycProductName(category);
-  return [
-    `Hello ${who}! 'Apni Zaroorat' par apni details dene ke liye shukriya.`,
-    '',
-    `Aapki ${product} file turant aage badhane ke liye mujhe kuch basic details aur KYC verify karni hain.`,
-    'Kya hum abhi process start kar sakte hain?',
-  ].join('\n');
+  return `Hello ${who}! Apni Zaroorat par details dene ke liye shukriya. Aapki ${product} file ke liye KYC start karein.`;
 }
 
 export function kycGraphPayload(phone: string, name: string, category: string, lang: string): Record<string, unknown> {

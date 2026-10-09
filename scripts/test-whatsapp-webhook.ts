@@ -4,6 +4,7 @@
  */
 import assert from 'assert';
 import { createHmac } from 'crypto';
+import { isGraphTimeout } from '../src/whatsapp/whatsapp-graph';
 import { whatsappHubChallenge, whatsappSignatureOk } from '../src/whatsapp/whatsapp-verify';
 import { adminTargetPhone, canonicalWhatsappPhone, extractInboundMessages } from '../src/whatsapp/whatsapp-inbound';
 import { decryptSettingsJson, encryptSettingsJson } from '../src/whatsapp/settings-crypto';
@@ -197,6 +198,7 @@ assert.ok(!isKycStartClick('Application Status Check Karein', ''));
 assert.ok(alreadyAdminMessaged([{ role: 'assistant', kind: 'admin' }]));
 assert.ok(!alreadyAdminMessaged([{ role: 'assistant', kind: 'welcome' }]));
 assert.ok(alreadyKycDocsAsked([{ role: 'assistant', kind: 'kyc_docs' }]));
+assert.ok(!alreadyKycDocsAsked([{ role: 'assistant', kind: 'kyc_docs', sendError: 'timeout' }]));
 const docs = kycDocsRequestText();
 assert.ok(/PAN Card/.test(docs));
 assert.ok(/Aadhaar Card/.test(docs));
@@ -206,7 +208,7 @@ assert.strictEqual(asChat({ messages: [{ id: 'docs:1', role: 'assistant', kind: 
 const kycView = kycChatText('Atul', 'personal_loan');
 assert.ok(/Hello Atul!/.test(kycView));
 assert.ok(/Personal Loan file/.test(kycView));
-assert.ok(/KYC verify/.test(kycView));
+assert.ok(/KYC start karein/.test(kycView));
 assert.ok(/Haan, KYC Start/.test(KYC_START_BTN));
 
 const pdfIn = extractInboundMessages({
@@ -234,5 +236,7 @@ const pdfIn = extractInboundMessages({
 assert.strictEqual(pdfIn[0].waType, 'document');
 assert.strictEqual(pdfIn[0].mediaId, 'media-pdf-1');
 assert.strictEqual(pdfIn[0].filename, 'pan.pdf');
+assert.ok(isGraphTimeout('The operation was aborted due to timeout'));
+assert.ok(!isGraphTimeout('131047: Message expired'));
 
 console.log('test-whatsapp-webhook: all asserts passed');
