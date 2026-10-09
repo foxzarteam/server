@@ -309,29 +309,34 @@ export class WhatsappService implements OnModuleInit {
     return `[${message.type} message]`;
   }
 
+  private inboundUserMessage(message: InboundWhatsappMessage): ChatMessage {
+    return {
+      id: message.messageId,
+      role: 'user',
+      text: message.text || (message.waType === 'image' ? 'Photo' : message.filename || message.waType || this.userText(message)),
+      at: new Date().toISOString(),
+      ...(message.waType ? { waType: message.waType } : {}),
+      ...(message.mediaId ? { mediaId: message.mediaId } : {}),
+      ...(message.mime ? { mime: message.mime } : {}),
+      ...(message.filename ? { filename: message.filename } : {}),
+    };
+  }
+
   private async handleInbound(settings: WhatsappSettings, message: InboundWhatsappMessage) {
     const assistantId = `ai:${message.messageId}`;
     if (this.sentIds.has(assistantId) || this.inflight.has(message.messageId)) return;
     this.inflight.add(message.messageId);
     try {
       const phone = canonicalWhatsappPhone(message.phone);
-      if (!this.flowMem.has(phone)) await this.ensureFlow(phone);
+      const kycClick = isKycStartClick(message.buttonId, message.text);
+      if (kycClick) this.seedKycFlow(phone);
+      else await this.ensureFlowFast(phone);
+
       const seen = this.flowMem.get(phone)?.ids;
       if (seen?.has(message.messageId) || seen?.has(assistantId)) return;
 
-      const userMessage: ChatMessage = {
-        id: message.messageId,
-        role: 'user',
-        text: message.text || (message.waType === 'image' ? 'Photo' : message.filename || message.waType || this.userText(message)),
-        at: new Date().toISOString(),
-        ...(message.waType ? { waType: message.waType } : {}),
-        ...(message.mediaId ? { mediaId: message.mediaId } : {}),
-        ...(message.mime ? { mime: message.mime } : {}),
-        ...(message.filename ? { filename: message.filename } : {}),
-      };
-
+      const userMessage = this.inboundUserMessage(message);
       const choice = productChoice(message.buttonId, message.text);
-      const kycClick = isKycStartClick(message.buttonId, message.text);
       let reply = this.decideReply(phone, message, assistantId);
       if (reply && !choice && !kycClick && !allowRateLimitedAction(`wa-in:${phone}`, 20, 10 * 60_000)) {
         reply = {
@@ -344,18 +349,25 @@ export class WhatsappService implements OnModuleInit {
         };
       }
 
-      if (reply) {
-        const result = await this.sendWhatsapp(settings, phone, reply, message.phoneNumberId);
-        if (result.ok) {
-          this.rememberSent(assistantId);
-          reply.sent = true;
-          this.noteFlow(phone, reply);
-        } else if (result.error) {
-          reply.sendError = result.error;
+      this.rememberIds(phone, [userMessage.id]);
+      this.queuePersist(phone, () =>
+        this.persistInbound(phone, message.profileName, userMessage, null, message.phoneNumberId),
+      );
+
+      if (!reply) return;
+
+      this.noteFlow(phone, reply);
+      const result = await this.sendWhatsapp(settings, phone, reply, message.phoneNumberId);
+      if (result.ok) {
+        this.rememberSent(assistantId);
+        reply.sent = true;
+      } else {
+        reply.sendError = result.error;
+        if (reply.kind === 'kyc_docs') {
+          const mem = this.flowMem.get(phone);
+          if (mem) mem.kycDocs = false;
         }
       }
-
-      this.rememberIds(phone, [userMessage.id, ...(reply ? [reply.id] : [])]);
       this.queuePersist(phone, () =>
         this.persistInbound(phone, message.profileName, userMessage, reply, message.phoneNumberId),
       );
@@ -364,37 +376,54 @@ export class WhatsappService implements OnModuleInit {
     }
   }
 
-  /** Wait for any in-flight save, then load welcome/product flags from DB once. */
-  private async ensureFlow(phone: string) {
+  /** KYC Start: no DB wait. Hydrate in the background. */
+  private seedKycFlow(phone: string) {
     if (this.flowMem.has(phone)) return;
-    await (this.persistTail.get(phone) ?? Promise.resolve());
+    const seed = emptyFlow();
+    seed.kyc = true;
+    seed.welcomed = true;
+    this.flowMem.set(phone, seed);
+    void this.hydrateFlow(phone);
+  }
+
+  /** Known KYC numbers skip DB. Everyone else: one read, never wait on a pending save. */
+  private async ensureFlowFast(phone: string) {
     if (this.flowMem.has(phone)) return;
+    if (this.kycTemplateSent.has(phone)) {
+      const seed = emptyFlow();
+      seed.kyc = true;
+      seed.welcomed = true;
+      this.flowMem.set(phone, seed);
+      void this.hydrateFlow(phone);
+      return;
+    }
     await this.hydrateFlow(phone);
   }
 
   private async hydrateFlow(phone: string) {
     const row = await this.readByPhone(phone);
     const messages = row?.chat.messages ?? [];
-    const offered = alreadyOfferedProduct(messages);
-    const thanked = alreadyThanked(messages);
-    const kycDocs = alreadyKycDocsAsked(messages);
-    const kyc = alreadyKycStarted(messages) || kycDocs;
+    const prev = this.flowMem.get(phone) || emptyFlow();
+    if (!prev.ids) prev.ids = new Set();
+    const offered = alreadyOfferedProduct(messages) || prev.offered;
+    const thanked = alreadyThanked(messages) || prev.thanked;
+    const kycDocs = alreadyKycDocsAsked(messages) || prev.kycDocs;
+    const kyc = alreadyKycStarted(messages) || kycDocs || prev.kyc;
     if (kyc) this.rememberKycPhone(phone);
-    let product: ProductChoice | undefined;
+    let product: ProductChoice | undefined = prev.product;
     for (const item of messages) {
       if (item.role === 'assistant' && (item.kind === 'personal_loan' || item.kind === 'insurance')) {
         product = item.kind;
       }
     }
-    this.flowMem.set(phone, {
-      welcomed: alreadyWelcomed(messages) || offered || thanked || kyc || alreadyAdminMessaged(messages),
-      offered,
-      thanked,
-      kyc,
-      kycDocs,
-      ...(product ? { product } : {}),
-      ids: new Set(messages.map((item) => item.id)),
-    });
+    for (const item of messages) prev.ids.add(item.id);
+    prev.welcomed = prev.welcomed || alreadyWelcomed(messages) || offered || thanked || kyc || alreadyAdminMessaged(messages);
+    prev.offered = offered;
+    prev.thanked = thanked;
+    prev.kyc = kyc;
+    prev.kycDocs = kycDocs;
+    if (product) prev.product = product;
+    this.flowMem.set(phone, prev);
   }
 
   private decideReply(phone: string, message: InboundWhatsappMessage, assistantId: string): ChatMessage | null {
