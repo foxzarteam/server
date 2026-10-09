@@ -713,6 +713,8 @@ export class WhatsappService implements OnModuleInit {
     if (cat !== 'personal_loan' && cat !== 'insurance') return;
     if (!/^[0-9]{8,15}$/.test(phone) || this.kycTemplateSent.has(phone)) return;
     this.rememberKycPhone(phone);
+    const existing = await this.readByPhone(phone);
+    if (alreadyKycStarted(existing?.chat.messages ?? [])) return;
 
     const settings = this.settings.peekEffective() ?? (await this.settings.getEffective());
     const token = settings.accessToken.trim().replace(/^bearer\s+/i, '').trim();

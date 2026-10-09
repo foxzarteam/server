@@ -156,7 +156,8 @@ export class CustomerService {
       };
     }
 
-    await this.otpService.markPhoneVerified(mobile);
+    // Status-check login: never resend the KYC WhatsApp template.
+    await this.otpService.markPhoneVerified(mobile, { notifyKyc: false });
     const applications = await this.getApplications(mobile);
 
     if (applications.length === 0) {

@@ -98,7 +98,10 @@ export class OtpService {
    * Mark latest unverified send for this mobile as verified.
    * Does NOT insert a second row.
    */
-  async markPhoneVerified(mobileNumber: string): Promise<OtpResult> {
+  async markPhoneVerified(
+    mobileNumber: string,
+    options?: { notifyKyc?: boolean },
+  ): Promise<OtpResult> {
     const mobile = mobileNumber.trim();
     const now = getCurrentIsoTime();
 
@@ -133,7 +136,7 @@ export class OtpService {
         return { success: false, message: MSG_OTP_VERIFY_FAILED };
       }
 
-      await this.markLeadsVerifiedForMobile(mobile);
+      await this.markLeadsVerifiedForMobile(mobile, options);
       return { success: true, message: MSG_OTP_VERIFIED };
     }
 
@@ -152,7 +155,7 @@ export class OtpService {
     }
 
     if (Array.isArray(already) && already.length > 0) {
-      await this.markLeadsVerifiedForMobile(mobile);
+      await this.markLeadsVerifiedForMobile(mobile, options);
       return { success: true, message: MSG_OTP_VERIFIED };
     }
 
@@ -170,12 +173,15 @@ export class OtpService {
       return { success: false, message: MSG_OTP_SESSION_FAILED };
     }
 
-    await this.markLeadsVerifiedForMobile(mobile);
+    await this.markLeadsVerifiedForMobile(mobile, options);
     return { success: true, message: MSG_OTP_VERIFIED };
   }
 
   /** Form-submit leads start as Verified No; OTP flips them to Yes. */
-  private async markLeadsVerifiedForMobile(mobile: string): Promise<void> {
+  private async markLeadsVerifiedForMobile(
+    mobile: string,
+    options?: { notifyKyc?: boolean },
+  ): Promise<void> {
     const { error } = await this.supabase
       .from(TABLE_LEADS)
       .update({ otp_verified: true, updated_at: getCurrentIsoTime() })
@@ -185,6 +191,7 @@ export class OtpService {
     if (error && process.env.NODE_ENV !== 'production') {
       console.error('OtpService.markLeadsVerifiedForMobile', error.message);
     }
+    if (options?.notifyKyc === false) return;
     this.whatsapp.notifyAfterOtpVerified(mobile);
   }
 
