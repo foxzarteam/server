@@ -496,27 +496,30 @@ export class LeadsService {
   }> {
     const category = normalizeStoredCategory(input.category);
     const ins = normalizeStoredInsType(category, input.insType);
-    if (category === 'insurance') {
-      if (!ins) {
-        return {
-          allowed: false,
-          message: 'Please select insurance type.',
-          category,
-          categoryLabel: categoryLabel(category),
-        };
-      }
-      const insOk = await this.servicesService.isAllowedInsuranceType(ins);
-      if (!insOk) {
-        return {
-          allowed: false,
-          message: 'Invalid insurance type.',
-          category,
-          categoryLabel: categoryLabel(category),
-        };
-      }
+    if (category === 'insurance' && !ins) {
+      return {
+        allowed: false,
+        message: 'Please select insurance type.',
+        category,
+        categoryLabel: categoryLabel(category),
+      };
     }
 
-    const limit = await this.checkMobilePanLimit(input.mobileNumber, input.pan);
+    const [insOk, limit, blocking] = await Promise.all([
+      category === 'insurance' && ins
+        ? this.servicesService.isAllowedInsuranceType(ins)
+        : Promise.resolve(true),
+      this.checkMobilePanLimit(input.mobileNumber, input.pan),
+      this.findBlockingSameCategoryLead(input.mobileNumber, input.pan, category, ins),
+    ]);
+    if (!insOk) {
+      return {
+        allowed: false,
+        message: 'Invalid insurance type.',
+        category,
+        categoryLabel: categoryLabel(category),
+      };
+    }
     if (!limit.allowed) {
       return {
         allowed: false,
@@ -527,13 +530,6 @@ export class LeadsService {
         insType: ins,
       };
     }
-
-    const blocking = await this.findBlockingSameCategoryLead(
-      input.mobileNumber,
-      input.pan,
-      category,
-      ins,
-    );
     if (blocking && String(blocking['id'] ?? '') !== String(input.ignoreLeadId ?? '')) {
       const status =
         String(blocking.status ?? 'pending').trim().toLowerCase() || 'pending';
@@ -775,7 +771,11 @@ export class LeadsService {
     }
 
     // Prefer exact product match; fall back to untyped insurance draft for upgrade.
-    let byMobile = await this.getByMobileAndCategory(mobile, category, ins);
+    const [byMobileHit, agentId] = await Promise.all([
+      this.getByMobileAndCategory(mobile, category, ins),
+      this.usersService.getIdByReferralCode(dto.referralCode),
+    ]);
+    let byMobile = byMobileHit;
     if ((!byMobile || !isDraftLead(byMobile)) && category === 'insurance' && ins) {
       const draftAny = await this.getByMobileAndCategory(mobile, category, null);
       if (draftAny && isDraftLead(draftAny)) {
@@ -823,7 +823,6 @@ export class LeadsService {
     };
 
     // Public apply: never trust client-supplied userId (referral via code only).
-    const agentId = await this.usersService.getIdByReferralCode(dto.referralCode);
     if (agentId) payload.agent_id = agentId;
     Object.assign(payload, this.ipFields(meta?.clientIp));
     if (category === 'personal_loan') {
@@ -882,7 +881,7 @@ export class LeadsService {
           };
         }
         this.scheduleIpLocationFill(String(byMobile.id), meta?.clientIp);
-        await this.panAudit.record({
+        void this.panAudit.record({
           leadId: String(byMobile.id),
           action: 'update',
           reason: 'public_apply_upgrade_draft',
@@ -905,7 +904,7 @@ export class LeadsService {
     const lead = data;
     if (lead.id) {
       this.scheduleIpLocationFill(String(lead.id), meta?.clientIp);
-      await this.panAudit.record({
+      void this.panAudit.record({
         leadId: String(lead.id),
         action: 'create',
         reason: 'public_apply',

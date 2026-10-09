@@ -89,8 +89,8 @@ export class ServicesService {
   async isAllowedInsuranceType(slug: string): Promise<boolean> {
     const t = slug.trim().toLowerCase();
     if (!INS_TYPE_SLUG_PATTERN.test(t)) return false;
-    const types = await this.fetchActiveInsuranceTypes();
-    return types.some((x) => x.value === t);
+    const { insuranceTypes } = await this.getPublicCatalog();
+    return insuranceTypes.some((x) => x.value === t);
   }
 
   async getAll(): Promise<Record<string, unknown>[]> {
