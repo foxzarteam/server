@@ -2,8 +2,8 @@ import type { ChatMessage } from './whatsapp-chat';
 import { welcomeInteractive, welcomeText } from './whatsapp-templates';
 
 export const GRAPH_VERSION = 'v21.0';
-export const GRAPH_SEND_MS = 15_000;
-export const GRAPH_UPLOAD_MS = 15_000;
+export const GRAPH_SEND_MS = 8_000;
+export const GRAPH_UPLOAD_MS = 8_000;
 
 export function isGraphTimeout(error?: string): boolean {
   return /timeout|aborted|abort/i.test(error || '');
@@ -97,8 +97,7 @@ export async function postGraphMessage(
   fromId: string,
   payload: Record<string, unknown>,
 ): Promise<{ ok: boolean; error?: string }> {
-  const first = await postGraphOnce(token, fromId, payload);
-  const sent = first.ok || !isGraphTimeout(first.error) ? first : await postGraphOnce(token, fromId, payload);
+  const sent = await postGraphOnce(token, fromId, payload);
   if (!sent.ok) console.error('WhatsappService.sendWhatsapp', sent.error);
   return sent;
 }

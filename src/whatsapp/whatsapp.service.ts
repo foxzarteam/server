@@ -129,7 +129,6 @@ export class WhatsappService implements OnModuleInit {
     }
 
     const inbound = extractInboundMessages(payload);
-    void this.warmTemplateMedia(settings);
     void this.dispatchInbound(settings, inbound);
     return 'ok';
   }
@@ -349,25 +348,23 @@ export class WhatsappService implements OnModuleInit {
         };
       }
 
-      this.rememberIds(phone, [userMessage.id]);
-      this.queuePersist(phone, () =>
-        this.persistInbound(phone, message.profileName, userMessage, null, message.phoneNumberId),
-      );
+      this.rememberIds(phone, [userMessage.id, ...(reply ? [reply.id] : [])]);
+      if (reply) this.noteFlow(phone, reply);
 
-      if (!reply) return;
-
-      this.noteFlow(phone, reply);
-      const result = await this.sendWhatsapp(settings, phone, reply, message.phoneNumberId);
-      if (result.ok) {
-        this.rememberSent(assistantId);
-        reply.sent = true;
-      } else {
-        reply.sendError = result.error;
-        if (reply.kind === 'kyc_docs') {
-          const mem = this.flowMem.get(phone);
-          if (mem) mem.kycDocs = false;
+      if (reply) {
+        const result = await this.sendWhatsapp(settings, phone, reply, message.phoneNumberId);
+        if (result.ok) {
+          this.rememberSent(assistantId);
+          reply.sent = true;
+        } else {
+          reply.sendError = result.error;
+          if (reply.kind === 'kyc_docs') {
+            const mem = this.flowMem.get(phone);
+            if (mem) mem.kycDocs = false;
+          }
         }
       }
+
       this.queuePersist(phone, () =>
         this.persistInbound(phone, message.profileName, userMessage, reply, message.phoneNumberId),
       );
@@ -376,14 +373,13 @@ export class WhatsappService implements OnModuleInit {
     }
   }
 
-  /** KYC Start: no DB wait. Hydrate in the background. */
+  /** KYC Start: no DB wait. */
   private seedKycFlow(phone: string) {
     if (this.flowMem.has(phone)) return;
     const seed = emptyFlow();
     seed.kyc = true;
     seed.welcomed = true;
     this.flowMem.set(phone, seed);
-    void this.hydrateFlow(phone);
   }
 
   /** Known KYC numbers skip DB. Everyone else: one read, never wait on a pending save. */
@@ -508,6 +504,18 @@ export class WhatsappService implements OnModuleInit {
       console.error('WhatsappService.persistInbound', error);
     });
     this.persistTail.set(phone, next);
+  }
+
+  private waitPersist(phone: string, fn: () => Promise<void>): Promise<void> {
+    return new Promise((resolve) => {
+      this.queuePersist(phone, async () => {
+        try {
+          await fn();
+        } finally {
+          resolve();
+        }
+      });
+    });
   }
 
   private async persistInbound(
@@ -641,7 +649,9 @@ export class WhatsappService implements OnModuleInit {
     } else if (result.error) {
       message.sendError = result.error;
     }
-    await this.appendMessage(row.phone, profileName, message, row.chat.waPhoneNumberId);
+    await this.waitPersist(row.phone, async () => {
+      await this.appendMessage(row.phone, profileName, message, row.chat.waPhoneNumberId);
+    });
   }
 
   /** Only one worker sends a given reply. A stale claim can be taken again after a crash. */
@@ -716,7 +726,9 @@ export class WhatsappService implements OnModuleInit {
       waType: 'text',
     };
     this.noteFlow(phone, message);
-    void this.appendMessage(phone, name, message);
+    this.queuePersist(phone, async () => {
+      await this.appendMessage(phone, name, message);
+    });
   }
 
   private async sendWhatsapp(
@@ -734,7 +746,9 @@ export class WhatsappService implements OnModuleInit {
       console.error('WhatsappService.sendWhatsapp', error);
       return { ok: false, error };
     }
-    const outbound = await this.withTemplateImage(settings, fromId, message);
+    const needsImage =
+      message.waType === 'image' || message.kind === 'personal_loan' || message.kind === 'insurance';
+    const outbound = needsImage ? await this.withTemplateImage(settings, fromId, message) : message;
     const payload = graphMessageBody(phone, outbound);
     if (!payload) return { ok: false, error: 'Nothing to send.' };
     const sent = await postGraphMessage(token, fromId, payload);
