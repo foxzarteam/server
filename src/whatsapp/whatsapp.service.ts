@@ -6,6 +6,7 @@ import { TABLE_LEADS, TABLE_WP_ENQUIRIES } from '../common/constants';
 import { LEAD_DRAFT_FULL_NAME } from '../leads/lead-draft';
 import { normalizeStoredCategory } from '../leads/lead-present';
 import { SUPABASE_CLIENT } from '../config/supabase';
+import { isGreeting, pickBotReply } from './whatsapp-bot-rules';
 import { allowRateLimitedAction } from '../security/rate-limit';
 import {
   asChat,
@@ -32,7 +33,6 @@ import { kycChatText, kycGraphPayload, KYC_START_BTN, KYC_STATUS_BTN, KYC_TEMPLA
 import { WhatsappSettings, WhatsappSettingsService } from './whatsapp-settings.service';
 import { whatsappSignatureOk } from './whatsapp-verify';
 import {
-  alreadyAdminMessaged,
   alreadyKycDocsAsked,
   alreadyKycStarted,
   alreadyOfferedProduct,
@@ -340,7 +340,15 @@ export class WhatsappService implements OnModuleInit {
       const userMessage = this.inboundUserMessage(message);
       const choice = productChoice(message.buttonId, message.text);
       let reply = this.decideReply(phone, message, assistantId);
-      if (reply && !choice && !kycClick && !statusClick && !allowRateLimitedAction(`wa-in:${phone}`, 20, 10 * 60_000)) {
+      if (
+        reply &&
+        reply.kind !== 'welcome' &&
+        !choice &&
+        !kycClick &&
+        !statusClick &&
+        !isGreeting(message.text) &&
+        !allowRateLimitedAction(`wa-in:${phone}`, 20, 10 * 60_000)
+      ) {
         reply = {
           id: assistantId,
           role: 'assistant',
@@ -376,12 +384,11 @@ export class WhatsappService implements OnModuleInit {
     }
   }
 
-  /** KYC Start / Status check: no DB wait. Marks the thread so welcome/thanks do not follow. */
+  /** KYC Start / Status check: no DB wait. Does not count as Namaste welcome. */
   private seedKycFlow(phone: string) {
     const seed = this.flowMem.get(phone) || emptyFlow();
     if (!seed.ids) seed.ids = new Set();
     seed.kyc = true;
-    seed.welcomed = true;
     this.flowMem.set(phone, seed);
   }
 
@@ -391,7 +398,6 @@ export class WhatsappService implements OnModuleInit {
     if (this.kycTemplateSent.has(phone)) {
       const seed = emptyFlow();
       seed.kyc = true;
-      seed.welcomed = true;
       this.flowMem.set(phone, seed);
       void this.hydrateFlow(phone);
       return;
@@ -416,7 +422,7 @@ export class WhatsappService implements OnModuleInit {
       }
     }
     for (const item of messages) prev.ids.add(item.id);
-    prev.welcomed = prev.welcomed || alreadyWelcomed(messages) || offered || thanked || kyc || alreadyAdminMessaged(messages);
+    prev.welcomed = prev.welcomed || alreadyWelcomed(messages) || offered || thanked;
     prev.offered = offered;
     prev.thanked = thanked;
     prev.kyc = kyc;
@@ -428,9 +434,16 @@ export class WhatsappService implements OnModuleInit {
   private decideReply(phone: string, message: InboundWhatsappMessage, assistantId: string): ChatMessage | null {
     const name = message.profileName || '';
     const mem = this.flowMem.get(phone);
-    const kycDone = Boolean(mem?.kyc || this.kycTemplateSent.has(phone));
-    if (isKycStartClick(message.buttonId, message.text)) {
-      if (mem?.kycDocs) return null;
+    const picked = pickBotReply(message.buttonId, message.text, {
+      kyc: Boolean(mem?.kyc || this.kycTemplateSent.has(phone)),
+      kycDocs: Boolean(mem?.kycDocs),
+      welcomed: Boolean(mem?.welcomed),
+      offered: Boolean(mem?.offered),
+      thanked: Boolean(mem?.thanked),
+      product: mem?.product,
+    });
+    if (picked.kind === null) return null;
+    if (picked.kind === 'kyc_docs') {
       return {
         id: assistantId,
         role: 'assistant',
@@ -441,7 +454,7 @@ export class WhatsappService implements OnModuleInit {
         waType: 'text',
       };
     }
-    if (isKycStatusClick(message.buttonId, message.text)) {
+    if (picked.kind === 'status') {
       return {
         id: assistantId,
         role: 'assistant',
@@ -452,14 +465,10 @@ export class WhatsappService implements OnModuleInit {
         waType: 'text',
       };
     }
-    const choice = productChoice(message.buttonId, message.text);
-    if (choice === 'personal_loan' || choice === 'insurance') {
-      if (mem?.product === choice) return null;
-      return this.productTemplateMessage(assistantId, name, choice);
+    if (picked.kind === 'personal_loan' || picked.kind === 'insurance') {
+      return this.productTemplateMessage(assistantId, name, picked.kind);
     }
-    if (kycDone) return null;
-    if (mem?.welcomed || mem?.offered) {
-      if (mem.offered || mem.thanked) return null;
+    if (picked.kind === 'thanks') {
       return {
         id: assistantId,
         role: 'assistant',
@@ -493,15 +502,12 @@ export class WhatsappService implements OnModuleInit {
     if (reply.kind === 'thanks') prev.thanked = true;
     if (reply.kind === 'kyc') {
       prev.kyc = true;
-      prev.welcomed = true;
       this.rememberKycPhone(phone);
     }
     if (reply.kind === 'kyc_docs') {
       prev.kycDocs = true;
       prev.kyc = true;
-      prev.welcomed = true;
     }
-    if (reply.kind === 'status') prev.welcomed = true;
     prev.ids.add(reply.id);
     this.flowMem.set(phone, prev);
   }

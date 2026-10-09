@@ -10,6 +10,7 @@ import { adminTargetPhone, canonicalWhatsappPhone, extractInboundMessages } from
 import { decryptSettingsJson, encryptSettingsJson } from '../src/whatsapp/settings-crypto';
 import { asChat } from '../src/whatsapp/whatsapp-chat';
 import { kycBodyName, kycChatText, kycGraphPayload, kycProductName, KYC_START_BTN, KYC_TEMPLATE, KYC_TEMPLATE_LANG } from '../src/whatsapp/whatsapp-kyc';
+import { isGreeting, pickBotReply } from '../src/whatsapp/whatsapp-bot-rules';
 import {
   alreadyAdminMessaged,
   alreadyKycDocsAsked,
@@ -254,5 +255,20 @@ assert.strictEqual(pdfIn[0].mediaId, 'media-pdf-1');
 assert.strictEqual(pdfIn[0].filename, 'pan.pdf');
 assert.ok(isGraphTimeout('The operation was aborted due to timeout'));
 assert.ok(!isGraphTimeout('131047: Message expired'));
+
+assert.ok(isGreeting('Hello'));
+assert.ok(isGreeting('hi'));
+assert.ok(isGreeting('Namaste'));
+assert.ok(isGreeting('hello 👋'));
+assert.ok(!isGreeting('I need a loan update'));
+const idle = { kyc: false, kycDocs: false, welcomed: false, offered: false, thanked: false };
+assert.strictEqual(pickBotReply('', 'Hello', idle).kind, 'welcome');
+assert.strictEqual(pickBotReply('', 'Hello', { ...idle, welcomed: true }).kind, null);
+assert.strictEqual(pickBotReply('', 'Hello', { ...idle, kyc: true, welcomed: false }).kind, null);
+assert.strictEqual(pickBotReply('', 'ok', { ...idle, kyc: true }).kind, null);
+assert.strictEqual(pickBotReply('Haan, KYC Start Karein', '', idle).kind, 'kyc_docs');
+assert.strictEqual(pickBotReply('Application Status Check Karein', '', idle).kind, 'status');
+assert.strictEqual(pickBotReply('personal_loan', '', idle).kind, 'personal_loan');
+assert.strictEqual(pickBotReply('', 'thanks', { ...idle, welcomed: true }).kind, 'thanks');
 
 console.log('test-whatsapp-webhook: all asserts passed');
