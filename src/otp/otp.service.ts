@@ -98,10 +98,7 @@ export class OtpService {
    * Mark latest unverified send for this mobile as verified.
    * Does NOT insert a second row.
    */
-  async markPhoneVerified(
-    mobileNumber: string,
-    options?: { notifyKyc?: boolean },
-  ): Promise<OtpResult> {
+  async markPhoneVerified(mobileNumber: string): Promise<OtpResult> {
     const mobile = mobileNumber.trim();
     const now = getCurrentIsoTime();
 
@@ -136,7 +133,7 @@ export class OtpService {
         return { success: false, message: MSG_OTP_VERIFY_FAILED };
       }
 
-      await this.markLeadsVerifiedForMobile(mobile, options);
+      await this.markLeadsVerifiedForMobile(mobile);
       return { success: true, message: MSG_OTP_VERIFIED };
     }
 
@@ -155,7 +152,7 @@ export class OtpService {
     }
 
     if (Array.isArray(already) && already.length > 0) {
-      await this.markLeadsVerifiedForMobile(mobile, options);
+      await this.markLeadsVerifiedForMobile(mobile);
       return { success: true, message: MSG_OTP_VERIFIED };
     }
 
@@ -173,15 +170,24 @@ export class OtpService {
       return { success: false, message: MSG_OTP_SESSION_FAILED };
     }
 
-    await this.markLeadsVerifiedForMobile(mobile, options);
+    await this.markLeadsVerifiedForMobile(mobile);
     return { success: true, message: MSG_OTP_VERIFIED };
   }
 
   /** Form-submit leads start as Verified No; OTP flips them to Yes. */
-  private async markLeadsVerifiedForMobile(
-    mobile: string,
-    options?: { notifyKyc?: boolean },
-  ): Promise<void> {
+  private async markLeadsVerifiedForMobile(mobile: string): Promise<void> {
+    const { data: unverified, error: peekErr } = await this.supabase
+      .from(TABLE_LEADS)
+      .select('id')
+      .eq('mobile_number', mobile)
+      .eq('is_active', true)
+      .or('otp_verified.eq.false,otp_verified.is.null')
+      .limit(1);
+
+    if (peekErr && process.env.NODE_ENV !== 'production') {
+      console.error('OtpService.markLeadsVerifiedForMobile peek', peekErr.message);
+    }
+
     const { error } = await this.supabase
       .from(TABLE_LEADS)
       .update({ otp_verified: true, updated_at: getCurrentIsoTime() })
@@ -191,7 +197,9 @@ export class OtpService {
     if (error && process.env.NODE_ENV !== 'production') {
       console.error('OtpService.markLeadsVerifiedForMobile', error.message);
     }
-    if (options?.notifyKyc === false) return;
+
+    const firstVerify = Boolean(peekErr) || (Array.isArray(unverified) && unverified.length > 0);
+    if (!firstVerify) return;
     this.whatsapp.notifyAfterOtpVerified(mobile);
   }
 
