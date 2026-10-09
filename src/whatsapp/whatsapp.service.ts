@@ -363,17 +363,8 @@ export class WhatsappService implements OnModuleInit {
       if (reply) this.noteFlow(phone, reply);
 
       if (reply) {
-        const result = await this.sendWhatsapp(settings, phone, reply, message.phoneNumberId);
-        if (result.ok) {
-          this.rememberSent(assistantId);
-          reply.sent = true;
-        } else {
-          reply.sendError = result.error;
-          if (reply.kind === 'kyc_docs') {
-            const mem = this.flowMem.get(phone);
-            if (mem) mem.kycDocs = false;
-          }
-        }
+        reply.sent = true;
+        void this.deliverBotReply(settings, phone, reply, message.phoneNumberId);
       }
 
       this.queuePersist(phone, () =>
@@ -403,6 +394,30 @@ export class WhatsappService implements OnModuleInit {
       return;
     }
     await this.hydrateFlow(phone);
+  }
+
+  /** Graph POST starts now; inbound must not wait for Meta's HTTP ack (was blocking the next reply). */
+  private async deliverBotReply(
+    settings: WhatsappSettings,
+    phone: string,
+    reply: ChatMessage,
+    waPhoneNumberId: string,
+  ) {
+    const result = await this.sendWhatsapp(settings, phone, reply, waPhoneNumberId);
+    if (result.ok) {
+      this.rememberSent(reply.id);
+      return;
+    }
+    reply.sent = false;
+    reply.sendError = result.error;
+    if (reply.kind === 'kyc_docs') {
+      const mem = this.flowMem.get(phone);
+      if (mem) mem.kycDocs = false;
+    }
+    console.error('WhatsappService.deliverBotReply', result.error);
+    this.queuePersist(phone, async () => {
+      await this.noteSendError(phone, reply.id, result.error || 'WhatsApp send failed');
+    });
   }
 
   private async hydrateFlow(phone: string) {
