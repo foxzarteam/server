@@ -12,7 +12,7 @@ export type ChatMessage = {
   sendingAt?: string;
   sendError?: string;
   replyBy?: 'template' | 'admin';
-  kind?: 'welcome' | 'personal_loan' | 'insurance' | 'status' | 'admin' | 'thanks' | 'kyc';
+  kind?: 'welcome' | 'personal_loan' | 'insurance' | 'status' | 'admin' | 'thanks' | 'kyc' | 'kyc_docs';
   waType?: 'text' | 'interactive' | 'image' | 'document' | 'audio' | 'video';
   mediaId?: string;
   mediaUrl?: string;
@@ -63,6 +63,7 @@ export type WhatsappEnquiryDetail = {
     filename?: string;
     mime?: string;
     hasMedia?: boolean;
+    buttons?: string[];
   }[];
 };
 
@@ -71,12 +72,13 @@ export type FlowMem = {
   offered: boolean;
   thanked: boolean;
   kyc: boolean;
+  kycDocs: boolean;
   product?: ProductChoice;
   ids: Set<string>;
 };
 
 export function emptyFlow(): FlowMem {
-  return { welcomed: false, offered: false, thanked: false, kyc: false, ids: new Set() };
+  return { welcomed: false, offered: false, thanked: false, kyc: false, kycDocs: false, ids: new Set() };
 }
 
 export function asChat(raw: unknown): ChatDoc {
@@ -119,7 +121,8 @@ export function asChat(raw: unknown): ChatDoc {
       row.kind === 'status' ||
       row.kind === 'admin' ||
       row.kind === 'thanks' ||
-      row.kind === 'kyc'
+      row.kind === 'kyc' ||
+      row.kind === 'kyc_docs'
         ? row.kind
         : undefined;
     const waType =

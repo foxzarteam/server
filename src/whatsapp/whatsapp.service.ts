@@ -4,7 +4,7 @@ import { join } from 'path';
 import { SupabaseClient } from '@supabase/supabase-js';
 import { TABLE_LEADS, TABLE_WP_ENQUIRIES } from '../common/constants';
 import { LEAD_DRAFT_FULL_NAME } from '../leads/lead-draft';
-import { isDraftLead, normalizeStoredCategory, productLabel, statusLabel } from '../leads/lead-present';
+import { normalizeStoredCategory } from '../leads/lead-present';
 import { SUPABASE_CLIENT } from '../config/supabase';
 import { allowRateLimitedAction } from '../security/rate-limit';
 import {
@@ -27,15 +27,19 @@ import {
   metaErrorText,
   postGraphMessage,
 } from './whatsapp-graph';
-import { canonicalWhatsappPhone, extractInboundMessages, InboundWhatsappMessage } from './whatsapp-inbound';
-import { kycBodyName, kycGraphPayload, kycProductName, KYC_TEMPLATE_LANGS } from './whatsapp-kyc';
+import { adminTargetPhone, canonicalWhatsappPhone, extractInboundMessages, InboundWhatsappMessage } from './whatsapp-inbound';
+import { kycChatText, kycGraphPayload, KYC_START_BTN, KYC_STATUS_BTN, KYC_TEMPLATE_LANG } from './whatsapp-kyc';
 import { WhatsappSettings, WhatsappSettingsService } from './whatsapp-settings.service';
 import { whatsappSignatureOk } from './whatsapp-verify';
 import {
+  alreadyAdminMessaged,
+  alreadyKycDocsAsked,
   alreadyKycStarted,
   alreadyOfferedProduct,
   alreadyThanked,
   alreadyWelcomed,
+  isKycStartClick,
+  kycDocsRequestText,
   insuranceText,
   personalLoanText,
   productChoice,
@@ -48,29 +52,15 @@ import {
 
 export type { WhatsappEnquiryDetail, WhatsappEnquiryListItem } from './whatsapp-chat';
 
-const LEAD_LOOKUP_MS = 1_500;
-const EXISTING_MARK = 'EXISTING\n';
-const STATUS_LOOKUP_RETRY =
-  'Namaste ji 🙏 Aapki application ka status abhi nahi nikal paaya. Kripya thodi der baad ek baar message karein.';
 const MAX_ADMIN_FILE = 16 * 1024 * 1024;
 const ADMIN_UPLOAD_MIME =
-  /^(image\/(jpeg|png|webp)|application\/pdf|audio\/(mpeg|ogg)|video\/mp4|application\/msword|application\/vnd\.openxmlformats-officedocument\.wordprocessingml\.document)$/i;
-
-function existingStatusText(name: string, lines: { product: string; status: string }[]): string {
-  const who = name ? `${name} ji` : 'ji';
-  const body =
-    lines.length === 1
-      ? `Aapki ${lines[0].product} application ka status: ${lines[0].status}.`
-      : `Aapki applications ka status:\n${lines.map((line) => `${line.product}: ${line.status}`).join('\n')}`;
-  return `Namaste ${who} 🙏\n\n${body}\n\nApni Zaroorat team isi WhatsApp number pe aapko update degi.`;
-}
+  /^(image\/(jpeg|jpg|png|webp|gif)|audio\/(aac|mp4|mpeg|amr|ogg|opus)|video\/(mp4|3gpp|quicktime)|application\/pdf|text\/(plain|csv)|application\/msword|application\/vnd\.(ms-|openxmlformats-)|application\/zip)/i;
 
 @Injectable()
 export class WhatsappService implements OnModuleInit {
   private linkCache: { until: number; url: string | null } | null = null;
   private mediaIdCache = new Map<string, { id: string; until: number }>();
   private mediaUploadInflight = new Map<string, Promise<string>>();
-  private leadRouteCache = new Map<string, { until: number; action: 'new' } | { until: number; action: 'existing'; text: string }>();
   private sentIds = new Set<string>();
   private inflight = new Set<string>();
   private flowMem = new Map<string, FlowMem>();
@@ -253,6 +243,8 @@ export class WhatsappService implements OnModuleInit {
         ...(item.waType ? { waType: item.waType } : {}),
         ...(item.filename ? { filename: item.filename } : {}),
         ...(item.mime ? { mime: item.mime } : {}),
+        ...(item.kind === 'kyc' ? { buttons: [KYC_START_BTN, KYC_STATUS_BTN] } : {}),
+        ...(item.kind === 'welcome' ? { buttons: ['Personal Loan', 'Insurance'] } : {}),
         ...(item.mediaId || item.filename === 'wa_ins.jpg' || item.filename === 'wa_loa.jpg' ? { hasMedia: true } : {}),
       })),
     };
@@ -339,8 +331,9 @@ export class WhatsappService implements OnModuleInit {
       };
 
       const choice = productChoice(message.buttonId, message.text);
+      const kycClick = isKycStartClick(message.buttonId, message.text);
       let reply = this.decideReply(phone, message, assistantId);
-      if (reply && !choice && !allowRateLimitedAction(`wa-in:${phone}`, 20, 10 * 60_000)) {
+      if (reply && !choice && !kycClick && !allowRateLimitedAction(`wa-in:${phone}`, 20, 10 * 60_000)) {
         reply = {
           id: assistantId,
           role: 'assistant',
@@ -384,7 +377,8 @@ export class WhatsappService implements OnModuleInit {
     const messages = row?.chat.messages ?? [];
     const offered = alreadyOfferedProduct(messages);
     const thanked = alreadyThanked(messages);
-    const kyc = alreadyKycStarted(messages);
+    const kycDocs = alreadyKycDocsAsked(messages);
+    const kyc = alreadyKycStarted(messages) || kycDocs;
     if (kyc) this.rememberKycPhone(phone);
     let product: ProductChoice | undefined;
     for (const item of messages) {
@@ -393,10 +387,11 @@ export class WhatsappService implements OnModuleInit {
       }
     }
     this.flowMem.set(phone, {
-      welcomed: alreadyWelcomed(messages) || offered || thanked || kyc,
+      welcomed: alreadyWelcomed(messages) || offered || thanked || kyc || alreadyAdminMessaged(messages),
       offered,
       thanked,
       kyc,
+      kycDocs,
       ...(product ? { product } : {}),
       ids: new Set(messages.map((item) => item.id)),
     });
@@ -406,6 +401,18 @@ export class WhatsappService implements OnModuleInit {
     const name = message.profileName || '';
     const mem = this.flowMem.get(phone);
     const kycDone = Boolean(mem?.kyc || this.kycTemplateSent.has(phone));
+    if (isKycStartClick(message.buttonId, message.text)) {
+      if (mem?.kycDocs) return null;
+      return {
+        id: assistantId,
+        role: 'assistant',
+        text: kycDocsRequestText(),
+        at: new Date().toISOString(),
+        replyBy: 'template',
+        kind: 'kyc_docs',
+        waType: 'text',
+      };
+    }
     const choice = productChoice(message.buttonId, message.text);
     if (choice === 'personal_loan' || choice === 'insurance') {
       if (mem?.product === choice) return null;
@@ -450,6 +457,11 @@ export class WhatsappService implements OnModuleInit {
       prev.welcomed = true;
       this.rememberKycPhone(phone);
     }
+    if (reply.kind === 'kyc_docs') {
+      prev.kycDocs = true;
+      prev.kyc = true;
+      prev.welcomed = true;
+    }
     prev.ids.add(reply.id);
     this.flowMem.set(phone, prev);
   }
@@ -487,248 +499,32 @@ export class WhatsappService implements OnModuleInit {
     }
   }
 
-  private buildCustomerReply(
-    settings: WhatsappSettings,
-    row: EnquiryRow | null,
-    message: InboundWhatsappMessage,
-    assistantId: string,
-    route: { action: 'new' } | { action: 'silent' } | { action: 'template'; text: string },
-  ): ChatMessage | null {
-    if (route.action === 'silent') return null;
-    const at = new Date().toISOString();
-    if (route.action === 'template') {
-      return {
-        id: assistantId,
-        role: 'assistant',
-        text: route.text,
-        at,
-        replyBy: 'template',
-        kind: 'status',
-        waType: 'text',
-      };
-    }
-    const messages = row?.chat.messages ?? [];
-    const name = message.profileName || row?.chat.profileName || '';
-    const choice = productChoice(message.buttonId, message.text);
-    if (choice === 'personal_loan' || choice === 'insurance') {
-      return this.productTemplateMessage(assistantId, name, choice);
-    }
-    if (!alreadyWelcomed(messages)) {
-      return {
-        id: assistantId,
-        role: 'assistant',
-        text: welcomeText(name),
-        at,
-        replyBy: 'template',
-        kind: 'welcome',
-        waType: 'interactive',
-      };
-    }
-    if (alreadyOfferedProduct(messages) || alreadyThanked(messages)) return null;
-    return {
-      id: assistantId,
+  async adminStartChat(rawPhone: string, text: string): Promise<{ ok: boolean; error?: string; data?: WhatsappEnquiryDetail }> {
+    const phone = adminTargetPhone(rawPhone);
+    if (!phone) return { ok: false, error: 'Enter a valid 10-digit Indian mobile number.' };
+    const caption = text.trim().slice(0, 4000);
+    if (!caption) return { ok: false, error: 'Type the first message.' };
+
+    const existing = await this.readByPhone(phone);
+    if (existing) return this.adminReply(existing.id, caption);
+
+    const settings = await this.settings.getEffective();
+    const message: ChatMessage = {
+      id: `admin:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`,
       role: 'assistant',
-      text: thankYouText(name),
-      at,
-      replyBy: 'template',
-      kind: 'thanks',
+      text: caption,
+      at: new Date().toISOString(),
+      replyBy: 'admin',
+      kind: 'admin',
       waType: 'text',
     };
-  }
-
-  private async ensureReply(
-    settings: WhatsappSettings,
-    row: EnquiryRow,
-    message: InboundWhatsappMessage,
-    assistantId: string,
-  ) {
-    const assistant = row.chat.messages.find((item) => item.id === assistantId);
-    if (assistant?.sent) return;
-    if (assistant) {
-      await this.deliver(settings, row.phone, assistant);
-      return;
-    }
-    await this.answerCustomer(settings, row, message, assistantId, false);
-  }
-
-  /** Existing lead: one status template. New number: welcome buttons or product template. Else wait for admin. */
-  private async answerCustomer(
-    settings: WhatsappSettings,
-    row: EnquiryRow,
-    message: InboundWhatsappMessage,
-    assistantId: string,
-    rateLimit: boolean,
-  ) {
-    const route = await this.routeCustomer(message.phone, row.chat.leadNote, row.chat.messages);
-    if (route.action === 'silent') return;
-    if (route.action === 'template') {
-      await this.storeAndSend(settings, row, message.profileName, {
-        id: assistantId,
-        role: 'assistant',
-        text: route.text,
-        at: new Date().toISOString(),
-        replyBy: 'template',
-        kind: 'status',
-        waType: 'text',
-      });
-      return;
-    }
-    if (rateLimit && !allowRateLimitedAction(`wa-in:${message.phone}`, 20, 10 * 60_000)) {
-      await this.storeAndSend(settings, row, message.profileName, {
-        id: assistantId,
-        role: 'assistant',
-        text: 'Please wait a few minutes before sending more messages.',
-        at: new Date().toISOString(),
-        replyBy: 'template',
-        waType: 'text',
-      });
-      return;
-    }
-    const name = message.profileName || row.chat.profileName;
-    const choice = productChoice(message.buttonId, message.text);
-    if (choice === 'personal_loan' || choice === 'insurance') {
-      await this.storeAndSend(
-        settings,
-        row,
-        name,
-        this.productTemplateMessage(assistantId, name, choice),
-      );
-      return;
-    }
-    if (!alreadyWelcomed(row.chat.messages)) {
-      await this.storeAndSend(settings, row, name, {
-        id: assistantId,
-        role: 'assistant',
-        text: welcomeText(name),
-        at: new Date().toISOString(),
-        replyBy: 'template',
-        kind: 'welcome',
-        waType: 'interactive',
-      });
-      return;
-    }
-    if (alreadyOfferedProduct(row.chat.messages) || alreadyThanked(row.chat.messages)) return;
-    await this.storeAndSend(settings, row, name, {
-      id: assistantId,
-      role: 'assistant',
-      text: thankYouText(name),
-      at: new Date().toISOString(),
-      replyBy: 'template',
-      kind: 'thanks',
-      waType: 'text',
-    });
-  }
-
-  /**
-   * Existing lead: one fixed status message, then silence. New lead: templates only.
-   * Leads are only read. A failed lookup is not saved, so the next message can try again.
-   */
-  private async routeCustomer(
-    phone: string,
-    savedLeadNote: string | undefined,
-    messages: ChatMessage[],
-  ): Promise<{ action: 'new' } | { action: 'silent' } | { action: 'template'; text: string }> {
-    if (savedLeadNote === '') {
-      this.leadRouteCache.set(canonicalWhatsappPhone(phone), { until: Date.now() + 15 * 60_000, action: 'new' });
-      return { action: 'new' };
-    }
-    if (savedLeadNote?.startsWith(EXISTING_MARK)) {
-      const text = savedLeadNote.slice(EXISTING_MARK.length).trim();
-      const told = messages.some((item) => item.role === 'assistant' && item.text.trim() === text);
-      return told || !text ? { action: 'silent' } : { action: 'template', text };
-    }
-
-    if (savedLeadNote === undefined && alreadyWelcomed(messages)) {
-      const known = this.leadRouteCache.get(canonicalWhatsappPhone(phone));
-      if (known && known.until > Date.now() && known.action === 'new') return { action: 'new' };
-    }
-    const cached = this.leadRouteCache.get(canonicalWhatsappPhone(phone));
-    if (cached && cached.until > Date.now()) {
-      if (cached.action === 'new') return { action: 'new' };
-      const told = messages.some((item) => item.role === 'assistant' && item.text.trim() === cached.text);
-      return told || !cached.text ? { action: 'silent' } : { action: 'template', text: cached.text };
-    }
-
-    const template = await this.existingStatusTemplateFast(phone);
-    if (template === 'timeout') return { action: 'new' };
-    if (template === null) return { action: 'template', text: STATUS_LOOKUP_RETRY };
-
-    const key = canonicalWhatsappPhone(phone);
-    if (template) {
-      this.leadRouteCache.set(key, { until: Date.now() + 15 * 60_000, action: 'existing', text: template });
-    } else {
-      this.leadRouteCache.set(key, { until: Date.now() + 15 * 60_000, action: 'new' });
-    }
-    void this.rememberLeadNote(phone, template ? `${EXISTING_MARK}${template}` : '', savedLeadNote !== undefined);
-    return template ? { action: 'template', text: template } : { action: 'new' };
-  }
-
-  /** Saves the first lookup so later replies do not query leads again. */
-  private async rememberLeadNote(phone: string, leadNote: string, overwrite = false): Promise<void> {
-    const key = canonicalWhatsappPhone(phone);
-    const current = await this.readByPhone(key);
-    if (!current) return;
-    const prev = current.chat.leadNote;
-    if (!overwrite && prev !== undefined) return;
-    if (overwrite && (prev === '' || prev?.startsWith(EXISTING_MARK))) return;
-    const chat: ChatDoc = { ...current.chat, leadNote: leadNote.slice(0, 1500) };
-    const { error } = await this.table
-      .update({ chat, updated_at: new Date().toISOString() })
-      .eq('id', current.id)
-      .eq('updated_at', current.updated_at);
-    if (error) console.error('WhatsappService.rememberLeadNote', error.message);
-  }
-
-  /** If CRM is slow, send the welcome instead of stalling the WhatsApp reply. */
-  private async existingStatusTemplateFast(phone: string): Promise<string | null | 'timeout'> {
-    const timeout = new Promise<'timeout'>((resolve) => {
-      setTimeout(() => resolve('timeout'), LEAD_LOOKUP_MS);
-    });
-    const result = await Promise.race([this.existingStatusTemplate(phone), timeout]);
-    return result === 'timeout' ? 'timeout' : result;
-  }
-
-  /** Read-only. Returns the fixed status message, "" for a new number, or null if the lookup failed. */
-  private async existingStatusTemplate(phone: string): Promise<string | null> {
-    const canonical = canonicalWhatsappPhone(phone);
-    const ten = canonical.startsWith('91') && canonical.length === 12 ? canonical.slice(2) : canonical;
-    if (!/^[6-9]\d{9}$/.test(ten)) return '';
-
-    const { data, error } = await this.supabase
-      .from(TABLE_LEADS)
-      .select('full_name, mobile_number, category, ins_type, status, pan, is_active')
-      .in('mobile_number', [ten, `91${ten}`])
-      .eq('is_active', true)
-      .order('created_at', { ascending: false })
-      .limit(10);
-
-    if (error) {
-      console.error('WhatsappService.existingStatusTemplate', error.message);
-      return null;
-    }
-
-    const rows = ((data as Record<string, unknown>[]) ?? []).filter((row) => {
-      const stored = String(row.mobile_number ?? '').replace(/\D/g, '');
-      return stored.endsWith(ten) && !isDraftLead(row);
-    });
-    if (!rows.length) return '';
-
-    const name = String(rows.find((row) => String(row.full_name ?? '').trim())?.full_name ?? '')
-      .trim()
-      .replace(/\s+/g, ' ');
-    const latest = new Map<string, Record<string, unknown>>();
-    for (const row of rows) {
-      const category = normalizeStoredCategory(String(row.category ?? ''));
-      if (!category || latest.has(category)) continue;
-      latest.set(category, row);
-    }
-    if (!latest.size) return '';
-
-    const lines = [...latest.values()].map((row) => ({
-      product: productLabel(row),
-      status: statusLabel(row.status),
-    }));
-    return existingStatusText(name, lines);
+    const result = await this.sendWhatsapp(settings, phone, message, settings.phoneNumberId);
+    if (!result.ok) return { ok: false, error: result.error || 'Could not send this message.' };
+    message.sent = true;
+    const saved = await this.appendMessage(phone, '', message, settings.phoneNumberId);
+    if (!saved) return { ok: false, error: 'Sent, but chat could not be saved.' };
+    const data = await this.getForAdmin(saved.row.id);
+    return data ? { ok: true, data } : { ok: false, error: 'Sent, but chat could not be reloaded.' };
   }
 
   async adminReply(
@@ -819,16 +615,6 @@ export class WhatsappService implements OnModuleInit {
     await this.appendMessage(row.phone, profileName, message, row.chat.waPhoneNumberId);
   }
 
-  /** Resend replies that were saved but never delivered (Meta will not always retry). */
-  private async flushUnsent(settings: WhatsappSettings, phone: string) {
-    const row = await this.readByPhone(phone);
-    if (!row) return;
-    const pending = row.chat.messages.filter((item) => item.role === 'assistant' && !item.sent).slice(-5);
-    for (const item of pending) {
-      await this.deliver(settings, phone, item);
-    }
-  }
-
   /** Only one worker sends a given reply. A stale claim can be taken again after a crash. */
   private async deliver(settings: WhatsappSettings, phone: string, message: ChatMessage) {
     const claimed = await this.claimSend(phone, message.id);
@@ -883,28 +669,17 @@ export class WhatsappService implements OnModuleInit {
       return;
     }
 
-    const who = kycBodyName(name);
-    const product = kycProductName(cat);
-    let lastError = '';
-    let ok = false;
-    for (const lang of KYC_TEMPLATE_LANGS) {
-      const sent = await postGraphMessage(token, fromId, kycGraphPayload(phone, name, cat, lang));
-      if (sent.ok) {
-        ok = true;
-        break;
-      }
-      lastError = sent.error || lastError;
-    }
-    if (!ok) {
+    const sent = await postGraphMessage(token, fromId, kycGraphPayload(phone, name, cat, KYC_TEMPLATE_LANG));
+    if (!sent.ok) {
       this.kycTemplateSent.delete(phone);
-      console.error('WhatsappService.dispatchKycTemplate', lastError);
+      console.error('WhatsappService.dispatchKycTemplate', sent.error);
       return;
     }
 
     const message: ChatMessage = {
       id: `kyc:${phone}`,
       role: 'assistant',
-      text: `${who} · ${product}`,
+      text: kycChatText(name, cat),
       at: new Date().toISOString(),
       sent: true,
       replyBy: 'template',

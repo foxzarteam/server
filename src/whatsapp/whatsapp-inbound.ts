@@ -24,11 +24,42 @@ function digits(value: unknown): string {
   return String(value ?? '').replace(/\D/g, '');
 }
 
+function inboundMedia(
+  msg: UnknownRecord,
+  type: string,
+): { mediaId: string; mime: string; filename: string; text: string; waType: NonNullable<InboundWhatsappMessage['waType']> } | null {
+  const keys =
+    type === 'voice' || type === 'ptt' ? [type, 'audio', 'voice'] : type === 'sticker' ? ['sticker', 'image'] : [type];
+  let media: UnknownRecord | null = null;
+  for (const key of keys) {
+    media = asRecord(msg[key]);
+    if (media) break;
+  }
+  const id = String(media?.id ?? '').trim();
+  if (!id || id.length > 200) return null;
+  const waType: NonNullable<InboundWhatsappMessage['waType']> =
+    type === 'document' ? 'document' : type === 'video' ? 'video' : type === 'audio' || type === 'voice' || type === 'ptt' ? 'audio' : 'image';
+  return {
+    mediaId: id,
+    mime: String(media?.mime_type ?? '').trim().slice(0, 80),
+    filename: String(media?.filename ?? '').trim().slice(0, 180),
+    text: String(media?.caption ?? '').trim(),
+    waType,
+  };
+}
+
 /** Same person, one key: 9876543210 and 919876543210 both become 919876543210. */
 export function canonicalWhatsappPhone(raw: string): string {
   let phone = digits(raw).replace(/^0+/, '');
   if (phone.length === 10 && /^[6-9]/.test(phone)) phone = `91${phone}`;
   return phone;
+}
+
+/** Admin start-chat: only a real Indian mobile, always stored as 91 + 10 digits. */
+export function adminTargetPhone(raw: string): string | null {
+  const canonical = canonicalWhatsappPhone(raw);
+  const ten = canonical.startsWith('91') && canonical.length === 12 ? canonical.slice(2) : canonical;
+  return /^[6-9]\d{9}$/.test(ten) ? `91${ten}` : null;
 }
 
 /**
@@ -75,18 +106,13 @@ export function extractInboundMessages(body: unknown): InboundWhatsappMessage[] 
           text = String(reply?.title ?? '').trim();
           buttonId = String(reply?.id ?? '').trim();
         } else {
-          const mediaKey = type === 'voice' ? 'voice' : type;
-          const media = asRecord(msg[mediaKey]);
-          const id = String(media?.id ?? '').trim();
-          if (id && id.length <= 200) {
-            mediaId = id;
-            mime = String(media?.mime_type ?? '').trim().slice(0, 80);
-            filename = String(media?.filename ?? '').trim().slice(0, 180);
-            text = String(media?.caption ?? '').trim();
-            if (type === 'image' || type === 'sticker') waType = 'image';
-            else if (type === 'document') waType = 'document';
-            else if (type === 'audio' || type === 'voice') waType = 'audio';
-            else if (type === 'video') waType = 'video';
+          const pulled = inboundMedia(msg, type);
+          if (pulled) {
+            mediaId = pulled.mediaId;
+            mime = pulled.mime;
+            filename = pulled.filename;
+            text = pulled.text;
+            waType = pulled.waType;
           }
         }
 

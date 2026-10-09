@@ -3,7 +3,7 @@ import type { RawBodyRequest } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import type { Request, Response } from 'express';
 import { AdminCrmGuard } from '../common/admin-crm.guard';
-import { UpdateWhatsappSettingsDto } from './whatsapp.dto';
+import { StartWhatsappChatDto, UpdateWhatsappSettingsDto } from './whatsapp.dto';
 import { WhatsappService } from './whatsapp.service';
 import { WhatsappSettingsService } from './whatsapp-settings.service';
 import { whatsappHubChallenge } from './whatsapp-verify';
@@ -56,6 +56,15 @@ export class WhatsappController {
   async adminEnquiries() {
     const data = await this.whatsapp.listForAdmin();
     return { success: true, data };
+  }
+
+  @Post('admin/enquiries')
+  @UseGuards(AdminCrmGuard)
+  @HttpCode(HttpStatus.OK)
+  async adminStartChat(@Body() dto: StartWhatsappChatDto) {
+    const result = await this.whatsapp.adminStartChat(dto.phone, dto.text);
+    if (!result.ok) throw new BadRequestException(result.error || 'Could not send.');
+    return { success: true, data: result.data };
   }
 
   @Get('admin/enquiries/:id')

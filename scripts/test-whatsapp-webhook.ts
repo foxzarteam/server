@@ -5,14 +5,18 @@
 import assert from 'assert';
 import { createHmac } from 'crypto';
 import { whatsappHubChallenge, whatsappSignatureOk } from '../src/whatsapp/whatsapp-verify';
-import { canonicalWhatsappPhone, extractInboundMessages } from '../src/whatsapp/whatsapp-inbound';
+import { adminTargetPhone, canonicalWhatsappPhone, extractInboundMessages } from '../src/whatsapp/whatsapp-inbound';
 import { decryptSettingsJson, encryptSettingsJson } from '../src/whatsapp/settings-crypto';
 import { asChat } from '../src/whatsapp/whatsapp-chat';
-import { kycBodyName, kycGraphPayload, kycProductName } from '../src/whatsapp/whatsapp-kyc';
+import { kycBodyName, kycChatText, kycGraphPayload, kycProductName, KYC_START_BTN, KYC_TEMPLATE_LANG } from '../src/whatsapp/whatsapp-kyc';
 import {
+  alreadyAdminMessaged,
+  alreadyKycDocsAsked,
   alreadyKycStarted,
   alreadyWelcomed,
   insuranceText,
+  isKycStartClick,
+  kycDocsRequestText,
   personalLoanText,
   productChoice,
   thankYouText,
@@ -94,6 +98,10 @@ const inbound = extractInboundMessages({
 assert.strictEqual(inbound.length, 1);
 assert.strictEqual(inbound[0].phone, '919876543210');
 assert.strictEqual(canonicalWhatsappPhone('9876543210'), '919876543210');
+assert.strictEqual(adminTargetPhone('9876543210'), '919876543210');
+assert.strictEqual(adminTargetPhone('+91 98765 43210'), '919876543210');
+assert.strictEqual(adminTargetPhone('12345'), null);
+assert.strictEqual(adminTargetPhone('5876543210'), null);
 assert.strictEqual(canonicalWhatsappPhone('+91 98765 43210'), '919876543210');
 assert.strictEqual(canonicalWhatsappPhone('919876543210'), '919876543210');
 assert.strictEqual(inbound[0].text, 'Hello');
@@ -153,11 +161,78 @@ const kycPayload = kycGraphPayload('919876543210', 'Raju Patel', 'insurance', 'e
   template: { name: string; language: { code: string }; components: { parameters: { text: string }[] }[] };
 };
 assert.strictEqual(kycPayload.template.name, 'application_kyc_start');
-assert.strictEqual(kycPayload.template.language.code, 'en_GB');
+assert.strictEqual(KYC_TEMPLATE_LANG, 'en_GB');
+assert.strictEqual(kycPayload.template.language.code, KYC_TEMPLATE_LANG);
 assert.strictEqual(kycPayload.template.components[0].parameters[0].text, 'Raju Patel');
 assert.strictEqual(kycPayload.template.components[0].parameters[1].text, 'Insurance');
 assert.ok(alreadyKycStarted([{ role: 'assistant', kind: 'kyc' }]));
 assert.ok(!alreadyKycStarted([{ role: 'assistant', kind: 'welcome' }]));
 assert.strictEqual(asChat({ messages: [{ id: 'kyc:1', role: 'assistant', kind: 'kyc', text: 'x' }] }).messages[0].kind, 'kyc');
+const kycBtn = extractInboundMessages({
+  object: 'whatsapp_business_account',
+  entry: [
+    {
+      changes: [
+        {
+          value: {
+            contacts: [{ profile: { name: 'Atul' }, wa_id: '919876543210' }],
+            messages: [
+              {
+                from: '919876543210',
+                id: 'wamid.kyc',
+                type: 'button',
+                button: { payload: 'Haan, KYC Start Karein', text: 'Haan, KYC Start Karein' },
+              },
+            ],
+          },
+        },
+      ],
+    },
+  ],
+});
+assert.ok(isKycStartClick(kycBtn[0].buttonId, kycBtn[0].text));
+assert.ok(isKycStartClick('Haan, KYC Start Karein', ''));
+assert.ok(isKycStartClick('', 'Haan, KYC Start Karein'));
+assert.ok(!isKycStartClick('Application Status Check Karein', ''));
+assert.ok(alreadyAdminMessaged([{ role: 'assistant', kind: 'admin' }]));
+assert.ok(!alreadyAdminMessaged([{ role: 'assistant', kind: 'welcome' }]));
+assert.ok(alreadyKycDocsAsked([{ role: 'assistant', kind: 'kyc_docs' }]));
+const docs = kycDocsRequestText();
+assert.ok(/PAN Card/.test(docs));
+assert.ok(/Aadhaar Card/.test(docs));
+assert.ok(/Bank Statement/i.test(docs));
+assert.ok(/Salary Slip/i.test(docs));
+assert.strictEqual(asChat({ messages: [{ id: 'docs:1', role: 'assistant', kind: 'kyc_docs', text: 'x' }] }).messages[0].kind, 'kyc_docs');
+const kycView = kycChatText('Atul', 'personal_loan');
+assert.ok(/Hello Atul!/.test(kycView));
+assert.ok(/Personal Loan file/.test(kycView));
+assert.ok(/KYC verify/.test(kycView));
+assert.ok(/Haan, KYC Start/.test(KYC_START_BTN));
+
+const pdfIn = extractInboundMessages({
+  object: 'whatsapp_business_account',
+  entry: [
+    {
+      changes: [
+        {
+          value: {
+            contacts: [{ profile: { name: 'Atul' }, wa_id: '919876543210' }],
+            messages: [
+              {
+                from: '919876543210',
+                id: 'wamid.pdf',
+                type: 'document',
+                document: { id: 'media-pdf-1', mime_type: 'application/pdf', filename: 'pan.pdf', caption: '' },
+              },
+            ],
+          },
+        },
+      ],
+    },
+  ],
+});
+assert.strictEqual(pdfIn[0].waType, 'document');
+assert.strictEqual(pdfIn[0].mediaId, 'media-pdf-1');
+assert.strictEqual(pdfIn[0].filename, 'pan.pdf');
 
 console.log('test-whatsapp-webhook: all asserts passed');

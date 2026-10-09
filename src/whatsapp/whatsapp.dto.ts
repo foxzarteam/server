@@ -1,4 +1,15 @@
-import { IsOptional, IsString, MaxLength } from 'class-validator';
+import { IsOptional, IsString, MaxLength, MinLength } from 'class-validator';
+
+export class StartWhatsappChatDto {
+  @IsString()
+  @MaxLength(20)
+  phone!: string;
+
+  @IsString()
+  @MinLength(1)
+  @MaxLength(4000)
+  text!: string;
+}
 
 export class UpdateWhatsappSettingsDto {
   @IsOptional()

@@ -85,3 +85,29 @@ export function alreadyWelcomed(messages: { role: string; kind?: string; text: s
 export function alreadyKycStarted(messages: { role: string; kind?: string }[]): boolean {
   return messages.some((item) => item.role === 'assistant' && item.kind === 'kyc');
 }
+
+export function alreadyAdminMessaged(messages: { role: string; kind?: string }[]): boolean {
+  return messages.some((item) => item.role === 'assistant' && item.kind === 'admin');
+}
+
+export function alreadyKycDocsAsked(messages: { role: string; kind?: string }[]): boolean {
+  return messages.some((item) => item.role === 'assistant' && item.kind === 'kyc_docs');
+}
+
+export function isKycStartClick(buttonId: string, text: string): boolean {
+  const blob = `${buttonId} ${text}`.toLowerCase();
+  return /kyc\s*start/.test(blob);
+}
+
+export function kycDocsRequestText(): string {
+  return [
+    'Great! 🎉',
+    '',
+    'Apni file aage badhane ke liye in 4 documents ki bilkul clear photo ya PDF isi chat me bhej dijiye:',
+    '',
+    '1️⃣ PAN Card 🪪',
+    '2️⃣ Aadhaar Card 🆔',
+    '3️⃣ Last 6 months bank statement 🏦',
+    '4️⃣ Last 3 months salary slip 📄',
+  ].join('\n');
+}

@@ -1,7 +1,7 @@
 import { normalizeStoredCategory } from '../leads/lead-present';
 
 export const KYC_TEMPLATE = 'application_kyc_start';
-export const KYC_TEMPLATE_LANGS = ['en_GB', 'en'] as const;
+export const KYC_TEMPLATE_LANG = 'en_GB';
 
 export function kycBodyName(name: string): string {
   return name.trim().replace(/[\r\n\t]+/g, ' ').replace(/\s+/g, ' ').slice(0, 200) || 'Customer';
@@ -9,6 +9,20 @@ export function kycBodyName(name: string): string {
 
 export function kycProductName(category: string): string {
   return normalizeStoredCategory(category) === 'insurance' ? 'Insurance' : 'Personal Loan';
+}
+
+export const KYC_START_BTN = 'Haan, KYC Start Karein';
+export const KYC_STATUS_BTN = 'Application Status Check Karein';
+
+export function kycChatText(name: string, category: string): string {
+  const who = kycBodyName(name);
+  const product = kycProductName(category);
+  return [
+    `Hello ${who}! 'Apni Zaroorat' par apni details dene ke liye shukriya.`,
+    '',
+    `Aapki ${product} file turant aage badhane ke liye mujhe kuch basic details aur KYC verify karni hain.`,
+    'Kya hum abhi process start kar sakte hain?',
+  ].join('\n');
 }
 
 export function kycGraphPayload(phone: string, name: string, category: string, lang: string): Record<string, unknown> {
