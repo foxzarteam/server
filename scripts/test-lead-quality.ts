@@ -13,6 +13,7 @@ import { leadFullNameError, personalLoanEmploymentError } from '../src/leads/per
 import { personalLoanAmountError } from '../src/wallet/loan-amount';
 import { sanitizePublicLead } from '../src/security/pan-crypto';
 import { slugToLeadCategory, isInsTypeSlug } from '../src/catalog/catalog';
+import { statusLabel } from '../src/leads/lead-present';
 
 // —— client IP ——
 assert.strictEqual(
@@ -110,5 +111,12 @@ assert.strictEqual(slugToLeadCategory('insurance'), 'insurance');
 assert.strictEqual(slugToLeadCategory('gold-loan'), 'gold_loan');
 assert.strictEqual(isInsTypeSlug('cyber_insurance'), true);
 assert.strictEqual(isInsTypeSlug('Travel Insurance'), false);
+
+assert.strictEqual(statusLabel('pending'), 'KYC pending');
+assert.strictEqual(statusLabel('in_process'), 'Under Review');
+assert.strictEqual(statusLabel('approved'), 'Approved');
+assert.strictEqual(statusLabel('rejected'), 'Not Approved');
+assert.strictEqual(statusLabel('action_required'), 'KYC pending');
+assert.strictEqual(statusLabel('PENDING'), 'KYC pending');
 
 console.log('test-lead-quality: all asserts passed');

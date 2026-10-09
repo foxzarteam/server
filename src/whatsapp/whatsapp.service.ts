@@ -39,7 +39,9 @@ import {
   alreadyThanked,
   alreadyWelcomed,
   isKycStartClick,
+  isKycStatusClick,
   kycDocsRequestText,
+  statusCheckText,
   insuranceText,
   personalLoanText,
   productChoice,
@@ -328,7 +330,8 @@ export class WhatsappService implements OnModuleInit {
     try {
       const phone = canonicalWhatsappPhone(message.phone);
       const kycClick = isKycStartClick(message.buttonId, message.text);
-      if (kycClick) this.seedKycFlow(phone);
+      const statusClick = isKycStatusClick(message.buttonId, message.text);
+      if (kycClick || statusClick) this.seedKycFlow(phone);
       else await this.ensureFlowFast(phone);
 
       const seen = this.flowMem.get(phone)?.ids;
@@ -337,7 +340,7 @@ export class WhatsappService implements OnModuleInit {
       const userMessage = this.inboundUserMessage(message);
       const choice = productChoice(message.buttonId, message.text);
       let reply = this.decideReply(phone, message, assistantId);
-      if (reply && !choice && !kycClick && !allowRateLimitedAction(`wa-in:${phone}`, 20, 10 * 60_000)) {
+      if (reply && !choice && !kycClick && !statusClick && !allowRateLimitedAction(`wa-in:${phone}`, 20, 10 * 60_000)) {
         reply = {
           id: assistantId,
           role: 'assistant',
@@ -373,10 +376,10 @@ export class WhatsappService implements OnModuleInit {
     }
   }
 
-  /** KYC Start: no DB wait. */
+  /** KYC Start / Status check: no DB wait. Marks the thread so welcome/thanks do not follow. */
   private seedKycFlow(phone: string) {
-    if (this.flowMem.has(phone)) return;
-    const seed = emptyFlow();
+    const seed = this.flowMem.get(phone) || emptyFlow();
+    if (!seed.ids) seed.ids = new Set();
     seed.kyc = true;
     seed.welcomed = true;
     this.flowMem.set(phone, seed);
@@ -438,6 +441,17 @@ export class WhatsappService implements OnModuleInit {
         waType: 'text',
       };
     }
+    if (isKycStatusClick(message.buttonId, message.text)) {
+      return {
+        id: assistantId,
+        role: 'assistant',
+        text: statusCheckText(),
+        at: new Date().toISOString(),
+        replyBy: 'template',
+        kind: 'status',
+        waType: 'text',
+      };
+    }
     const choice = productChoice(message.buttonId, message.text);
     if (choice === 'personal_loan' || choice === 'insurance') {
       if (mem?.product === choice) return null;
@@ -487,6 +501,7 @@ export class WhatsappService implements OnModuleInit {
       prev.kyc = true;
       prev.welcomed = true;
     }
+    if (reply.kind === 'status') prev.welcomed = true;
     prev.ids.add(reply.id);
     this.flowMem.set(phone, prev);
   }

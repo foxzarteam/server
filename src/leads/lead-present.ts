@@ -65,9 +65,8 @@ export function statusLabel(status: unknown): string {
     .toLowerCase();
   if (s === 'approved') return 'Approved';
   if (s === 'rejected') return 'Not Approved';
-  if (s === 'in_process') return 'In Process';
-  if (s === 'action_required') return 'Action Required';
-  return 'Under Review';
+  if (s === 'in_process') return 'Under Review';
+  return 'KYC pending';
 }
 
 export function blockingApplicationMessage(lead: Record<string, unknown>): string {

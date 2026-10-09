@@ -44,7 +44,6 @@ export const LEAD_STATUS_VALUES = [
   'in_process',
   'approved',
   'rejected',
-  'action_required',
 ] as const;
 
 export class CreateLeadDto {

@@ -341,7 +341,7 @@ function slotsFromHashes(hashes: string[]) {
   }
 }
 
-// —— extra: rejected/pending/action_required block; approved does not ——
+// —— extra: rejected/pending still block; leftover action_required also blocks; approved does not ——
 assert.strictEqual(isBlockingPanProductStatus('rejected', false), true);
 assert.strictEqual(isBlockingPanProductStatus('action_required', false), true);
 assert.strictEqual(isBlockingPanProductStatus('approved', false), false);

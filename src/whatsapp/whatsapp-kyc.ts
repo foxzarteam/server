@@ -1,6 +1,6 @@
 import { normalizeStoredCategory } from '../leads/lead-present';
 
-export const KYC_TEMPLATE = 'application_kyc_start';
+export const KYC_TEMPLATE = 'application_kyc';
 export const KYC_TEMPLATE_LANG = 'en_GB';
 
 export function kycBodyName(name: string): string {

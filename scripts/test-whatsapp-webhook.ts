@@ -9,7 +9,7 @@ import { whatsappHubChallenge, whatsappSignatureOk } from '../src/whatsapp/whats
 import { adminTargetPhone, canonicalWhatsappPhone, extractInboundMessages } from '../src/whatsapp/whatsapp-inbound';
 import { decryptSettingsJson, encryptSettingsJson } from '../src/whatsapp/settings-crypto';
 import { asChat } from '../src/whatsapp/whatsapp-chat';
-import { kycBodyName, kycChatText, kycGraphPayload, kycProductName, KYC_START_BTN, KYC_TEMPLATE_LANG } from '../src/whatsapp/whatsapp-kyc';
+import { kycBodyName, kycChatText, kycGraphPayload, kycProductName, KYC_START_BTN, KYC_TEMPLATE, KYC_TEMPLATE_LANG } from '../src/whatsapp/whatsapp-kyc';
 import {
   alreadyAdminMessaged,
   alreadyKycDocsAsked,
@@ -17,9 +17,11 @@ import {
   alreadyWelcomed,
   insuranceText,
   isKycStartClick,
+  isKycStatusClick,
   kycDocsRequestText,
   personalLoanText,
   productChoice,
+  statusCheckText,
   thankYouText,
   welcomeText,
 } from '../src/whatsapp/whatsapp-templates';
@@ -161,7 +163,8 @@ assert.strictEqual(kycProductName('insurance'), 'Insurance');
 const kycPayload = kycGraphPayload('919876543210', 'Raju Patel', 'insurance', 'en_GB') as {
   template: { name: string; language: { code: string }; components: { parameters: { text: string }[] }[] };
 };
-assert.strictEqual(kycPayload.template.name, 'application_kyc_start');
+assert.strictEqual(kycPayload.template.name, 'application_kyc');
+assert.strictEqual(KYC_TEMPLATE, 'application_kyc');
 assert.strictEqual(KYC_TEMPLATE_LANG, 'en_GB');
 assert.strictEqual(kycPayload.template.language.code, KYC_TEMPLATE_LANG);
 assert.strictEqual(kycPayload.template.components[0].parameters[0].text, 'Raju Patel');
@@ -195,6 +198,19 @@ assert.ok(isKycStartClick(kycBtn[0].buttonId, kycBtn[0].text));
 assert.ok(isKycStartClick('Haan, KYC Start Karein', ''));
 assert.ok(isKycStartClick('', 'Haan, KYC Start Karein'));
 assert.ok(!isKycStartClick('Application Status Check Karein', ''));
+assert.ok(isKycStatusClick('Application Status Check Karein', ''));
+assert.ok(isKycStatusClick('', 'Application Status Check Karein'));
+assert.ok(!isKycStatusClick('Haan, KYC Start Karein', ''));
+assert.ok(!isKycStatusClick('Haan, KYC Start Karein', 'Application Status Check Karein'));
+const statusText = statusCheckText();
+assert.ok(/registered phone number/i.test(statusText));
+assert.ok(/apnizaroorat.com\/customer\/login\//.test(statusText));
+assert.ok(/click here/.test(statusText));
+assert.ok(/📱/.test(statusText));
+assert.ok(/👇/.test(statusText));
+assert.ok(!/1️⃣/.test(statusText));
+assert.ok(!/\.gif/i.test(statusText));
+assert.strictEqual(asChat({ messages: [{ id: 'st:1', role: 'assistant', kind: 'status', text: 'x' }] }).messages[0].kind, 'status');
 assert.ok(alreadyAdminMessaged([{ role: 'assistant', kind: 'admin' }]));
 assert.ok(!alreadyAdminMessaged([{ role: 'assistant', kind: 'welcome' }]));
 assert.ok(alreadyKycDocsAsked([{ role: 'assistant', kind: 'kyc_docs' }]));

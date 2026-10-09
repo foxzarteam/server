@@ -1,6 +1,7 @@
 const SITE = 'https://apnizaroorat.com';
 const LOAN_URL = `${SITE}/products/personal-loan/`;
 const INSURANCE_URL = `${SITE}/products/insurance/`;
+const STATUS_URL = `${SITE}/customer/login/`;
 const LOAN_IMAGE = `${SITE}/images/whatsapp/wa_loa.jpg`;
 const INSURANCE_IMAGE = `${SITE}/images/whatsapp/wa_ins.jpg`;
 const BTN_LOAN = 'personal_loan';
@@ -31,6 +32,15 @@ export function productImageUrl(choice: ProductChoice): string {
 
 export function productImageFilename(choice: ProductChoice): string {
   return choice === 'insurance' ? 'wa_ins.jpg' : 'wa_loa.jpg';
+}
+
+export function statusCheckText(): string {
+  return [
+    'Check your application status with your registered phone number. 📱✅',
+    '',
+    'click here 👇',
+    STATUS_URL,
+  ].join('\n');
 }
 
 export function welcomeInteractive(body: string) {
@@ -97,6 +107,12 @@ export function alreadyKycDocsAsked(messages: { role: string; kind?: string; sen
 export function isKycStartClick(buttonId: string, text: string): boolean {
   const blob = `${buttonId} ${text}`.toLowerCase();
   return /kyc\s*start/.test(blob);
+}
+
+export function isKycStatusClick(buttonId: string, text: string): boolean {
+  const blob = `${buttonId} ${text}`.toLowerCase();
+  if (/kyc\s*start/.test(blob)) return false;
+  return /application\s*status|status\s*check/.test(blob);
 }
 
 export function kycDocsRequestText(): string {
