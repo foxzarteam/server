@@ -767,7 +767,7 @@ export class WhatsappService implements OnModuleInit {
     const payload = graphMessageBody(phone, outbound);
     if (!payload) return { ok: false, error: 'Nothing to send.' };
     const sent = await postGraphMessage(token, fromId, payload);
-    if (sent.ok || (payload.type === 'image' && isGraphTimeout(sent.error))) {
+    if (sent.ok || isGraphTimeout(sent.error)) {
       if (outbound.mediaId) message.mediaId = outbound.mediaId;
       if (outbound.waType) message.waType = outbound.waType;
       if (outbound.filename) message.filename = outbound.filename;

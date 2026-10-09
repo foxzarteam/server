@@ -2,7 +2,8 @@ import type { ChatMessage } from './whatsapp-chat';
 import { welcomeInteractive, welcomeText } from './whatsapp-templates';
 
 export const GRAPH_VERSION = 'v21.0';
-export const GRAPH_SEND_MS = 8_000;
+/** How long we wait for Meta's HTTP ack. Do not abort the POST — Meta may still deliver. */
+export const GRAPH_SEND_MS = 6_000;
 export const GRAPH_UPLOAD_MS = 8_000;
 
 export function isGraphTimeout(error?: string): boolean {
@@ -75,19 +76,29 @@ async function postGraphOnce(
 ): Promise<{ ok: boolean; error?: string }> {
   const url = `https://graph.facebook.com/${GRAPH_VERSION}/${encodeURIComponent(fromId)}/messages`;
   try {
-    const res = await fetch(url, {
+    const pending = fetch(url, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${token}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(payload),
-      signal: AbortSignal.timeout(GRAPH_SEND_MS),
+    }).then(async (res) => {
+      if (!res.ok) return { ok: false as const, error: await metaErrorText(res) };
+      return { ok: true as const };
     });
-    if (!res.ok) return { ok: false, error: await metaErrorText(res) };
-    return { ok: true };
+    void pending.catch(() => undefined);
+
+    const ack = await Promise.race([
+      pending,
+      new Promise<{ ok: true }>((resolve) => {
+        setTimeout(() => resolve({ ok: true }), GRAPH_SEND_MS);
+      }),
+    ]);
+    return ack;
   } catch (error) {
     const fail = error instanceof Error ? error.message : 'WhatsApp send failed';
+    if (isGraphTimeout(fail)) return { ok: true };
     return { ok: false, error: fail.slice(0, 300) };
   }
 }
@@ -98,6 +109,8 @@ export async function postGraphMessage(
   payload: Record<string, unknown>,
 ): Promise<{ ok: boolean; error?: string }> {
   const sent = await postGraphOnce(token, fromId, payload);
-  if (!sent.ok) console.error('WhatsappService.sendWhatsapp', sent.error);
+  if (!sent.ok && !isGraphTimeout(sent.error)) {
+    console.error('WhatsappService.sendWhatsapp', sent.error);
+  }
   return sent;
 }
