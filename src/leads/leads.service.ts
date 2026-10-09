@@ -1642,20 +1642,26 @@ export class LeadsService {
 
   async deleteById(id: string): Promise<boolean> {
     const existing = await this.getById(id);
-    const { data, error } = await this.leads
-      .delete()
-      .eq('id', id.trim())
-      .select('id');
+    if (!existing) return false;
+    const leadId = id.trim();
+    const mobile = String(existing.mobile_number ?? '').trim();
+    const panHash = String(existing.pan_hash ?? '').trim();
+
+    await this.deletePanAuditForLead(leadId);
+
+    const { data, error } = await this.leads.delete().eq('id', leadId).select('id');
 
     if (error) {
-      if (process.env.NODE_ENV !== 'production') {
-        console.error('LeadsService.deleteById', error.message);
-      }
+      console.error('LeadsService.deleteById', error.message);
       return false;
     }
 
     const ok = Array.isArray(data) && data.length > 0;
-    if (ok && existing && isApprovedLeadStatus(existing.status)) {
+    if (!ok) return false;
+
+    await this.purgeClientSideData(mobile, panHash);
+
+    if (isApprovedLeadStatus(existing.status)) {
       try {
         await this.reconcileAgentWallet(existing.agent_id);
       } catch (err) {
@@ -1666,6 +1672,53 @@ export class LeadsService {
         throw new WalletSyncError(MSG_WALLET_SYNC_FAILED_STATUS_SAVED, true);
       }
     }
-    return ok;
+    return true;
+  }
+
+  private async deletePanAuditForLead(leadId: string): Promise<void> {
+    const { error } = await this.supabase.from(TABLE_PAN_ACCESS_AUDIT).delete().eq('lead_id', leadId);
+    if (error) console.error('LeadsService.deletePanAuditForLead', error.message);
+  }
+
+  /**
+   * After a lead row is gone: OTP sessions always, PAN slots if unused / last lead.
+   * Never deletes wp_enquiries — that is WhatsApp inbox delete only.
+   */
+  private async purgeClientSideData(mobile: string, panHash: string): Promise<void> {
+    if (!/^[6-9]\d{9}$/.test(mobile)) return;
+    await this.otpService.deleteSessionsForMobile(mobile);
+
+    const { count, error } = await this.leads
+      .select('id', { count: 'exact', head: true })
+      .eq('mobile_number', mobile);
+    if (error) {
+      console.error('LeadsService.purgeClientSideData count', error.message);
+      return;
+    }
+    if ((count ?? 0) === 0) {
+      const { error: slotErr } = await this.supabase
+        .from(TABLE_LEAD_MOBILE_PAN_SLOTS)
+        .delete()
+        .eq('mobile_number', mobile);
+      if (slotErr) console.error('LeadsService.purgeClientSideData slots', slotErr.message);
+      return;
+    }
+    if (!panHash) return;
+    const { data: still, error: stillErr } = await this.leads
+      .select('id')
+      .eq('mobile_number', mobile)
+      .eq('pan_hash', panHash)
+      .limit(1);
+    if (stillErr) {
+      console.error('LeadsService.purgeClientSideData pan', stillErr.message);
+      return;
+    }
+    if (Array.isArray(still) && still.length > 0) return;
+    const { error: dropErr } = await this.supabase
+      .from(TABLE_LEAD_MOBILE_PAN_SLOTS)
+      .delete()
+      .eq('mobile_number', mobile)
+      .eq('pan_hash', panHash);
+    if (dropErr) console.error('LeadsService.purgeClientSideData drop slot', dropErr.message);
   }
 }

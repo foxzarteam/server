@@ -290,4 +290,12 @@ export class OtpService {
     const map = await this.getVerifiedAtByMobiles(mobiles);
     return new Set(map.keys());
   }
+
+  /** CRM lead delete: drop OTP send/verify rows for this mobile. Does not touch WhatsApp. */
+  async deleteSessionsForMobile(mobileNumber: string): Promise<void> {
+    const mobile = mobileNumber.trim();
+    if (!/^[6-9]\d{9}$/.test(mobile)) return;
+    const { error } = await this.otpSessions.delete().eq('mobile_number', mobile);
+    if (error) console.error('OtpService.deleteSessionsForMobile', error.message);
+  }
 }
