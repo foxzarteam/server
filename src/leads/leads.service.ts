@@ -251,6 +251,11 @@ export class LeadsService {
     return checkPersonalLoanEmployment(dto);
   }
 
+  private async personalLoanAmountBounds(): Promise<{ min: number; max: number } | undefined> {
+    const bounds = await this.servicesService.amountBoundsBySlug('personal-loan');
+    return bounds ?? undefined;
+  }
+
   private storedOtpVerified(lead: Record<string, unknown>): boolean {
     const v = lead.otp_verified;
     return v === true || v === 1 || v === 'true';
@@ -830,7 +835,7 @@ export class LeadsService {
         requiredAmount: dto.requiredAmount,
         loanAmt: dto.loanAmt,
       });
-      const amtErr = personalLoanAmountError(amounts.requiredAmount);
+      const amtErr = personalLoanAmountError(amounts.requiredAmount, await this.personalLoanAmountBounds());
       if (amtErr) return { ok: false, message: amtErr };
       payload.required_amount = amounts.requiredAmount;
       payload.loan_amt = amounts.loanAmt;
@@ -937,7 +942,7 @@ export class LeadsService {
         requiredAmount: dto.requiredAmount,
         loanAmt: dto.loanAmt,
       });
-      const amtErr = personalLoanAmountError(amounts.requiredAmount);
+      const amtErr = personalLoanAmountError(amounts.requiredAmount, await this.personalLoanAmountBounds());
       if (amtErr) return { ok: false, message: amtErr };
     }
     if (category === 'insurance' && !normalizeStoredInsType(category, dto.insType)) {
@@ -1039,7 +1044,7 @@ export class LeadsService {
         requiredAmount: dto.requiredAmount,
         loanAmt: dto.loanAmt,
       });
-      const amtErr = personalLoanAmountError(amounts.requiredAmount);
+      const amtErr = personalLoanAmountError(amounts.requiredAmount, await this.personalLoanAmountBounds());
       if (amtErr) throw new LeadRuleError(amtErr);
       payload.required_amount = amounts.requiredAmount;
       payload.loan_amt = amounts.loanAmt;

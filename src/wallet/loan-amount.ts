@@ -52,14 +52,15 @@ export function resolvePersonalLoanAmounts(input: {
   return { requiredAmount: null, loanAmt };
 }
 
-export function personalLoanAmountError(amount: unknown): string | null {
+export function personalLoanAmountError(
+  amount: unknown,
+  bounds?: { min: number; max: number },
+): string | null {
+  const min = bounds?.min ?? PERSONAL_LOAN_AMOUNT_MIN;
+  const max = bounds?.max ?? PERSONAL_LOAN_AMOUNT_MAX;
   const n = Number(amount);
-  if (
-    !Number.isFinite(n) ||
-    n < PERSONAL_LOAN_AMOUNT_MIN ||
-    n > PERSONAL_LOAN_AMOUNT_MAX
-  ) {
-    return 'Loan amount must be between ₹25,000 and ₹50,00,000.';
+  if (!Number.isFinite(n) || n < min || n > max) {
+    return `Loan amount must be between ₹${min.toLocaleString('en-IN')} and ₹${max.toLocaleString('en-IN')}.`;
   }
   return null;
 }

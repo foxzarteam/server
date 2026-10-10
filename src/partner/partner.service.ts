@@ -1,6 +1,6 @@
 import { Inject, Injectable } from '@nestjs/common';
 import { SupabaseClient } from '@supabase/supabase-js';
-import { TABLE_PARTNER, TABLE_SERVICES } from '../common/constants';
+import { TABLE_PARTNER, TABLE_PRODUCTS } from '../common/constants';
 import { SUPABASE_CLIENT } from '../config/supabase';
 
 import {
@@ -26,7 +26,7 @@ export class PartnerService {
 
   private async loadSortOrderTitleMap(): Promise<Map<number, string>> {
     const { data, error } = await this.supabase
-      .from(TABLE_SERVICES)
+      .from(TABLE_PRODUCTS)
       .select('sort_order, title');
 
     if (error) {

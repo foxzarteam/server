@@ -78,6 +78,9 @@ assert.strictEqual(personalLoanAmountError(20_00_000), null);
 assert.strictEqual(personalLoanAmountError(50_00_000), null);
 assert.ok(personalLoanAmountError(1000));
 assert.ok(personalLoanAmountError(50_00_001));
+assert.strictEqual(personalLoanAmountError(15_000, { min: 10_000, max: 20_000 }), null);
+assert.ok(personalLoanAmountError(9_000, { min: 10_000, max: 20_000 }));
+assert.ok(personalLoanAmountError(20_001, { min: 10_000, max: 20_000 }));
 
 // —— write errors ——
 assert.strictEqual(

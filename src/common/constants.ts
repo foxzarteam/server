@@ -2,7 +2,7 @@ export const TABLE_OTP_SESSIONS = 'otp_sessions';
 export const TABLE_USERS = 'users';
 export const TABLE_LEADS = 'leads';
 export const TABLE_BANNERS = 'banners';
-export const TABLE_SERVICES = 'services';
+export const TABLE_PRODUCTS = 'products';
 /** Insurance subtypes (life / health / motor / cyber / future rows). */
 export const TABLE_INSURANCE_TYPES = 'insurance_types';
 export const TABLE_PARTNER = 'partner';

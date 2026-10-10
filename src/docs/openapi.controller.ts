@@ -83,9 +83,9 @@ export const OPENAPI_SPEC = {
                     type: 'string',
                     example: 'personal_loan',
                     description:
-                      'Lead category = service slug with underscores (personal-loan → personal_loan). New products come from public.services.',
+                      'Lead category = product slug with underscores (personal-loan → personal_loan). New products come from public.products.',
                   },
-                  requiredAmount: { type: 'number', example: 500000, description: 'PL only, ₹25,000–₹50,00,000' },
+                  requiredAmount: { type: 'number', example: 500000, description: 'Personal loan only. Min and max come from products.limit_start and products.limit_end.' },
                   netMonthlyIncome: { type: 'number', example: 45000 },
                   insType: {
                     type: 'string',
