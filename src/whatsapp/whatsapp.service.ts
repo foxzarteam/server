@@ -45,8 +45,10 @@ import {
   insuranceText,
   personalLoanText,
   productChoice,
+  productImageFile,
   productImageFilename,
   productImageUrl,
+  withCachedProductImage,
   thankYouText,
   welcomeText,
   type ProductChoice,
@@ -66,7 +68,6 @@ export class WhatsappService implements OnModuleInit {
   private sentIds = new Set<string>();
   private inflight = new Set<string>();
   private flowMem = new Map<string, FlowMem>();
-  private phoneTail = new Map<string, Promise<void>>();
   private persistTail = new Map<string, Promise<void>>();
   private kycTemplateSent = new Set<string>();
 
@@ -131,28 +132,18 @@ export class WhatsappService implements OnModuleInit {
     }
 
     const inbound = extractInboundMessages(payload);
-    void this.dispatchInbound(settings, inbound);
+    this.dispatchInbound(settings, inbound);
     return 'ok';
   }
 
-  private async dispatchInbound(settings: WhatsappSettings, inbound: InboundWhatsappMessage[]) {
-    await Promise.all(
-      inbound.map((message) =>
-        this.enqueuePhone(message.phone, () =>
-          this.handleInbound(settings, message).catch((error) => {
-            console.error('WhatsappService.handleInbound', message.messageId, error);
-          }),
-        ),
-      ),
-    );
-  }
-
-  private enqueuePhone(phone: string, fn: () => Promise<void>): Promise<void> {
-    const key = canonicalWhatsappPhone(phone);
-    const prev = this.phoneTail.get(key) ?? Promise.resolve();
-    const next = prev.then(fn, fn);
-    this.phoneTail.set(key, next);
-    return next;
+  private dispatchInbound(settings: WhatsappSettings, inbound: InboundWhatsappMessage[]) {
+    for (const message of inbound) {
+      try {
+        this.handleInbound(settings, message);
+      } catch (error) {
+        console.error('WhatsappService.handleInbound', message.messageId, error);
+      }
+    }
   }
 
   async publicLink(): Promise<string | null> {
@@ -323,7 +314,7 @@ export class WhatsappService implements OnModuleInit {
     };
   }
 
-  private async handleInbound(settings: WhatsappSettings, message: InboundWhatsappMessage) {
+  private handleInbound(settings: WhatsappSettings, message: InboundWhatsappMessage) {
     const assistantId = `ai:${message.messageId}`;
     if (this.sentIds.has(assistantId) || this.inflight.has(message.messageId)) return;
     this.inflight.add(message.messageId);
@@ -332,7 +323,7 @@ export class WhatsappService implements OnModuleInit {
       const kycClick = isKycStartClick(message.buttonId, message.text);
       const statusClick = isKycStatusClick(message.buttonId, message.text);
       if (kycClick || statusClick) this.seedKycFlow(phone);
-      else await this.ensureFlowFast(phone);
+      else this.ensureFlowFast(phone);
 
       const seen = this.flowMem.get(phone)?.ids;
       if (seen?.has(message.messageId) || seen?.has(assistantId)) return;
@@ -383,17 +374,13 @@ export class WhatsappService implements OnModuleInit {
     this.flowMem.set(phone, seed);
   }
 
-  /** Known KYC numbers skip DB. Everyone else: one read, never wait on a pending save. */
-  private async ensureFlowFast(phone: string) {
+  /** Reply uses memory only. History loads after the Graph POST has started. */
+  private ensureFlowFast(phone: string) {
     if (this.flowMem.has(phone)) return;
-    if (this.kycTemplateSent.has(phone)) {
-      const seed = emptyFlow();
-      seed.kyc = true;
-      this.flowMem.set(phone, seed);
-      void this.hydrateFlow(phone);
-      return;
-    }
-    await this.hydrateFlow(phone);
+    const seed = emptyFlow();
+    if (this.kycTemplateSent.has(phone)) seed.kyc = true;
+    this.flowMem.set(phone, seed);
+    void this.hydrateFlow(phone);
   }
 
   /** Graph POST starts now; inbound must not wait for Meta's HTTP ack (was blocking the next reply). */
@@ -430,10 +417,11 @@ export class WhatsappService implements OnModuleInit {
     const kycDocs = alreadyKycDocsAsked(messages) || prev.kycDocs;
     const kyc = alreadyKycStarted(messages) || kycDocs || prev.kyc;
     if (kyc) this.rememberKycPhone(phone);
-    let product: ProductChoice | undefined = prev.product;
-    for (const item of messages) {
-      if (item.role === 'assistant' && (item.kind === 'personal_loan' || item.kind === 'insurance')) {
-        product = item.kind;
+    if (!prev.product) {
+      for (const item of messages) {
+        if (item.role === 'assistant' && (item.kind === 'personal_loan' || item.kind === 'insurance')) {
+          prev.product = item.kind;
+        }
       }
     }
     for (const item of messages) prev.ids.add(item.id);
@@ -442,7 +430,6 @@ export class WhatsappService implements OnModuleInit {
     prev.thanked = thanked;
     prev.kyc = kyc;
     prev.kycDocs = kycDocs;
-    if (product) prev.product = product;
     this.flowMem.set(phone, prev);
   }
 
@@ -784,7 +771,7 @@ export class WhatsappService implements OnModuleInit {
     }
     const needsImage =
       message.waType === 'image' || message.kind === 'personal_loan' || message.kind === 'insurance';
-    const outbound = needsImage ? await this.withTemplateImage(settings, fromId, message) : message;
+    const outbound = needsImage ? this.withTemplateImage(settings, fromId, message) : message;
     const payload = graphMessageBody(phone, outbound);
     if (!payload) return { ok: false, error: 'Nothing to send.' };
     const sent = await postGraphMessage(token, fromId, payload);
@@ -798,31 +785,17 @@ export class WhatsappService implements OnModuleInit {
     return sent;
   }
 
-  private async withTemplateImage(
-    settings: WhatsappSettings,
-    fromId: string,
-    message: ChatMessage,
-  ): Promise<ChatMessage> {
-    if (message.mediaId) return { ...message, waType: 'image', mediaUrl: undefined };
-    const product =
-      message.kind === 'insurance' ? 'insurance' : message.kind === 'personal_loan' ? 'personal_loan' : '';
-    const fileName =
-      message.filename === 'wa_ins.jpg' || message.filename === 'wa_loa.jpg'
-        ? message.filename
-        : product === 'insurance'
-          ? 'wa_ins.jpg'
-          : product === 'personal_loan'
-            ? 'wa_loa.jpg'
-            : '';
-    if (!fileName) {
-      if (message.waType === 'image' && message.mediaUrl) return message;
-      return message.waType === 'image' ? { ...message, waType: 'text' } : message;
-    }
+  private cachedMediaId(fromId: string, fileName: string): string {
+    const hit = this.mediaIdCache.get(`${fromId}:${fileName}`);
+    return hit && hit.until > Date.now() ? hit.id : '';
+  }
 
-    const id = await this.templateMediaId(settings, fromId, fileName);
-    if (id) return { ...message, waType: 'image', mediaId: id, filename: fileName, mediaUrl: undefined, mime: 'image/jpeg' };
-    const link = productImageUrl(fileName === 'wa_ins.jpg' ? 'insurance' : 'personal_loan');
-    return { ...message, waType: 'image', filename: fileName, mime: 'image/jpeg', mediaUrl: link, mediaId: undefined };
+  /** Cache hit is instant. A miss sends the public image link and uploads in the background. */
+  private withTemplateImage(settings: WhatsappSettings, fromId: string, message: ChatMessage): ChatMessage {
+    const fileName = productImageFile(message);
+    const cached = fileName && !message.mediaId ? this.cachedMediaId(fromId, fileName) : '';
+    if (fileName && !message.mediaId && !cached) void this.templateMediaId(settings, fromId, fileName);
+    return withCachedProductImage(message, cached);
   }
 
   private templateImagePath(fileName: string): string {

@@ -1,3 +1,5 @@
+import { setDefaultResultOrder } from 'node:dns';
+import { setDefaultAutoSelectFamilyAttemptTimeout } from 'node:net';
 import { ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
 import { AppModule } from './app.module';
@@ -7,6 +9,10 @@ import compression from 'compression';
 import helmet from 'helmet';
 import { CORS_ALLOWED_HEADERS, resolveCorsOrigin } from './common/cors';
 import { ROOT_PAGE_HTML } from './root-landing';
+
+// Graph and Supabase are IPv4. A stuck IPv6 attempt was holding WhatsApp replies for seconds.
+setDefaultResultOrder('ipv4first');
+setDefaultAutoSelectFamilyAttemptTimeout(250);
 
 async function bootstrap() {
   if (process.env.NODE_ENV === 'production' && !(process.env.ADMIN_INTERNAL_KEY ?? '').trim()) {

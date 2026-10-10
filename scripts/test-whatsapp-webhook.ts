@@ -4,7 +4,7 @@
  */
 import assert from 'assert';
 import { createHmac } from 'crypto';
-import { isGraphTimeout } from '../src/whatsapp/whatsapp-graph';
+import { graphMessageBody, isGraphTimeout } from '../src/whatsapp/whatsapp-graph';
 import { whatsappHubChallenge, whatsappSignatureOk } from '../src/whatsapp/whatsapp-verify';
 import { adminTargetPhone, canonicalWhatsappPhone, extractInboundMessages } from '../src/whatsapp/whatsapp-inbound';
 import { decryptSettingsJson, encryptSettingsJson } from '../src/whatsapp/settings-crypto';
@@ -23,6 +23,7 @@ import {
   personalLoanText,
   productChoice,
   statusCheckText,
+  withCachedProductImage,
   thankYouText,
   welcomeText,
 } from '../src/whatsapp/whatsapp-templates';
@@ -152,6 +153,25 @@ assert.ok(/\n\nAapke liye/.test(insuranceText('Gaurav')));
 assert.ok(/apnizaroorat.com\/products\/insurance\//.test(insuranceText('Gaurav')));
 assert.ok(/Health, Bike, Life/.test(insuranceText('Gaurav')));
 assert.ok(!/50 Lakh/i.test(personalLoanText('Gaurav')));
+const loanImage = {
+  id: 'ai:loan',
+  role: 'assistant' as const,
+  text: personalLoanText('Gaurav'),
+  at: '2026-01-01T00:00:00.000Z',
+  kind: 'personal_loan' as const,
+  filename: 'wa_loa.jpg',
+};
+const loanLinked = withCachedProductImage(loanImage, '');
+assert.strictEqual(loanLinked.mediaId, undefined);
+assert.ok(loanLinked.mediaUrl?.endsWith('/images/whatsapp/wa_loa.jpg'));
+const loanCached = withCachedProductImage(loanImage, 'media-1');
+assert.strictEqual(loanCached.mediaId, 'media-1');
+assert.strictEqual(loanCached.mediaUrl, undefined);
+const loanBody = graphMessageBody('919876543210', loanLinked) as { type?: string; image?: { link?: string } };
+assert.strictEqual(loanBody.type, 'image');
+assert.ok(loanBody.image?.link?.endsWith('/images/whatsapp/wa_loa.jpg'));
+const insLinked = withCachedProductImage({ ...loanImage, kind: 'insurance', filename: 'wa_ins.jpg', text: insuranceText('Gaurav') }, '');
+assert.ok(insLinked.mediaUrl?.endsWith('/images/whatsapp/wa_ins.jpg'));
 assert.ok(alreadyWelcomed([{ role: 'assistant', kind: 'welcome', text: welcomeText('Gaurav') }]));
 assert.ok(!alreadyWelcomed([{ role: 'user', text: 'Hi' }]));
 assert.ok(/Thank you/.test(thankYouText('Gaurav')));
@@ -204,6 +224,15 @@ assert.ok(isKycStatusClick('', 'Application Status Check Karein'));
 assert.ok(!isKycStatusClick('Haan, KYC Start Karein', ''));
 assert.ok(!isKycStatusClick('Haan, KYC Start Karein', 'Application Status Check Karein'));
 const statusText = statusCheckText();
+const statusPayload = graphMessageBody('919876543210', {
+  id: 'ai:status',
+  role: 'assistant',
+  text: statusText,
+  at: '2026-01-01T00:00:00.000Z',
+  kind: 'status',
+  waType: 'text',
+}) as { text?: { preview_url?: boolean; body?: string } };
+assert.strictEqual(statusPayload?.text?.preview_url, false);
 assert.ok(/registered phone number/i.test(statusText));
 assert.ok(/apnizaroorat.com\/customer\/login\//.test(statusText));
 assert.ok(/click here/.test(statusText));

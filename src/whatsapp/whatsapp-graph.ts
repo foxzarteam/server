@@ -65,7 +65,7 @@ export function graphMessageBody(phone: string, message: ChatMessage): Record<st
   return {
     ...base,
     type: 'text',
-    text: { preview_url: message.kind === 'status', body },
+    text: { preview_url: false, body },
   };
 }
 

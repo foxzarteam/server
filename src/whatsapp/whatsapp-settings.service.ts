@@ -85,6 +85,7 @@ function pickStored(parsed: Partial<WhatsappSettings> | null): WhatsappSettings 
 @Injectable()
 export class WhatsappSettingsService {
   private effectiveCache: { until: number; value: WhatsappSettings } | null = null;
+  private loadInflight: Promise<WhatsappSettings> | null = null;
   constructor(
     @Inject(SUPABASE_CLIENT) private readonly supabase: SupabaseClient,
     private readonly config: ConfigService,
@@ -116,6 +117,15 @@ export class WhatsappSettingsService {
     if (this.effectiveCache && this.effectiveCache.until > Date.now()) {
       return this.effectiveCache.value;
     }
+    if (!this.loadInflight) {
+      this.loadInflight = this.readEffective().finally(() => {
+        this.loadInflight = null;
+      });
+    }
+    return this.loadInflight;
+  }
+
+  private async readEffective(): Promise<WhatsappSettings> {
     const stored = await this.getStored();
     const env = (name: string) => (this.config.get<string>(name) ?? '').trim();
     const value: WhatsappSettings = {
@@ -130,10 +140,19 @@ export class WhatsappSettingsService {
     return value;
   }
 
-  /** Memory only — never hits the database. */
+  /**
+   * Memory only — never waits on the database.
+   * A stale copy is still usable so a button click is not stuck behind a settings read.
+   */
   peekEffective(): WhatsappSettings | null {
-    if (this.effectiveCache && this.effectiveCache.until > Date.now()) return this.effectiveCache.value;
-    return null;
+    const cache = this.effectiveCache;
+    if (!cache) return null;
+    if (cache.until <= Date.now()) {
+      void this.getEffective().catch((error) => {
+        console.error('WhatsappSettingsService.getEffective', error);
+      });
+    }
+    return cache.value;
   }
 
   toPublic(settings: WhatsappSettings): WhatsappSettingsPublic {

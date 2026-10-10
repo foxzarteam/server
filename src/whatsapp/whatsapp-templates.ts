@@ -34,6 +34,36 @@ export function productImageFilename(choice: ProductChoice): string {
   return choice === 'insurance' ? 'wa_ins.jpg' : 'wa_loa.jpg';
 }
 
+type ProductImageFields = {
+  kind?: string;
+  waType?: string;
+  filename?: string;
+  mediaId?: string;
+  mediaUrl?: string;
+  mime?: string;
+};
+
+export function productImageFile(message: { filename?: string; kind?: string }): 'wa_loa.jpg' | 'wa_ins.jpg' | '' {
+  if (message.filename === 'wa_ins.jpg' || message.filename === 'wa_loa.jpg') return message.filename;
+  if (message.kind === 'insurance') return 'wa_ins.jpg';
+  if (message.kind === 'personal_loan') return 'wa_loa.jpg';
+  return '';
+}
+
+/** Cached Meta id if we already have one. Otherwise the public image link, so the reply is not waiting on an upload. */
+export function withCachedProductImage<T extends ProductImageFields>(message: T, cachedMediaId: string): T {
+  if (message.mediaId) return { ...message, waType: 'image', mediaUrl: undefined };
+  const fileName = productImageFile(message);
+  if (!fileName) {
+    if (message.waType === 'image' && message.mediaUrl) return message;
+    return message.waType === 'image' ? { ...message, waType: 'text' } : message;
+  }
+  const base = { ...message, filename: fileName, mime: 'image/jpeg', waType: 'image' as const };
+  if (cachedMediaId) return { ...base, mediaId: cachedMediaId, mediaUrl: undefined };
+  const choice: ProductChoice = fileName === 'wa_ins.jpg' ? 'insurance' : 'personal_loan';
+  return { ...base, mediaId: undefined, mediaUrl: productImageUrl(choice) };
+}
+
 export function statusCheckText(): string {
   return [
     'Check your application status with your registered phone number. 📱✅',
