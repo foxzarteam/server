@@ -71,6 +71,12 @@ export function statusLabel(status: unknown): string {
 
 export function blockingApplicationMessage(lead: Record<string, unknown>): string {
   const product = productLabel(lead);
+  const raw = String(lead.status ?? '')
+    .trim()
+    .toLowerCase();
+  if (raw === 'rejected') {
+    return `Your ${product} application was not approved. You cannot apply again for this product with this mobile number.`;
+  }
   const status = statusLabel(lead.status);
-  return `Your ${product} application is already ${status}. You can apply again for this product only after it is Approved.`;
+  return `Your ${product} application status is ${status}.`;
 }

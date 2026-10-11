@@ -10,7 +10,7 @@ import {
 } from '../src/common/ip-geo';
 import { mapLeadWriteError } from '../src/leads/lead-write-errors';
 import { leadFullNameError, personalLoanEmploymentError } from '../src/leads/personal-loan-employment';
-import { personalLoanAmountError } from '../src/wallet/loan-amount';
+import { isStoredLoanCategory, personalLoanAmountError } from '../src/wallet/loan-amount';
 import { sanitizePublicLead } from '../src/security/pan-crypto';
 import { slugToLeadCategory, isInsTypeSlug } from '../src/catalog/catalog';
 import { statusLabel } from '../src/leads/lead-present';
@@ -81,6 +81,12 @@ assert.ok(personalLoanAmountError(50_00_001));
 assert.strictEqual(personalLoanAmountError(15_000, { min: 10_000, max: 20_000 }), null);
 assert.ok(personalLoanAmountError(9_000, { min: 10_000, max: 20_000 }));
 assert.ok(personalLoanAmountError(20_001, { min: 10_000, max: 20_000 }));
+assert.strictEqual(isStoredLoanCategory('personal_loan'), true);
+assert.strictEqual(isStoredLoanCategory('home_loan'), true);
+assert.strictEqual(isStoredLoanCategory('car_loan'), true);
+assert.strictEqual(isStoredLoanCategory('business_loan'), true);
+assert.strictEqual(isStoredLoanCategory('insurance'), false);
+assert.strictEqual(isStoredLoanCategory('credit_card'), false);
 
 // —— write errors ——
 assert.strictEqual(

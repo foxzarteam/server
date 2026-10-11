@@ -51,7 +51,7 @@ export class ServicesController {
   @Get()
   @HttpCode(HttpStatus.OK)
   async getActive() {
-    const { services, insuranceTypes } = await this.servicesService.getPublicCatalog();
-    return { success: true, data: services, insuranceTypes };
+    const { services, insuranceTypes, loanProducts } = await this.servicesService.getPublicCatalog();
+    return { success: true, data: services, insuranceTypes, loanProducts };
   }
 }

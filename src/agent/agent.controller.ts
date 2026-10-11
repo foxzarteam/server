@@ -19,6 +19,7 @@ import { AdminCreateLeadDto } from '../leads/leads.dto';
 import { LeadsService } from '../leads/leads.service';
 import {
   CODE_MOBILE_PAN_LIMIT_REACHED,
+  CODE_PHONE_PRODUCT_BLOCKED,
 } from '../leads/mobile-pan-limit';
 import { UpsertPaymentAccountDto } from '../payment-accounts/payment-accounts.dto';
 import { PaymentAccountsService } from '../payment-accounts/payment-accounts.service';
@@ -91,7 +92,9 @@ export class AgentController {
       if (!result.ok) {
         const conflict =
           result.code === CODE_MOBILE_PAN_LIMIT_REACHED ||
-          result.message.toLowerCase().includes('already');
+          result.code === CODE_PHONE_PRODUCT_BLOCKED ||
+          result.message.toLowerCase().includes('already') ||
+          result.message.toLowerCase().includes('cannot apply again');
         throw new HttpException(
           {
             success: false,

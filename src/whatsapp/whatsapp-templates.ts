@@ -1,5 +1,5 @@
 const SITE = 'https://apnizaroorat.com';
-const LOAN_URL = `${SITE}/products/personal-loan/`;
+const LOAN_URL = `${SITE}/products/loans/`;
 const INSURANCE_URL = `${SITE}/products/insurance/`;
 const STATUS_URL = `${SITE}/customer/login/`;
 const LOAN_IMAGE = `${SITE}/images/whatsapp/wa_loa.jpg`;
@@ -15,11 +15,11 @@ function who(profileName: string): string {
 }
 
 export function welcomeText(profileName: string): string {
-  return `Namaste ${who(profileName)} 🙏\nApni Zaroorat me aapka swagat hai.\nBataiye, aapko Personal Loan chahiye ya Insurance?\nNeeche button pe tap kijiye.`;
+  return `Namaste ${who(profileName)} 🙏\nApni Zaroorat me aapka swagat hai.\nBataiye, aapko Loan chahiye ya Insurance?\nNeeche button pe tap kijiye.`;
 }
 
 export function personalLoanText(profileName: string): string {
-  return `Great, ${who(profileName)}! 💰\n\nAapke liye bilkul affordable EMI par Personal Loan ke best options available hain.\n\nApni loan eligibility jaanne ke liye abhi apply karein 👇\n${LOAN_URL}`;
+  return `Great, ${who(profileName)}! 💰\n\nAapke liye bilkul affordable EMI par loan ke best options available hain.\n\nApni loan eligibility jaanne ke liye abhi apply karein 👇\n${LOAN_URL}`;
 }
 
 export function insuranceText(profileName: string): string {
@@ -81,7 +81,7 @@ export function welcomeInteractive(body: string) {
       body: { text: body.slice(0, 1024) },
       action: {
         buttons: [
-          { type: 'reply', reply: { id: BTN_LOAN, title: 'Personal Loan' } },
+          { type: 'reply', reply: { id: BTN_LOAN, title: 'Loan' } },
           { type: 'reply', reply: { id: BTN_INSURANCE, title: 'Insurance' } },
         ],
       },
@@ -118,7 +118,7 @@ export function alreadyWelcomed(messages: { role: string; kind?: string; text: s
   return messages.some(
     (item) =>
       item.role === 'assistant' &&
-      (item.kind === 'welcome' || /personal loan chahiye ya insurance/i.test(item.text)),
+      (item.kind === 'welcome' || /loan chahiye ya insurance/i.test(item.text)),
   );
 }
 

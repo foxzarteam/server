@@ -18,6 +18,7 @@ import {
 import { FALLBACK_INSURANCE_TYPES, INS_TYPE_SLUG_PATTERN } from '../catalog/catalog';
 import { isMaskedPan, PAN_FORMAT_REGEX } from '../security/pan-crypto';
 import { LEAD_FULL_NAME_REGEX } from './personal-loan-employment';
+import { isStoredLoanCategory } from '../wallet/loan-amount';
 
 /** Matches active service slugs stored as lead category (e.g. personal-loan → personal_loan). */
 export const LEAD_CATEGORY_PATTERN = /^[a-z][a-z0-9_]{0,63}$/;
@@ -88,8 +89,8 @@ export class CreateLeadDto {
   @Min(0, { message: 'Required amount must be positive' })
   requiredAmount?: number;
 
-  /** Personal loan tenure in months. */
-  @ValidateIf((o) => o.category === 'personal_loan')
+  /** Loan tenure in months. Required for every loan product category. */
+  @ValidateIf((o) => isStoredLoanCategory(o.category))
   @IsInt({ message: 'Loan tenure must be a whole number of months' })
   @Min(12, { message: 'Loan tenure must be at least 12 months' })
   @Max(72, { message: 'Loan tenure cannot exceed 72 months' })
@@ -111,13 +112,13 @@ export class CreateLeadDto {
   @Matches(INS_TYPE_SLUG_PATTERN, { message: 'Invalid insurance type' })
   insType?: string;
 
-  /** Optional. Stored on personal loan when salaried or self_employed. */
+  /** Optional. Stored on a loan when salaried or self_employed. */
   @IsOptional()
   @IsString()
   employmentType?: string;
 
-  @ValidateIf((o) => o.category === 'personal_loan')
-  @IsNumber({}, { message: 'Net monthly income is required for personal loan' })
+  @ValidateIf((o) => isStoredLoanCategory(o.category))
+  @IsNumber({}, { message: 'Net monthly income is required' })
   @Min(1, { message: 'Net monthly income must be at least 1' })
   netMonthlyIncome?: number;
 

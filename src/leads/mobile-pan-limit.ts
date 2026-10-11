@@ -13,6 +13,9 @@ export const MOBILE_PAN_LIMIT = 4;
 
 export const CODE_MOBILE_PAN_LIMIT_REACHED = 'MOBILE_PAN_LIMIT_REACHED';
 
+/** Same mobile already has this product in progress or rejected. */
+export const CODE_PHONE_PRODUCT_BLOCKED = 'PHONE_PRODUCT_BLOCKED';
+
 export const MSG_MOBILE_PAN_LIMIT_REACHED =
   'This mobile number has already been used for multiple applications. Please use a different mobile number.';
 
@@ -57,6 +60,7 @@ export type DuplicateGateResult =
   | {
       allowed: false;
       gate: 2;
+      code: typeof CODE_PHONE_PRODUCT_BLOCKED;
       message: string;
       status: string;
       category: string;
@@ -160,7 +164,36 @@ export function isSameProduct(
   return normalizeLeadInsType(catA, a.insType) === normalizeLeadInsType(catB, b.insType);
 }
 
-/** Gate 2: same PAN fingerprint + same product, any mobile, unless approved/draft. */
+/**
+ * Newest real lead for this mobile + product.
+ * Approved → allow another apply. Rejected or in progress → block.
+ * PAN is not used.
+ */
+export function findBlockingPhoneProductLead(
+  input: {
+    mobile: string;
+    category?: string | null;
+    insType?: string | null;
+    ignoreLeadId?: string;
+  },
+  leads: ExistingLeadSnapshot[],
+): ExistingLeadSnapshot | null {
+  const mobile = input.mobile.trim();
+  if (!mobile) return null;
+  const ignore = String(input.ignoreLeadId ?? '').trim();
+
+  for (const lead of leads) {
+    if (lead.mobile.trim() !== mobile) continue;
+    if (ignore && String(lead.id ?? '').trim() === ignore) continue;
+    if (!isSameProduct(input, lead)) continue;
+    if (lead.isDraft) continue;
+    if (isApprovedLeadStatus(lead.status)) return null;
+    return lead;
+  }
+  return null;
+}
+
+/** @deprecated PAN is no longer the duplicate key. Use findBlockingPhoneProductLead. */
 export function findBlockingSamePanProductLead(
   input: {
     panHash: string;
@@ -186,23 +219,16 @@ export function findBlockingSamePanProductLead(
 
 export function evaluateDuplicateGates(input: {
   mobile: string;
-  panHash: string;
+  panHash?: string;
   category?: string | null;
   insType?: string | null;
-  slots: Array<{ mobile: string; panHash: string }>;
+  slots?: Array<{ mobile: string; panHash: string }>;
   existingLeads: ExistingLeadSnapshot[];
   ignoreLeadId?: string;
 }): DuplicateGateResult {
-  const gate1 = checkMobilePanLimit({
-    mobile: input.mobile,
-    panHash: input.panHash,
-    slots: input.slots,
-  });
-  if (!gate1.allowed) return gate1;
-
-  const blocking = findBlockingSamePanProductLead(
+  const blocking = findBlockingPhoneProductLead(
     {
-      panHash: input.panHash,
+      mobile: input.mobile,
       category: input.category,
       insType: input.insType,
       ignoreLeadId: input.ignoreLeadId,
@@ -211,12 +237,23 @@ export function evaluateDuplicateGates(input: {
   );
   if (!blocking) return { allowed: true };
 
+  const status = String(blocking.status ?? 'pending').trim().toLowerCase() || 'pending';
+  const product = normalizeLeadCategory(blocking.category);
+  const label = product === 'insurance'
+    ? normalizeLeadInsType(product, blocking.insType) || 'insurance'
+    : product.replace(/_/g, ' ');
+  const message =
+    status === 'rejected'
+      ? `Your ${label} application was not approved. You cannot apply again for this product with this mobile number.`
+      : `Your ${label} application status is ${status}.`;
+
   return {
     allowed: false,
     gate: 2,
-    message: `Your application is already ${String(blocking.status ?? 'pending')}.`,
-    status: String(blocking.status ?? 'pending'),
-    category: normalizeLeadCategory(blocking.category),
+    code: CODE_PHONE_PRODUCT_BLOCKED,
+    message,
+    status,
+    category: product,
     insType: normalizeLeadInsType(blocking.category, blocking.insType),
   };
 }

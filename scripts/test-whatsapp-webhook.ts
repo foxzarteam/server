@@ -25,6 +25,7 @@ import {
   statusCheckText,
   withCachedProductImage,
   thankYouText,
+  welcomeInteractive,
   welcomeText,
 } from '../src/whatsapp/whatsapp-templates';
 
@@ -145,9 +146,14 @@ const click = extractInboundMessages({
 assert.strictEqual(click[0].buttonId, 'personal_loan');
 assert.strictEqual(productChoice(click[0].buttonId, click[0].text), 'personal_loan');
 assert.strictEqual(productChoice('insurance', 'Insurance'), 'insurance');
-assert.ok(/Personal Loan/.test(welcomeText('Gaurav')));
+assert.deepStrictEqual(
+  welcomeInteractive('hi').interactive.action.buttons.map((btn) => btn.reply.title),
+  ['Loan', 'Insurance'],
+);
+assert.ok(/Loan chahiye ya Insurance/.test(welcomeText('Gaurav')));
+assert.ok(!/Personal Loan/.test(welcomeText('Gaurav')));
 assert.ok(!/Navya/i.test(welcomeText('Gaurav')));
-assert.ok(/apnizaroorat.com\/products\/personal-loan/.test(personalLoanText('Gaurav')));
+assert.ok(/apnizaroorat.com\/products\/loans\//.test(personalLoanText('Gaurav')));
 assert.ok(/\n\nAapke liye/.test(personalLoanText('Gaurav')));
 assert.ok(/\n\nAapke liye/.test(insuranceText('Gaurav')));
 assert.ok(/apnizaroorat.com\/products\/insurance\//.test(insuranceText('Gaurav')));

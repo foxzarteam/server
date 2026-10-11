@@ -52,6 +52,11 @@ export function resolvePersonalLoanAmounts(input: {
   return { requiredAmount: null, loanAmt };
 }
 
+/** Lead category stored with underscores, e.g. personal_loan, home_loan, car_loan. */
+export function isStoredLoanCategory(category: string | null | undefined): boolean {
+  return /^[a-z][a-z0-9]*_loan$/.test(String(category ?? '').trim());
+}
+
 export function personalLoanAmountError(
   amount: unknown,
   bounds?: { min: number; max: number },

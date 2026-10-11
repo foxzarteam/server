@@ -28,6 +28,7 @@ import {
   CODE_LOAN_AMOUNT_REQUIRED,
   leadLoanAmount,
   MSG_LOAN_AMOUNT_REQUIRED,
+  isStoredLoanCategory,
   personalLoanAmountError,
   resolvePersonalLoanAmounts,
 } from '../wallet/loan-amount';
@@ -50,6 +51,7 @@ import {
 import { leadWriteErrorCode, mapLeadWriteError } from './lead-write-errors';
 import {
   CODE_MOBILE_PAN_LIMIT_REACHED,
+  CODE_PHONE_PRODUCT_BLOCKED,
   LeadRuleError,
   MSG_MOBILE_PAN_LIMIT_REACHED,
 } from './mobile-pan-limit';
@@ -256,6 +258,26 @@ export class LeadsService {
     return bounds ?? undefined;
   }
 
+  /** Public apply: amount must sit inside that product's limit_start / limit_end. */
+  private async publicLoanAmounts(
+    category: string,
+    dto: { requiredAmount?: number | null; loanAmt?: string | null },
+  ): Promise<
+    | { ok: true; amounts: { requiredAmount: number | null; loanAmt: string | null } }
+    | { ok: false; message: string }
+    | null
+  > {
+    if (!isStoredLoanCategory(category)) return null;
+    const amounts = resolvePersonalLoanAmounts({
+      requiredAmount: dto.requiredAmount,
+      loanAmt: dto.loanAmt,
+    });
+    const bounds = await this.servicesService.amountBoundsBySlug(category.replace(/_/g, '-'));
+    const amtErr = personalLoanAmountError(amounts.requiredAmount, bounds ?? undefined);
+    if (amtErr) return { ok: false, message: amtErr };
+    return { ok: true, amounts };
+  }
+
   private storedOtpVerified(lead: Record<string, unknown>): boolean {
     const v = lead.otp_verified;
     return v === true || v === 1 || v === 'true';
@@ -329,69 +351,47 @@ export class LeadsService {
   }
 
   /**
-   * Gate 2 — same PAN + same product (any mobile):
-   * - personal_loan vs personal_loan
-   * - insurance + same ins_type (life / health / motor / cyber)
-   * Different insurance types are allowed. Block unless prior lead is approved.
-   * Does NOT block a different PAN merely because the mobile already has this product.
-   * Scans open (non-approved) rows — not only the newest — so an older pending
-   * still blocks after a later lead was approved.
+   * Same mobile + same product. PAN is not checked.
+   * Newest real lead wins: approved allows another apply, rejected blocks forever,
+   * any other open status blocks and the caller shows that status.
+   * Insurance types (life / health / motor) are separate products.
    */
   async findBlockingSameCategoryLead(
-    _mobileNumber: string,
-    pan: string | null | undefined,
+    mobileNumber: string,
+    _pan: string | null | undefined,
     category?: string | null,
     insType?: string | null,
+    ignoreLeadId?: string,
   ): Promise<Record<string, unknown> | null> {
+    const mobile = mobileNumber.trim();
+    if (!mobile) return null;
     const cat = normalizeStoredCategory(category);
     const ins = normalizeStoredInsType(cat, insType);
-    const panUpper = pan ? normalizePan(pan) : '';
-    if (!panUpper || !isValidPanFormat(panUpper)) return null;
+    const ignore = String(ignoreLeadId ?? '').trim();
 
-    const pickOpen = (rows: Record<string, unknown>[] | null) => {
-      for (const row of rows ?? []) {
-        if (!isDraftLead(row) && !isApprovedLeadStatus(row.status)) {
-          return row;
-        }
-      }
-      return null;
-    };
-
-    const digest = hashPan(panUpper);
-    let byHash = this.leads
+    let q = this.leads
       .select()
-      .eq('pan_hash', digest)
+      .eq('mobile_number', mobile)
       .eq('category', cat)
-      .eq('is_active', true)
-      .neq('status', 'approved');
+      .eq('is_active', true);
     if (cat === 'insurance' && ins) {
-      byHash = byHash.eq('ins_type', ins);
+      q = q.eq('ins_type', ins);
     }
-    const hashed = await byHash.order('created_at', { ascending: false }).limit(20);
-    if (!hashed.error) {
-      const hit = pickOpen((hashed.data as Record<string, unknown>[]) || []);
-      if (hit) return hit;
-    }
-
-    let byPan = this.leads
-      .select()
-      .eq('pan', panUpper)
-      .eq('category', cat)
-      .eq('is_active', true)
-      .neq('status', 'approved');
-    if (cat === 'insurance' && ins) {
-      byPan = byPan.eq('ins_type', ins);
-    }
-    const { data, error } = await byPan
-      .order('created_at', { ascending: false })
-      .limit(20);
+    const { data, error } = await q.order('created_at', { ascending: false }).limit(20);
     if (error) {
       if (process.env.NODE_ENV !== 'production') {
         console.error('LeadsService.findBlockingSameCategoryLead', error.message);
       }
       return null;
     }
-    return pickOpen((data as Record<string, unknown>[]) || []);
+
+    for (const row of (data as Record<string, unknown>[]) || []) {
+      if (ignore && String(row.id ?? '').trim() === ignore) continue;
+      if (isDraftLead(row)) continue;
+      if (isApprovedLeadStatus(row.status)) return null;
+      return row;
+    }
+    return null;
   }
 
   private writeFailure(errorMessage?: string): {
@@ -510,12 +510,17 @@ export class LeadsService {
       };
     }
 
-    const [insOk, limit, blocking] = await Promise.all([
+    const [insOk, blocking] = await Promise.all([
       category === 'insurance' && ins
         ? this.servicesService.isAllowedInsuranceType(ins)
         : Promise.resolve(true),
-      this.checkMobilePanLimit(input.mobileNumber, input.pan),
-      this.findBlockingSameCategoryLead(input.mobileNumber, input.pan, category, ins),
+      this.findBlockingSameCategoryLead(
+        input.mobileNumber,
+        input.pan,
+        category,
+        ins,
+        input.ignoreLeadId,
+      ),
     ]);
     if (!insOk) {
       return {
@@ -525,22 +530,13 @@ export class LeadsService {
         categoryLabel: categoryLabel(category),
       };
     }
-    if (!limit.allowed) {
-      return {
-        allowed: false,
-        message: limit.message,
-        code: limit.code,
-        category,
-        categoryLabel: categoryLabel(category),
-        insType: ins,
-      };
-    }
-    if (blocking && String(blocking['id'] ?? '') !== String(input.ignoreLeadId ?? '')) {
+    if (blocking) {
       const status =
         String(blocking.status ?? 'pending').trim().toLowerCase() || 'pending';
       return {
         allowed: false,
         message: blockingApplicationMessage(blocking),
+        code: CODE_PHONE_PRODUCT_BLOCKED,
         status,
         statusLabel: statusLabel(status),
         category,
@@ -736,7 +732,7 @@ export class LeadsService {
 
   /**
    * Create lead after OTP.
-   * Gate 1: max 4 unique PANs per mobile. Gate 2: same PAN + same product unless approved.
+   * One mobile can hold one open application per product. Approved can apply again. Rejected cannot.
    */
   async applyLead(dto: CreateLeadDto, meta?: { clientIp?: string | null }): Promise<{
     ok: boolean;
@@ -767,7 +763,7 @@ export class LeadsService {
 
     const category = normalizeStoredCategory(dto.category);
     const ins = normalizeStoredInsType(category, dto.insType);
-    if (category === 'personal_loan') {
+    if (isStoredLoanCategory(category)) {
       const empErr = this.personalLoanEmploymentError(dto);
       if (empErr) return { ok: false, message: empErr };
     }
@@ -830,15 +826,11 @@ export class LeadsService {
     // Public apply: never trust client-supplied userId (referral via code only).
     if (agentId) payload.agent_id = agentId;
     Object.assign(payload, this.ipFields(meta?.clientIp));
-    if (category === 'personal_loan') {
-      const amounts = resolvePersonalLoanAmounts({
-        requiredAmount: dto.requiredAmount,
-        loanAmt: dto.loanAmt,
-      });
-      const amtErr = personalLoanAmountError(amounts.requiredAmount, await this.personalLoanAmountBounds());
-      if (amtErr) return { ok: false, message: amtErr };
-      payload.required_amount = amounts.requiredAmount;
-      payload.loan_amt = amounts.loanAmt;
+    const publicLoan = await this.publicLoanAmounts(category, dto);
+    if (publicLoan && !publicLoan.ok) return { ok: false, message: publicLoan.message };
+    if (publicLoan?.ok) {
+      payload.required_amount = publicLoan.amounts.requiredAmount;
+      payload.loan_amt = publicLoan.amounts.loanAmt;
       payload.net_monthly_income = dto.netMonthlyIncome;
       payload.loan_tenure_months = dto.loanTenureMonths ?? null;
       const employment = storedEmploymentType(dto.employmentType);
@@ -854,27 +846,20 @@ export class LeadsService {
     // Approved prior lead stays; only drafts are upgraded.
     if (byMobile && isDraftLead(byMobile) && byMobile.id) {
       try {
-        const plAmounts =
-          category === 'personal_loan'
-            ? resolvePersonalLoanAmounts({
-                requiredAmount: dto.requiredAmount,
-                loanAmt: dto.loanAmt,
-              })
-            : null;
+        const loanAmounts = publicLoan?.ok ? publicLoan.amounts : null;
         const updated = await this.updateById(String(byMobile.id), {
           pan: panUpper,
           fullName: dto.fullName.trim(),
           email: dto.email,
           pincode: dto.pincode,
-          requiredAmount: category === 'insurance' ? null : plAmounts?.requiredAmount ?? dto.requiredAmount,
+          requiredAmount: category === 'insurance' ? null : loanAmounts?.requiredAmount ?? dto.requiredAmount,
           category,
           status: 'pending',
-          loanAmt: category === 'personal_loan' ? plAmounts?.loanAmt ?? null : undefined,
+          loanAmt: loanAmounts ? loanAmounts.loanAmt : undefined,
           insType: category === 'insurance' ? ins : null,
-          netMonthlyIncome:
-            category === 'personal_loan' ? dto.netMonthlyIncome ?? null : null,
-          loanTenureMonths: category === 'personal_loan' ? dto.loanTenureMonths ?? null : null,
-          employmentType: category === 'personal_loan' ? dto.employmentType : undefined,
+          netMonthlyIncome: loanAmounts ? dto.netMonthlyIncome ?? null : null,
+          loanTenureMonths: loanAmounts ? dto.loanTenureMonths ?? null : null,
+          employmentType: loanAmounts ? dto.employmentType : undefined,
           clientIp: meta?.clientIp ?? undefined,
           agentId: !byMobile.agent_id && agentId ? agentId : undefined,
           consentAccepted: true,
@@ -967,7 +952,7 @@ export class LeadsService {
     if (!gates.allowed) {
       return {
         ok: false,
-        field: gates.code === CODE_MOBILE_PAN_LIMIT_REACHED ? 'mobileNumber' : 'pan',
+        field: 'mobileNumber',
         message: gates.message || MSG_MOBILE_PAN_LIMIT_REACHED,
         code: gates.code,
       };
@@ -1111,7 +1096,7 @@ export class LeadsService {
     if (!gates.allowed) {
       return {
         ok: false,
-        field: gates.code === CODE_MOBILE_PAN_LIMIT_REACHED ? 'mobileNumber' : 'pan',
+        field: 'mobileNumber',
         message: gates.message || MSG_MOBILE_PAN_LIMIT_REACHED,
         code: gates.code,
       };
@@ -1141,7 +1126,7 @@ export class LeadsService {
       if (err instanceof LeadRuleError) {
         return {
           ok: false,
-          field: err.code === CODE_MOBILE_PAN_LIMIT_REACHED ? 'mobileNumber' : 'pan',
+          field: err.code === CODE_MOBILE_PAN_LIMIT_REACHED || err.code === CODE_PHONE_PRODUCT_BLOCKED ? 'mobileNumber' : 'pan',
           message: err.message,
           code: err.code,
         };
@@ -1439,10 +1424,11 @@ export class LeadsService {
             String(existing['ins_type'] ?? ''),
         );
         const other = await this.findBlockingSameCategoryLead(
-          '',
+          String(existing['mobile_number'] ?? ''),
           panUpper,
           category,
           ins,
+          id,
         );
         if (other && String(other.id) !== id) {
           return null;
@@ -1459,22 +1445,6 @@ export class LeadsService {
     }
 
     if (Object.keys(payload).length === 1) return null;
-
-    const nextMobile = String(
-      payload.mobile_number ?? existing['mobile_number'] ?? '',
-    ).trim();
-    const nextPanHash = String(
-      payload.pan_hash ?? existing['pan_hash'] ?? '',
-    ).trim();
-    if (nextMobile && nextPanHash) {
-      const hashes = await this.uniquePanHashesForMobile(nextMobile);
-      if (!hashes.includes(nextPanHash) && hashes.length >= 4) {
-        throw new LeadRuleError(
-          MSG_MOBILE_PAN_LIMIT_REACHED,
-          CODE_MOBILE_PAN_LIMIT_REACHED,
-        );
-      }
-    }
 
     const { data, errorMessage } = await this.updateLeadRow(
       id,

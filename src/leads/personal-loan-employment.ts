@@ -16,7 +16,7 @@ export function personalLoanEmploymentError(dto: {
 }): string | null {
   const income = dto.netMonthlyIncome;
   if (income == null || !Number.isFinite(Number(income)) || Number(income) < 1) {
-    return 'Net monthly income is required for personal loan.';
+    return 'Net monthly income is required.';
   }
   return null;
 }

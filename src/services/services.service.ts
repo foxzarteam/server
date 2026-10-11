@@ -83,15 +83,29 @@ export class ServicesService {
     return types.length > 0 ? types : FALLBACK_INSURANCE_TYPES.map((t) => ({ ...t }));
   }
 
+  /** Loan rows for the /products/loans tabs. Active flag does not hide them. */
+  private async fetchLoanProducts(): Promise<ServicePublic[]> {
+    const { data, error } = await this.table
+      .select('id, slug, title, description, image_url, sort_order, is_active, limit_start, limit_end, created_at, updated_at')
+      .ilike('slug', '%-loan')
+      .order('sort_order', { ascending: true });
+
+    if (error || !data) return [];
+    return (data as Record<string, unknown>[])
+      .map((item) => this.rowToPublic(item))
+      .filter((row) => /^[a-z0-9]+(?:-[a-z0-9]+)*-loan$/.test(row.slug));
+  }
+
   async getPublicCatalog(): Promise<PublicCatalog> {
     if (this.catalogCache && Date.now() - this.catalogCache.at < CATALOG_TTL_MS) {
       return this.catalogCache.value;
     }
-    const [services, insuranceTypes] = await Promise.all([
+    const [services, insuranceTypes, loanProducts] = await Promise.all([
       this.getActivePublic(),
       this.fetchActiveInsuranceTypes(),
+      this.fetchLoanProducts(),
     ]);
-    const value = { services, insuranceTypes };
+    const value = { services, insuranceTypes, loanProducts };
     this.catalogCache = { at: Date.now(), value };
     return value;
   }

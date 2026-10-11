@@ -38,6 +38,7 @@ import {
 import { LeadsService } from './leads.service';
 import {
   CODE_MOBILE_PAN_LIMIT_REACHED,
+  CODE_PHONE_PRODUCT_BLOCKED,
   LeadRuleError,
 } from './mobile-pan-limit';
 import {
@@ -57,7 +58,9 @@ export class LeadsController {
     };
     const conflict =
       code === CODE_MOBILE_PAN_LIMIT_REACHED ||
-      message.toLowerCase().includes('already');
+      code === CODE_PHONE_PRODUCT_BLOCKED ||
+      message.toLowerCase().includes('already') ||
+      message.toLowerCase().includes('cannot apply again');
     throw new HttpException(
       body,
       conflict ? HttpStatus.CONFLICT : HttpStatus.BAD_REQUEST,
@@ -67,7 +70,7 @@ export class LeadsController {
   /**
    * Public apply: persist the lead on form submit (Verified = No).
    * OTP is a later step — verify-firebase marks Verified = Yes.
-   * Gate 1: max 4 unique PANs per mobile. Gate 2: same PAN + product unless approved.
+   * One mobile number can apply once per product. Approved can apply again. Rejected cannot.
    */
   @Post('apply')
   @HttpCode(HttpStatus.CREATED)
@@ -194,7 +197,10 @@ export class LeadsController {
       if (err instanceof LeadRuleError) {
         return {
           success: false,
-          field: err.code === CODE_MOBILE_PAN_LIMIT_REACHED ? 'mobileNumber' : 'pan',
+          field:
+            err.code === CODE_MOBILE_PAN_LIMIT_REACHED || err.code === CODE_PHONE_PRODUCT_BLOCKED
+              ? 'mobileNumber'
+              : 'pan',
           message: err.message,
           code: err.code,
         };

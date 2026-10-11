@@ -30,6 +30,8 @@ export type ServicePublic = {
 export type PublicCatalog = {
   services: ServicePublic[];
   insuranceTypes: InsuranceTypePublic[];
+  /** Every loan product (slug ending in -loan), including ones hidden from the nav. */
+  loanProducts: ServicePublic[];
 };
 
 export class AdminUpdateServiceDto {

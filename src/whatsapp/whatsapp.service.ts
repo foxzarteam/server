@@ -236,7 +236,7 @@ export class WhatsappService implements OnModuleInit {
         ...(item.filename ? { filename: item.filename } : {}),
         ...(item.mime ? { mime: item.mime } : {}),
         ...(item.kind === 'kyc' ? { buttons: [KYC_START_BTN, KYC_STATUS_BTN] } : {}),
-        ...(item.kind === 'welcome' ? { buttons: ['Personal Loan', 'Insurance'] } : {}),
+        ...(item.kind === 'welcome' ? { buttons: ['Loan', 'Insurance'] } : {}),
         ...(item.mediaId || item.filename === 'wa_ins.jpg' || item.filename === 'wa_loa.jpg' ? { hasMedia: true } : {}),
       })),
     };
