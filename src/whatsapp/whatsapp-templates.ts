@@ -136,12 +136,12 @@ export function alreadyKycDocsAsked(messages: { role: string; kind?: string; sen
 
 export function isKycStartClick(buttonId: string, text: string): boolean {
   const blob = `${buttonId} ${text}`.toLowerCase();
-  return /kyc\s*start/.test(blob);
+  return /kyc\s*start|complete\s*kyc/.test(blob);
 }
 
 export function isKycStatusClick(buttonId: string, text: string): boolean {
   const blob = `${buttonId} ${text}`.toLowerCase();
-  if (/kyc\s*start/.test(blob)) return false;
+  if (/kyc\s*start|complete\s*kyc/.test(blob)) return false;
   return /application\s*status|status\s*check/.test(blob);
 }
 

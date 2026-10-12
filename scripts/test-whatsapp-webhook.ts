@@ -196,8 +196,8 @@ assert.strictEqual(kycPayload.template.name, 'application_kyc');
 assert.strictEqual(KYC_TEMPLATE, 'application_kyc');
 assert.strictEqual(KYC_TEMPLATE_LANG, 'en_GB');
 assert.strictEqual(kycPayload.template.language.code, KYC_TEMPLATE_LANG);
+assert.strictEqual(kycPayload.template.components[0].parameters.length, 1);
 assert.strictEqual(kycPayload.template.components[0].parameters[0].text, 'Raju Patel');
-assert.strictEqual(kycPayload.template.components[0].parameters[1].text, 'Insurance');
 assert.ok(alreadyKycStarted([{ role: 'assistant', kind: 'kyc' }]));
 assert.ok(!alreadyKycStarted([{ role: 'assistant', kind: 'welcome' }]));
 assert.strictEqual(asChat({ messages: [{ id: 'kyc:1', role: 'assistant', kind: 'kyc', text: 'x' }] }).messages[0].kind, 'kyc');
@@ -226,11 +226,15 @@ const kycBtn = extractInboundMessages({
 assert.ok(isKycStartClick(kycBtn[0].buttonId, kycBtn[0].text));
 assert.ok(isKycStartClick('Haan, KYC Start Karein', ''));
 assert.ok(isKycStartClick('', 'Haan, KYC Start Karein'));
+assert.ok(isKycStartClick('Complete KYC', ''));
+assert.ok(isKycStartClick('', 'Complete KYC'));
 assert.ok(!isKycStartClick('Application Status Check Karein', ''));
 assert.ok(isKycStatusClick('Application Status Check Karein', ''));
 assert.ok(isKycStatusClick('', 'Application Status Check Karein'));
 assert.ok(!isKycStatusClick('Haan, KYC Start Karein', ''));
 assert.ok(!isKycStatusClick('Haan, KYC Start Karein', 'Application Status Check Karein'));
+assert.ok(isKycStatusClick('Check Application Status', ''));
+assert.ok(!isKycStatusClick('Complete KYC', ''));
 const statusText = statusCheckText();
 const statusPayload = graphMessageBody('919876543210', {
   id: 'ai:status',
@@ -260,10 +264,10 @@ assert.ok(/Bank Statement/i.test(docs));
 assert.ok(/Salary Slip/i.test(docs));
 assert.strictEqual(asChat({ messages: [{ id: 'docs:1', role: 'assistant', kind: 'kyc_docs', text: 'x' }] }).messages[0].kind, 'kyc_docs');
 const kycView = kycChatText('Atul', 'personal_loan');
-assert.ok(/Hello Atul!/.test(kycView));
-assert.ok(/Personal Loan file/.test(kycView));
-assert.ok(/KYC start karein/.test(kycView));
-assert.ok(/Haan, KYC Start/.test(KYC_START_BTN));
+assert.ok(/Dear Atul\./.test(kycView));
+assert.ok(/application is in progress/.test(kycView));
+assert.ok(/KYC verification is pending/.test(kycView));
+assert.strictEqual(KYC_START_BTN, 'Complete KYC');
 
 const pdfIn = extractInboundMessages({
   object: 'whatsapp_business_account',
@@ -304,6 +308,7 @@ assert.strictEqual(pickBotReply('', 'Hello', { ...idle, welcomed: true }).kind, 
 assert.strictEqual(pickBotReply('', 'Hello', { ...idle, kyc: true, welcomed: false }).kind, null);
 assert.strictEqual(pickBotReply('', 'ok', { ...idle, kyc: true }).kind, null);
 assert.strictEqual(pickBotReply('Haan, KYC Start Karein', '', idle).kind, 'kyc_docs');
+assert.strictEqual(pickBotReply('Complete KYC', '', idle).kind, 'kyc_docs');
 assert.strictEqual(pickBotReply('Application Status Check Karein', '', idle).kind, 'status');
 assert.strictEqual(pickBotReply('personal_loan', '', idle).kind, 'personal_loan');
 assert.strictEqual(pickBotReply('personal_loan', '', { ...idle, loanOffered: true }).kind, null);

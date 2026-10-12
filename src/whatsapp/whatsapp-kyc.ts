@@ -11,21 +11,20 @@ export function kycProductName(category: string, insType?: string | null): strin
   return productLabel({ category, ins_type: insType });
 }
 
-export const KYC_START_BTN = 'Haan, KYC Start Karein';
-export const KYC_STATUS_BTN = 'Application Status Check Karein';
+export const KYC_START_BTN = 'Complete KYC';
+export const KYC_STATUS_BTN = 'Check Application Status';
 
-export function kycChatText(name: string, category: string, insType?: string | null): string {
+export function kycChatText(name: string, _category?: string, _insType?: string | null): string {
   const who = kycBodyName(name);
-  const product = kycProductName(category, insType);
-  return `Hello ${who}! Apni Zaroorat par details dene ke liye shukriya. Aapki ${product} file ke liye KYC start karein.`;
+  return `Dear ${who}. Your account application is in progress. KYC verification is pending. Complete it in just 2 mins`;
 }
 
 export function kycGraphPayload(
   phone: string,
   name: string,
-  category: string,
+  _category: string,
   lang: string,
-  insType?: string | null,
+  _insType?: string | null,
 ): Record<string, unknown> {
   return {
     messaging_product: 'whatsapp',
@@ -37,10 +36,7 @@ export function kycGraphPayload(
       components: [
         {
           type: 'body',
-          parameters: [
-            { type: 'text', text: kycBodyName(name) },
-            { type: 'text', text: kycProductName(category, insType) },
-          ],
+          parameters: [{ type: 'text', text: kycBodyName(name) }],
         },
       ],
     },
