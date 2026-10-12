@@ -187,7 +187,6 @@ export class LeadsController {
           loanAmt: dto.loanAmt,
           insType: dto.insType,
           netMonthlyIncome: dto.netMonthlyIncome,
-          loanTenureMonths: dto.loanTenureMonths,
           employmentType: dto.employmentType,
           consentAccepted: true,
         },

@@ -832,7 +832,6 @@ export class LeadsService {
       payload.required_amount = publicLoan.amounts.requiredAmount;
       payload.loan_amt = publicLoan.amounts.loanAmt;
       payload.net_monthly_income = dto.netMonthlyIncome;
-      payload.loan_tenure_months = dto.loanTenureMonths ?? null;
       const employment = storedEmploymentType(dto.employmentType);
       if (employment) payload.employment_type = employment;
     }
@@ -858,7 +857,6 @@ export class LeadsService {
           loanAmt: loanAmounts ? loanAmounts.loanAmt : undefined,
           insType: category === 'insurance' ? ins : null,
           netMonthlyIncome: loanAmounts ? dto.netMonthlyIncome ?? null : null,
-          loanTenureMonths: loanAmounts ? dto.loanTenureMonths ?? null : null,
           employmentType: loanAmounts ? dto.employmentType : undefined,
           clientIp: meta?.clientIp ?? undefined,
           agentId: !byMobile.agent_id && agentId ? agentId : undefined,
@@ -1034,9 +1032,6 @@ export class LeadsService {
       payload.required_amount = amounts.requiredAmount;
       payload.loan_amt = amounts.loanAmt;
       payload.net_monthly_income = dto.netMonthlyIncome;
-      if (dto.loanTenureMonths != null) {
-        payload.loan_tenure_months = dto.loanTenureMonths;
-      }
       const employment = storedEmploymentType(dto.employmentType);
       if (employment) payload.employment_type = employment;
     }
@@ -1116,7 +1111,6 @@ export class LeadsService {
           loanAmt: dto.loanAmt,
           insType: dto.insType,
           netMonthlyIncome: dto.netMonthlyIncome,
-          loanTenureMonths: dto.loanTenureMonths,
           employmentType: dto.employmentType,
           consentAccepted: true,
         },
@@ -1302,9 +1296,6 @@ export class LeadsService {
     if (dto.insType !== undefined) payload.ins_type = dto.insType ?? null;
     if (dto.netMonthlyIncome !== undefined) {
       payload.net_monthly_income = dto.netMonthlyIncome ?? null;
-    }
-    if (dto.loanTenureMonths !== undefined) {
-      payload.loan_tenure_months = dto.loanTenureMonths ?? null;
     }
     if (dto.employmentType !== undefined) {
       payload.employment_type = storedEmploymentType(dto.employmentType);
