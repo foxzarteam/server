@@ -148,12 +148,12 @@ export class LeadsService {
   ): void {
     if (!lead) return;
     const category = normalizeStoredCategory(String(lead.category ?? ''));
-    if (category !== 'personal_loan' && category !== 'insurance') return;
     this.whatsapp.notifyApplicationKycStart({
       leadId: String(lead.id ?? ''),
       phone: String(lead.mobile_number ?? lead.mobileNumber ?? fallbackPhone ?? ''),
       name: String(lead.full_name ?? lead.fullName ?? fallbackName ?? ''),
       category,
+      insType: lead.ins_type != null ? String(lead.ins_type) : null,
     });
   }
 

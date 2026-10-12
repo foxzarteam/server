@@ -70,6 +70,8 @@ export type WhatsappEnquiryDetail = {
 export type FlowMem = {
   welcomed: boolean;
   offered: boolean;
+  loanOffered: boolean;
+  insuranceOffered: boolean;
   thanked: boolean;
   kyc: boolean;
   kycDocs: boolean;
@@ -78,7 +80,16 @@ export type FlowMem = {
 };
 
 export function emptyFlow(): FlowMem {
-  return { welcomed: false, offered: false, thanked: false, kyc: false, kycDocs: false, ids: new Set() };
+  return {
+    welcomed: false,
+    offered: false,
+    loanOffered: false,
+    insuranceOffered: false,
+    thanked: false,
+    kyc: false,
+    kycDocs: false,
+    ids: new Set(),
+  };
 }
 
 export function asChat(raw: unknown): ChatDoc {

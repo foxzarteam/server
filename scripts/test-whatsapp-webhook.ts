@@ -186,7 +186,9 @@ assert.ok(/apnizaroorat.com\//.test(thankYouText('Gaurav')));
 
 assert.strictEqual(kycBodyName('  Raju   Patel\n'), 'Raju Patel');
 assert.strictEqual(kycProductName('personal_loan'), 'Personal Loan');
+assert.strictEqual(kycProductName('home_loan'), 'Home Loan');
 assert.strictEqual(kycProductName('insurance'), 'Insurance');
+assert.strictEqual(kycProductName('insurance', 'health_insurance'), 'Health Insurance');
 const kycPayload = kycGraphPayload('919876543210', 'Raju Patel', 'insurance', 'en_GB') as {
   template: { name: string; language: { code: string }; components: { parameters: { text: string }[] }[] };
 };
@@ -304,6 +306,10 @@ assert.strictEqual(pickBotReply('', 'ok', { ...idle, kyc: true }).kind, null);
 assert.strictEqual(pickBotReply('Haan, KYC Start Karein', '', idle).kind, 'kyc_docs');
 assert.strictEqual(pickBotReply('Application Status Check Karein', '', idle).kind, 'status');
 assert.strictEqual(pickBotReply('personal_loan', '', idle).kind, 'personal_loan');
+assert.strictEqual(pickBotReply('personal_loan', '', { ...idle, loanOffered: true }).kind, null);
+assert.strictEqual(pickBotReply('insurance', '', { ...idle, loanOffered: true }).kind, 'insurance');
+assert.strictEqual(pickBotReply('insurance', '', { ...idle, insuranceOffered: true }).kind, null);
+assert.strictEqual(pickBotReply('personal_loan', '', { ...idle, product: 'insurance', loanOffered: true }).kind, null);
 assert.strictEqual(pickBotReply('', 'thanks', { ...idle, welcomed: true }).kind, 'thanks');
 
 console.log('test-whatsapp-webhook: all asserts passed');

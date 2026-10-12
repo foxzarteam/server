@@ -2,7 +2,7 @@ import { Inject, Injectable, OnModuleInit } from '@nestjs/common';
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { SupabaseClient } from '@supabase/supabase-js';
-import { TABLE_LEADS, TABLE_WP_ENQUIRIES } from '../common/constants';
+import { TABLE_WP_ENQUIRIES } from '../common/constants';
 import { LEAD_DRAFT_FULL_NAME } from '../leads/lead-draft';
 import { normalizeStoredCategory } from '../leads/lead-present';
 import { SUPABASE_CLIENT } from '../config/supabase';
@@ -70,6 +70,8 @@ export class WhatsappService implements OnModuleInit {
   private flowMem = new Map<string, FlowMem>();
   private persistTail = new Map<string, Promise<void>>();
   private kycTemplateSent = new Set<string>();
+  private kycLeadSent = new Set<string>();
+  private inboundTail = new Map<string, Promise<void>>();
 
   constructor(
     @Inject(SUPABASE_CLIENT) private readonly supabase: SupabaseClient,
@@ -85,14 +87,20 @@ export class WhatsappService implements OnModuleInit {
     this.warmTemplateMedia(settings);
   }
 
-  /** Fire-and-forget after OTP. Login must not wait on Meta. */
-  notifyAfterOtpVerified(mobile: string): void {
-    const ten = String(mobile ?? '').replace(/\D/g, '').slice(-10);
-    const phone = canonicalWhatsappPhone(ten);
-    if (!/^[6-9]\d{9}$/.test(ten) || this.kycTemplateSent.has(phone)) return;
-    void this.sendKycForVerifiedMobile(ten, phone).catch((error) => {
-      console.error('WhatsappService.notifyAfterOtpVerified', error);
-    });
+  /** Fire-and-forget after OTP. One KYC template per lead that just got verified. */
+  notifyAfterOtpVerified(
+    mobile: string,
+    leads: { id?: string; full_name?: string; category?: string; ins_type?: string | null }[] = [],
+  ): void {
+    for (const lead of leads) {
+      this.notifyApplicationKycStart({
+        leadId: String(lead.id ?? ''),
+        phone: mobile,
+        name: String(lead.full_name ?? ''),
+        category: String(lead.category ?? ''),
+        insType: lead.ins_type,
+      });
+    }
   }
 
   notifyApplicationKycStart(input: {
@@ -100,13 +108,15 @@ export class WhatsappService implements OnModuleInit {
     phone: string;
     name: string;
     category?: string;
+    insType?: string | null;
   }): void {
     const category = normalizeStoredCategory(String(input.category ?? ''));
-    if (category !== 'personal_loan' && category !== 'insurance') return;
     void this.dispatchKycTemplate(
       canonicalWhatsappPhone(input.phone),
       String(input.name ?? ''),
       category,
+      String(input.leadId ?? ''),
+      input.insType,
     ).catch((error) => {
       console.error('WhatsappService.notifyApplicationKycStart', error);
     });
@@ -314,56 +324,76 @@ export class WhatsappService implements OnModuleInit {
     };
   }
 
+  private enqueueInbound(phone: string, fn: () => Promise<void>) {
+    const prev = this.inboundTail.get(phone) ?? Promise.resolve();
+    const next = prev.then(fn).catch((error) => {
+      console.error('WhatsappService.handleInbound', error);
+    });
+    this.inboundTail.set(phone, next);
+  }
+
   private handleInbound(settings: WhatsappSettings, message: InboundWhatsappMessage) {
     const assistantId = `ai:${message.messageId}`;
     if (this.sentIds.has(assistantId) || this.inflight.has(message.messageId)) return;
     this.inflight.add(message.messageId);
-    try {
-      const phone = canonicalWhatsappPhone(message.phone);
-      const kycClick = isKycStartClick(message.buttonId, message.text);
-      const statusClick = isKycStatusClick(message.buttonId, message.text);
-      if (kycClick || statusClick) this.seedKycFlow(phone);
-      else this.ensureFlowFast(phone);
-
-      const seen = this.flowMem.get(phone)?.ids;
-      if (seen?.has(message.messageId) || seen?.has(assistantId)) return;
-
-      const userMessage = this.inboundUserMessage(message);
-      const choice = productChoice(message.buttonId, message.text);
-      let reply = this.decideReply(phone, message, assistantId);
-      if (
-        reply &&
-        reply.kind !== 'welcome' &&
-        !choice &&
-        !kycClick &&
-        !statusClick &&
-        !isGreeting(message.text) &&
-        !allowRateLimitedAction(`wa-in:${phone}`, 20, 10 * 60_000)
-      ) {
-        reply = {
-          id: assistantId,
-          role: 'assistant',
-          text: 'Please wait a few minutes before sending more messages.',
-          at: new Date().toISOString(),
-          replyBy: 'template',
-          waType: 'text',
-        };
+    const phone = canonicalWhatsappPhone(message.phone);
+    this.enqueueInbound(phone, async () => {
+      try {
+        await this.prepareInbound(settings, message, phone, assistantId);
+      } finally {
+        this.inflight.delete(message.messageId);
       }
+    });
+  }
 
-      this.rememberIds(phone, [userMessage.id, ...(reply ? [reply.id] : [])]);
-      if (reply) this.noteFlow(phone, reply);
+  private async prepareInbound(
+    settings: WhatsappSettings,
+    message: InboundWhatsappMessage,
+    phone: string,
+    assistantId: string,
+  ) {
+    const kycClick = isKycStartClick(message.buttonId, message.text);
+    const statusClick = isKycStatusClick(message.buttonId, message.text);
+    if (kycClick || statusClick) this.seedKycFlow(phone);
+    else this.ensureFlowFast(phone);
+    await this.hydrateFlow(phone);
 
-      if (reply) {
-        reply.sent = true;
-        void this.deliverBotReply(settings, phone, reply, message.phoneNumberId);
-      }
+    const seen = this.flowMem.get(phone)?.ids;
+    if (seen?.has(message.messageId) || seen?.has(assistantId)) return;
 
-      this.queuePersist(phone, () =>
-        this.persistInbound(phone, message.profileName, userMessage, reply, message.phoneNumberId),
-      );
-    } finally {
-      this.inflight.delete(message.messageId);
+    const userMessage = this.inboundUserMessage(message);
+    const choice = productChoice(message.buttonId, message.text);
+    let reply = this.decideReply(phone, message, assistantId);
+    if (
+      reply &&
+      reply.kind !== 'welcome' &&
+      !choice &&
+      !kycClick &&
+      !statusClick &&
+      !isGreeting(message.text) &&
+      !allowRateLimitedAction(`wa-in:${phone}`, 20, 10 * 60_000)
+    ) {
+      reply = {
+        id: assistantId,
+        role: 'assistant',
+        text: 'Please wait a few minutes before sending more messages.',
+        at: new Date().toISOString(),
+        replyBy: 'template',
+        waType: 'text',
+      };
     }
+
+    this.rememberIds(phone, [userMessage.id, ...(reply ? [reply.id] : [])]);
+    if (reply) this.noteFlow(phone, reply);
+
+    if (reply) {
+      reply.sent = true;
+      void this.deliverBotReply(settings, phone, reply, message.phoneNumberId);
+    }
+
+    this.queuePersist(phone, () =>
+      this.persistInbound(phone, message.profileName, userMessage, reply, message.phoneNumberId),
+    );
   }
 
   /** KYC Start / Status check: no DB wait. Does not count as Namaste welcome. */
@@ -374,13 +404,12 @@ export class WhatsappService implements OnModuleInit {
     this.flowMem.set(phone, seed);
   }
 
-  /** Reply uses memory only. History loads after the Graph POST has started. */
+  /** Seed memory before history is read. History decides if welcome or a product offer already went out. */
   private ensureFlowFast(phone: string) {
     if (this.flowMem.has(phone)) return;
     const seed = emptyFlow();
     if (this.kycTemplateSent.has(phone)) seed.kyc = true;
     this.flowMem.set(phone, seed);
-    void this.hydrateFlow(phone);
   }
 
   /** Graph POST starts now; inbound must not wait for Meta's HTTP ack (was blocking the next reply). */
@@ -416,6 +445,12 @@ export class WhatsappService implements OnModuleInit {
     const thanked = alreadyThanked(messages) || prev.thanked;
     const kycDocs = alreadyKycDocsAsked(messages) || prev.kycDocs;
     const kyc = alreadyKycStarted(messages) || kycDocs || prev.kyc;
+    const loanOffered =
+      prev.loanOffered ||
+      messages.some((item) => item.role === 'assistant' && item.kind === 'personal_loan');
+    const insuranceOffered =
+      prev.insuranceOffered ||
+      messages.some((item) => item.role === 'assistant' && item.kind === 'insurance');
     if (kyc) this.rememberKycPhone(phone);
     if (!prev.product) {
       for (const item of messages) {
@@ -427,6 +462,8 @@ export class WhatsappService implements OnModuleInit {
     for (const item of messages) prev.ids.add(item.id);
     prev.welcomed = prev.welcomed || alreadyWelcomed(messages) || offered || thanked;
     prev.offered = offered;
+    prev.loanOffered = loanOffered;
+    prev.insuranceOffered = insuranceOffered;
     prev.thanked = thanked;
     prev.kyc = kyc;
     prev.kycDocs = kycDocs;
@@ -441,6 +478,8 @@ export class WhatsappService implements OnModuleInit {
       kycDocs: Boolean(mem?.kycDocs),
       welcomed: Boolean(mem?.welcomed),
       offered: Boolean(mem?.offered),
+      loanOffered: Boolean(mem?.loanOffered),
+      insuranceOffered: Boolean(mem?.insuranceOffered),
       thanked: Boolean(mem?.thanked),
       product: mem?.product,
     });
@@ -499,6 +538,8 @@ export class WhatsappService implements OnModuleInit {
     if (reply.kind === 'personal_loan' || reply.kind === 'insurance') {
       prev.welcomed = true;
       prev.offered = true;
+      if (reply.kind === 'personal_loan') prev.loanOffered = true;
+      if (reply.kind === 'insurance') prev.insuranceOffered = true;
       prev.product = reply.kind;
     }
     if (reply.kind === 'thanks') prev.thanked = true;
@@ -697,51 +738,50 @@ export class WhatsappService implements OnModuleInit {
     if (first) this.kycTemplateSent.delete(first);
   }
 
-  private async sendKycForVerifiedMobile(ten: string, phone: string): Promise<void> {
-    const { data, error } = await this.supabase
-      .from(TABLE_LEADS)
-      .select('full_name, category')
-      .eq('mobile_number', ten)
-      .eq('is_active', true)
-      .in('category', ['personal_loan', 'insurance'])
-      .neq('full_name', LEAD_DRAFT_FULL_NAME)
-      .order('updated_at', { ascending: false })
-      .limit(1)
-      .maybeSingle();
-    if (error) {
-      console.error('WhatsappService.sendKycForVerifiedMobile', error.message);
-      return;
-    }
-    if (!data) return;
-    await this.dispatchKycTemplate(phone, String(data.full_name ?? ''), String(data.category ?? ''));
-  }
-
-  private async dispatchKycTemplate(phone: string, name: string, category: string): Promise<void> {
+  private async dispatchKycTemplate(
+    phone: string,
+    name: string,
+    category: string,
+    leadId = '',
+    insType?: string | null,
+  ): Promise<void> {
     const cat = normalizeStoredCategory(category);
-    if (cat !== 'personal_loan' && cat !== 'insurance') return;
-    if (!/^[0-9]{8,15}$/.test(phone) || this.kycTemplateSent.has(phone)) return;
-    this.rememberKycPhone(phone);
+    const who = name.trim();
+    if (!who || who.toLowerCase() === LEAD_DRAFT_FULL_NAME.toLowerCase()) return;
+    if (!/^[0-9]{8,15}$/.test(phone)) return;
+    const leadKey = leadId.trim() || `${phone}:${cat}:${String(insType ?? '')}`;
+    if (this.kycLeadSent.has(leadKey)) return;
+    this.kycLeadSent.add(leadKey);
+    if (this.kycLeadSent.size > 4000) {
+      const first = this.kycLeadSent.values().next().value;
+      if (first) this.kycLeadSent.delete(first);
+    }
 
     const settings = this.settings.peekEffective() ?? (await this.settings.getEffective());
     const token = settings.accessToken.trim().replace(/^bearer\s+/i, '').trim();
     const fromId = settings.phoneNumberId.replace(/\D/g, '');
     if (!token || !fromId) {
-      this.kycTemplateSent.delete(phone);
+      this.kycLeadSent.delete(leadKey);
       console.error('WhatsappService.dispatchKycTemplate missing WhatsApp settings');
       return;
     }
 
-    const sent = await postGraphMessage(token, fromId, kycGraphPayload(phone, name, cat, KYC_TEMPLATE_LANG));
+    const sent = await postGraphMessage(
+      token,
+      fromId,
+      kycGraphPayload(phone, who, cat, KYC_TEMPLATE_LANG, insType),
+    );
     if (!sent.ok) {
-      this.kycTemplateSent.delete(phone);
+      this.kycLeadSent.delete(leadKey);
       console.error('WhatsappService.dispatchKycTemplate', sent.error);
       return;
     }
+    this.rememberKycPhone(phone);
 
     const message: ChatMessage = {
-      id: `kyc:${phone}`,
+      id: `kyc:${leadKey}`,
       role: 'assistant',
-      text: kycChatText(name, cat),
+      text: kycChatText(who, cat, insType),
       at: new Date().toISOString(),
       sent: true,
       replyBy: 'template',

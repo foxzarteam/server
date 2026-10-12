@@ -177,11 +177,11 @@ export class OtpService {
   private async markLeadsVerifiedForMobile(mobile: string): Promise<void> {
     const { data: unverified, error: peekErr } = await this.supabase
       .from(TABLE_LEADS)
-      .select('id')
+      .select('id, full_name, category, ins_type')
       .eq('mobile_number', mobile)
       .eq('is_active', true)
       .or('otp_verified.eq.false,otp_verified.is.null')
-      .limit(1);
+      .limit(20);
 
     if (peekErr && process.env.NODE_ENV !== 'production') {
       console.error('OtpService.markLeadsVerifiedForMobile peek', peekErr.message);
@@ -198,9 +198,12 @@ export class OtpService {
     }
 
     if (peekErr) return;
-    const firstVerify = Array.isArray(unverified) && unverified.length > 0;
-    if (!firstVerify) return;
-    this.whatsapp.notifyAfterOtpVerified(mobile);
+    const justVerified = (Array.isArray(unverified) ? unverified : []).filter((row) => {
+      const name = String((row as { full_name?: string }).full_name ?? '').trim();
+      return name.length > 0 && name.toLowerCase() !== 'unknown';
+    }) as { id?: string; full_name?: string; category?: string; ins_type?: string | null }[];
+    if (justVerified.length === 0) return;
+    this.whatsapp.notifyAfterOtpVerified(mobile, justVerified);
   }
 
   async verifyFirebaseToken(dto: VerifyFirebaseOtpDto): Promise<OtpResult> {
