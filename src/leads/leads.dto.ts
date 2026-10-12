@@ -93,7 +93,7 @@ export class CreateLeadDto {
   @ValidateIf((o) => isStoredLoanCategory(o.category))
   @IsInt({ message: 'Loan tenure must be a whole number of months' })
   @Min(12, { message: 'Loan tenure must be at least 12 months' })
-  @Max(72, { message: 'Loan tenure cannot exceed 72 months' })
+  @Max(240, { message: 'Loan tenure cannot exceed 240 months' })
   loanTenureMonths?: number;
 
   @IsString()
@@ -188,7 +188,7 @@ export class UpdateLeadDto {
   @IsOptional()
   @IsInt({ message: 'Loan tenure must be a whole number of months' })
   @Min(12, { message: 'Loan tenure must be at least 12 months' })
-  @Max(72, { message: 'Loan tenure cannot exceed 72 months' })
+  @Max(240, { message: 'Loan tenure cannot exceed 240 months' })
   loanTenureMonths?: number | null;
 
   @IsOptional()
@@ -299,7 +299,7 @@ export class AdminCreateLeadDto {
   @IsOptional()
   @IsInt({ message: 'Loan tenure must be a whole number of months' })
   @Min(12, { message: 'Loan tenure must be at least 12 months' })
-  @Max(72, { message: 'Loan tenure cannot exceed 72 months' })
+  @Max(240, { message: 'Loan tenure cannot exceed 240 months' })
   loanTenureMonths?: number;
 
   @IsString()
