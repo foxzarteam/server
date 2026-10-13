@@ -66,6 +66,7 @@ export function statusLabel(status: unknown): string {
   if (s === 'approved') return 'Approved';
   if (s === 'rejected') return 'Not Approved';
   if (s === 'in_process') return 'Under Review';
+  if (s === 'kyc_progress') return 'KYC progress';
   return 'KYC pending';
 }
 

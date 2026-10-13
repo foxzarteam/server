@@ -126,7 +126,7 @@ export class CustomerService {
       return { ok: false, message: 'Application not found' };
     }
     const status = String(lead.status ?? '').trim().toLowerCase();
-    if (isApprovedLeadStatus(status) || status === 'in_process') {
+    if (isApprovedLeadStatus(status) || status === 'in_process' || status === 'kyc_progress') {
       return { ok: false, message: 'This application cannot be deleted. Please contact support.' };
     }
     const ok = await this.leadsService.deleteById(id.trim());

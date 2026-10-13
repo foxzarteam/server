@@ -242,10 +242,18 @@ export function evaluateDuplicateGates(input: {
   const label = product === 'insurance'
     ? normalizeLeadInsType(product, blocking.insType) || 'insurance'
     : product.replace(/_/g, ' ');
+  const shown =
+    status === 'kyc_progress'
+      ? 'KYC progress'
+      : status === 'in_process'
+        ? 'Under Review'
+        : status === 'pending'
+          ? 'KYC pending'
+          : status;
   const message =
     status === 'rejected'
       ? `Your ${label} application was not approved. You cannot apply again for this product with this mobile number.`
-      : `Your ${label} application status is ${status}.`;
+      : `Your ${label} application status is ${shown}.`;
 
   return {
     allowed: false,

@@ -100,39 +100,53 @@ export function productChoice(buttonId: string, text: string): ProductChoice | '
   return '';
 }
 
-export function thankYouText(profileName: string): string {
-  return `Thank you, ${who(profileName)} 🙏\n\nWe have received your message. Our team will contact you shortly. Until then, please visit our website 👇\nhttps://apnizaroorat.com/`;
-}
-
 export function alreadyThanked(messages: { role: string; kind?: string }[]): boolean {
   return messages.some((item) => item.role === 'assistant' && item.kind === 'thanks');
 }
 
-export function alreadyOfferedProduct(messages: { role: string; kind?: string }[]): boolean {
-  return messages.some(
-    (item) => item.role === 'assistant' && (item.kind === 'personal_loan' || item.kind === 'insurance'),
-  );
+/** Sent once for good. One failed attempt can be retried. Two failures stop, so it does not loop. */
+export function templateSettled(
+  messages: { role: string; kind?: string; sendError?: string }[],
+  kind: string,
+): boolean {
+  const hits = messages.filter((item) => item.role === 'assistant' && item.kind === kind);
+  if (hits.some((item) => !item.sendError)) return true;
+  return hits.filter((item) => item.sendError).length >= 2;
 }
 
-export function alreadyWelcomed(messages: { role: string; kind?: string; text: string }[]): boolean {
-  return messages.some(
+export function alreadyOfferedProduct(messages: { role: string; kind?: string; sendError?: string }[]): boolean {
+  return templateSettled(messages, 'personal_loan') || templateSettled(messages, 'insurance');
+}
+
+export function alreadyWelcomed(messages: { role: string; kind?: string; text: string; sendError?: string }[]): boolean {
+  if (templateSettled(messages, 'welcome')) return true;
+  const hits = messages.filter(
     (item) =>
       item.role === 'assistant' &&
-      (item.kind === 'welcome' ||
-        /loan chahiye ya insurance|do you need a loan or insurance/i.test(item.text)),
+      /loan chahiye ya insurance|do you need a loan or insurance/i.test(item.text),
   );
+  if (hits.some((item) => !item.sendError)) return true;
+  return hits.filter((item) => item.sendError).length >= 2;
 }
 
-export function alreadyKycStarted(messages: { role: string; kind?: string }[]): boolean {
-  return messages.some((item) => item.role === 'assistant' && item.kind === 'kyc');
+export function alreadyKycStarted(messages: { role: string; kind?: string; text?: string }[]): boolean {
+  return messages.some((item) => {
+    if (item.role !== 'assistant') return false;
+    if (item.kind === 'kyc' || item.kind === 'kyc_docs') return true;
+    return /kyc verification is pending|account application is in progress/i.test(item.text || '');
+  });
 }
 
 export function alreadyAdminMessaged(messages: { role: string; kind?: string }[]): boolean {
   return messages.some((item) => item.role === 'assistant' && item.kind === 'admin');
 }
 
+export function alreadyStatusSent(messages: { role: string; kind?: string; sendError?: string }[]): boolean {
+  return templateSettled(messages, 'status');
+}
+
 export function alreadyKycDocsAsked(messages: { role: string; kind?: string; sendError?: string }[]): boolean {
-  return messages.some((item) => item.role === 'assistant' && item.kind === 'kyc_docs' && !item.sendError);
+  return templateSettled(messages, 'kyc_docs');
 }
 
 export function isKycStartClick(buttonId: string, text: string): boolean {
@@ -146,15 +160,43 @@ export function isKycStatusClick(buttonId: string, text: string): boolean {
   return /application\s*status|status\s*check/.test(blob);
 }
 
-export function kycDocsRequestText(): string {
+export function underReviewText(): string {
   return [
-    'Great! 🎉',
+    'We have successfully received your KYC documents. ✅',
     '',
-    'To move your file forward, please send a very clear photo or PDF of these 4 documents in this chat:',
+    'Your application is under review. We will update you soon. 🙏',
+  ].join('\n');
+}
+
+function kycDocsIntro(): string {
+  return 'To complete your KYC, please share clear photos or PDFs of these documents:';
+}
+
+/** Salaried applicants. Default when employment is missing. */
+export function kycDocsRequestText(employment?: string | null): string {
+  const kind = String(employment ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, '_');
+  if (kind === 'self_employed' || kind === 'selfemployed') {
+    return [
+      kycDocsIntro(),
+      '',
+      '1️⃣ PAN Card 🪪',
+      '2️⃣ Aadhaar Card 🆔',
+      '3️⃣ Last 12 Months’ Bank Statement (PDF) 🏦',
+      '4️⃣ Last 3 Years’ ITR with Computation 📄',
+      '5️⃣ Any Available Business Proof (GST / Udyam / Shop Licence) 🏪',
+      '6️⃣ Passport-Size Photo 📸',
+    ].join('\n');
+  }
+  return [
+    kycDocsIntro(),
     '',
     '1️⃣ PAN Card 🪪',
     '2️⃣ Aadhaar Card 🆔',
-    '3️⃣ Last 6 months bank statement 🏦',
-    '4️⃣ Last 3 months salary slip 📄',
+    '3️⃣ Last 6 Months’ Bank Statement 🏦',
+    '4️⃣ Last 3 Months’ Salary Slips 📄',
+    '5️⃣ Passport-Size Photo 📸',
   ].join('\n');
 }

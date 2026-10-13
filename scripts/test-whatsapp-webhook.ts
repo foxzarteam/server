@@ -8,7 +8,7 @@ import { graphMessageBody, isGraphTimeout } from '../src/whatsapp/whatsapp-graph
 import { whatsappHubChallenge, whatsappSignatureOk } from '../src/whatsapp/whatsapp-verify';
 import { adminTargetPhone, canonicalWhatsappPhone, extractInboundMessages } from '../src/whatsapp/whatsapp-inbound';
 import { decryptSettingsJson, encryptSettingsJson } from '../src/whatsapp/settings-crypto';
-import { asChat } from '../src/whatsapp/whatsapp-chat';
+import { adminCustomerName, asChat, unreadCustomerCount } from '../src/whatsapp/whatsapp-chat';
 import { kycBodyName, kycChatText, kycGraphPayload, kycProductName, KYC_START_BTN, KYC_TEMPLATE, KYC_TEMPLATE_LANG } from '../src/whatsapp/whatsapp-kyc';
 import { isGreeting, pickBotReply } from '../src/whatsapp/whatsapp-bot-rules';
 import {
@@ -24,7 +24,6 @@ import {
   productChoice,
   statusCheckText,
   withCachedProductImage,
-  thankYouText,
   welcomeInteractive,
   welcomeText,
 } from '../src/whatsapp/whatsapp-templates';
@@ -179,10 +178,8 @@ assert.ok(loanBody.image?.link?.endsWith('/images/whatsapp/wa_loa.jpg'));
 const insLinked = withCachedProductImage({ ...loanImage, kind: 'insurance', filename: 'wa_ins.jpg', text: insuranceText('Gaurav') }, '');
 assert.ok(insLinked.mediaUrl?.endsWith('/images/whatsapp/wa_ins.jpg'));
 assert.ok(alreadyWelcomed([{ role: 'assistant', kind: 'welcome', text: welcomeText('Gaurav') }]));
+assert.ok(!alreadyWelcomed([{ role: 'assistant', kind: 'welcome', text: welcomeText('Gaurav'), sendError: 'timeout' }]));
 assert.ok(!alreadyWelcomed([{ role: 'user', text: 'Hi' }]));
-assert.ok(/Thank you/.test(thankYouText('Gaurav')));
-assert.ok(/contact you shortly/.test(thankYouText('Gaurav')));
-assert.ok(/apnizaroorat.com\//.test(thankYouText('Gaurav')));
 
 assert.strictEqual(kycBodyName('  Raju   Patel\n'), 'Raju Patel');
 assert.strictEqual(kycProductName('personal_loan'), 'Personal Loan');
@@ -258,10 +255,21 @@ assert.ok(!alreadyAdminMessaged([{ role: 'assistant', kind: 'welcome' }]));
 assert.ok(alreadyKycDocsAsked([{ role: 'assistant', kind: 'kyc_docs' }]));
 assert.ok(!alreadyKycDocsAsked([{ role: 'assistant', kind: 'kyc_docs', sendError: 'timeout' }]));
 const docs = kycDocsRequestText();
+assert.ok(/please share clear photos or PDFs/.test(docs));
 assert.ok(/PAN Card/.test(docs));
 assert.ok(/Aadhaar Card/.test(docs));
-assert.ok(/Bank Statement/i.test(docs));
-assert.ok(/Salary Slip/i.test(docs));
+assert.ok(/Bank Statement/.test(docs));
+assert.ok(/Salary Slips/.test(docs));
+assert.ok(/Passport-Size Photo/.test(docs));
+assert.ok(!/ITR/.test(docs));
+assert.ok(!/Thank you/.test(docs));
+const businessDocs = kycDocsRequestText('self_employed');
+assert.ok(/Last 12 Months/.test(businessDocs));
+assert.ok(/ITR with Computation/.test(businessDocs));
+assert.ok(/GST \/ Udyam \/ Shop Licence/.test(businessDocs));
+assert.ok(/Passport-Size Photo/.test(businessDocs));
+assert.ok(!/Salary Slips/.test(businessDocs));
+assert.strictEqual(kycDocsRequestText('salaried'), docs);
 assert.strictEqual(asChat({ messages: [{ id: 'docs:1', role: 'assistant', kind: 'kyc_docs', text: 'x' }] }).messages[0].kind, 'kyc_docs');
 const kycView = kycChatText('Atul', 'personal_loan');
 assert.ok(/Dear Atul\./.test(kycView));
@@ -294,6 +302,81 @@ const pdfIn = extractInboundMessages({
 assert.strictEqual(pdfIn[0].waType, 'document');
 assert.strictEqual(pdfIn[0].mediaId, 'media-pdf-1');
 assert.strictEqual(pdfIn[0].filename, 'pan.pdf');
+
+const hiddenFile = extractInboundMessages({
+  object: 'whatsapp_business_account',
+  entry: [
+    {
+      changes: [
+        {
+          value: {
+            messages: [
+              {
+                from: '919876543210',
+                id: 'wamid.hidden',
+                type: 'unsupported',
+                document: { id: 'media-doc-9', mime_type: 'application/pdf', filename: 'statement.pdf' },
+                errors: [{ code: 131051, title: 'Message type unknown' }],
+              },
+              {
+                from: '919876543210',
+                id: 'wamid.photo-doc',
+                type: 'document',
+                document: { id: 'media-jpg', mime_type: 'image/jpeg', filename: 'aadhaar.jpg' },
+              },
+              {
+                from: '919876543210',
+                id: 'wamid.edit',
+                type: 'unsupported',
+                unsupported: { type: 'edit' },
+              },
+            ],
+          },
+        },
+      ],
+    },
+  ],
+});
+assert.strictEqual(hiddenFile.length, 2);
+assert.strictEqual(hiddenFile[0].mediaId, 'media-doc-9');
+assert.strictEqual(hiddenFile[0].waType, 'document');
+assert.strictEqual(hiddenFile[0].filename, 'statement.pdf');
+assert.strictEqual(hiddenFile[1].waType, 'image');
+assert.strictEqual(hiddenFile[1].mediaId, 'media-jpg');
+assert.ok(!hiddenFile.some((item) => /unsupported/i.test(item.text)));
+
+const voice = extractInboundMessages({
+  object: 'whatsapp_business_account',
+  entry: [
+    {
+      changes: [
+        {
+          value: {
+            messages: [
+              {
+                from: '919876543210',
+                id: 'wamid.voice',
+                type: 'audio',
+                audio: { id: 'media-voice', mime_type: 'audio/ogg', voice: true },
+              },
+              {
+                from: '919876543210',
+                id: 'wamid.anyfile',
+                type: 'unsupported',
+                file: { id: 'media-zip', mime_type: 'application/zip', filename: 'papers.zip', sha256: 'abc' },
+              },
+            ],
+          },
+        },
+      ],
+    },
+  ],
+});
+assert.strictEqual(voice[0].waType, 'audio');
+assert.strictEqual(voice[0].mediaId, 'media-voice');
+assert.strictEqual(voice[1].waType, 'document');
+assert.strictEqual(voice[1].filename, 'papers.zip');
+assert.strictEqual(voice[1].mediaId, 'media-zip');
 assert.ok(isGraphTimeout('The operation was aborted due to timeout'));
 assert.ok(!isGraphTimeout('131047: Message expired'));
 
@@ -306,15 +389,36 @@ const idle = { kyc: false, kycDocs: false, welcomed: false, offered: false, than
 assert.strictEqual(pickBotReply('', 'Hello', idle).kind, 'welcome');
 assert.strictEqual(pickBotReply('', 'Hello', { ...idle, welcomed: true }).kind, null);
 assert.strictEqual(pickBotReply('', 'Hello', { ...idle, kyc: true, welcomed: false }).kind, null);
+assert.strictEqual(pickBotReply('', '?', { ...idle, kyc: true }).kind, null);
+assert.strictEqual(pickBotReply('personal_loan', '', { ...idle, kyc: true }).kind, null);
+assert.strictEqual(pickBotReply('insurance', '', { ...idle, kyc: true }).kind, null);
+assert.ok(alreadyKycStarted([{ role: 'assistant', text: 'Dear Atul. Your account application is in progress. KYC verification is pending. Complete it in just 2 mins' }]));
+assert.ok(!alreadyKycStarted([{ role: 'user', text: 'KYC verification is pending' }]));
 assert.strictEqual(pickBotReply('', 'ok', { ...idle, kyc: true }).kind, null);
 assert.strictEqual(pickBotReply('Haan, KYC Start Karein', '', idle).kind, 'kyc_docs');
 assert.strictEqual(pickBotReply('Complete KYC', '', idle).kind, 'kyc_docs');
 assert.strictEqual(pickBotReply('Application Status Check Karein', '', idle).kind, 'status');
+assert.strictEqual(pickBotReply('Application Status Check Karein', '', { ...idle, statusSent: true }).kind, null);
 assert.strictEqual(pickBotReply('personal_loan', '', idle).kind, 'personal_loan');
 assert.strictEqual(pickBotReply('personal_loan', '', { ...idle, loanOffered: true }).kind, null);
 assert.strictEqual(pickBotReply('insurance', '', { ...idle, loanOffered: true }).kind, 'insurance');
 assert.strictEqual(pickBotReply('insurance', '', { ...idle, insuranceOffered: true }).kind, null);
 assert.strictEqual(pickBotReply('personal_loan', '', { ...idle, product: 'insurance', loanOffered: true }).kind, null);
-assert.strictEqual(pickBotReply('', 'thanks', { ...idle, welcomed: true }).kind, 'thanks');
+assert.strictEqual(pickBotReply('', 'thanks', { ...idle, welcomed: true }).kind, null);
+
+const unreadChat = asChat({
+  adminReadAt: '2026-10-13T10:00:00.000Z',
+  messages: [
+    { id: 'u1', role: 'user', text: 'old', at: '2026-10-13T09:00:00.000Z' },
+    { id: 'a1', role: 'assistant', text: 'reply', at: '2026-10-13T10:30:00.000Z' },
+    { id: 'u2', role: 'user', text: 'new', at: '2026-10-13T11:00:00.000Z' },
+    { id: 'u3', role: 'user', text: 'newer', at: '2026-10-13T11:05:00.000Z' },
+  ],
+});
+assert.strictEqual(unreadCustomerCount(unreadChat), 2);
+assert.strictEqual(unreadCustomerCount(asChat({ messages: unreadChat.messages })), 0);
+assert.strictEqual(adminCustomerName('Jayu Patel', 'Jayu Kumar'), 'Jayu Kumar');
+assert.strictEqual(adminCustomerName('Jayu Patel', ''), 'Jayu Patel');
+assert.strictEqual(adminCustomerName('Jayu Patel', '   '), 'Jayu Patel');
 
 console.log('test-whatsapp-webhook: all asserts passed');

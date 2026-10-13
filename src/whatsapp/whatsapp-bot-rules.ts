@@ -10,8 +10,7 @@ export type BotReplyKind =
   | 'status'
   | 'personal_loan'
   | 'insurance'
-  | 'welcome'
-  | 'thanks';
+  | 'welcome';
 
 export type BotState = {
   kyc: boolean;
@@ -19,6 +18,7 @@ export type BotState = {
   welcomed: boolean;
   offered: boolean;
   thanked: boolean;
+  statusSent?: boolean;
   loanOffered?: boolean;
   insuranceOffered?: boolean;
   product?: ProductChoice;
@@ -41,11 +41,11 @@ export function isGreeting(text: string): boolean {
 /**
  * One place for WhatsApp bot replies.
  * 1. KYC Start click → docs list (once)
- * 2. Status check click → login link
- * 3. Personal Loan / Insurance tap or words → product
- * 4. Hello/Hi/Namaste → Namaste welcome — never if KYC template already went
- * 5. Other text after welcome, no product yet → thank you once
- * 6. After product / thanks / KYC, other chatter → silent
+ * 2. Status check click → login link, once
+ * 3. If KYC template already went, or this number already applied → no welcome, loan, or insurance
+ * 4. Personal Loan / Insurance tap or words → product, once, only when they have not applied
+ * 5. Hello/Hi or any first message → welcome once, only when they have not applied
+ * 6. After that, other chatter → silent
  */
 export function pickBotReply(
   buttonId: string,
@@ -56,7 +56,11 @@ export function pickBotReply(
     if (state.kycDocs) return { kind: null };
     return { kind: 'kyc_docs' };
   }
-  if (isKycStatusClick(buttonId, text)) return { kind: 'status' };
+  if (isKycStatusClick(buttonId, text)) {
+    if (state.statusSent) return { kind: null };
+    return { kind: 'status' };
+  }
+  if (state.kyc) return { kind: null };
 
   const choice = productChoice(buttonId, text);
   if (choice === 'personal_loan' || choice === 'insurance') {
@@ -68,17 +72,11 @@ export function pickBotReply(
     return { kind: choice, product: choice };
   }
 
-  if (state.kyc) return { kind: null };
-
   if (isGreeting(text)) {
     if (state.welcomed) return { kind: null };
     return { kind: 'welcome' };
   }
 
-  if (state.offered || state.thanked) return { kind: null };
-  if (state.welcomed) {
-    if (state.offered || state.thanked) return { kind: null };
-    return { kind: 'thanks' };
-  }
+  if (state.offered || state.thanked || state.welcomed) return { kind: null };
   return { kind: 'welcome' };
 }

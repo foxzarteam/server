@@ -920,7 +920,13 @@ export class LeadsService {
     const category = normalizeStoredCategory(dto.category || 'personal_loan');
     if (category === 'personal_loan') {
       const empErr = this.personalLoanEmploymentError(dto);
-      if (empErr) return { ok: false, field: 'netMonthlyIncome', message: empErr };
+      if (empErr) {
+        return {
+          ok: false,
+          field: /income/i.test(empErr) ? 'netMonthlyIncome' : 'employmentType',
+          message: empErr,
+        };
+      }
       const amounts = resolvePersonalLoanAmounts({
         requiredAmount: dto.requiredAmount,
         loanAmt: dto.loanAmt,
@@ -1601,6 +1607,15 @@ export class LeadsService {
         }
       }
       throw new WalletSyncError(MSG_WALLET_SYNC_FAILED_STATUS_SAVED, true);
+    }
+
+    const from = fromStatus.trim().toLowerCase();
+    const to = toStatus.trim().toLowerCase();
+    if (to === 'in_process' && from !== 'in_process') {
+      this.whatsapp.notifyUnderReview(
+        String((data as Record<string, unknown>).mobile_number ?? existing.mobile_number ?? ''),
+        String((data as Record<string, unknown>).full_name ?? existing.full_name ?? ''),
+      );
     }
 
     return this.safeLead(data);

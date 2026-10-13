@@ -64,7 +64,7 @@ function lead(
   if (!r.allowed && r.gate === 2) {
     assert.strictEqual(r.code, CODE_PHONE_PRODUCT_BLOCKED);
     assert.strictEqual(r.status, 'pending');
-    assert.match(r.message, /status is pending/i);
+    assert.match(r.message, /KYC pending/i);
   } else {
     assert.fail('expected in-progress block');
   }

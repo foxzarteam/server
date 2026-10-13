@@ -24,28 +24,110 @@ function digits(value: unknown): string {
   return String(value ?? '').replace(/\D/g, '');
 }
 
+const MEDIA_FIELDS = ['image', 'sticker', 'video', 'audio', 'voice', 'ptt', 'document'] as const;
+
+function waTypeFor(field: string, mime: string): NonNullable<InboundWhatsappMessage['waType']> {
+  const kind = mime.toLowerCase();
+  if (kind.startsWith('image/')) return 'image';
+  if (kind.startsWith('video/')) return 'video';
+  if (kind.startsWith('audio/')) return 'audio';
+  if (field === 'video') return 'video';
+  if (field === 'audio' || field === 'voice' || field === 'ptt') return 'audio';
+  if (field === 'image' || field === 'sticker') return 'image';
+  return 'document';
+}
+
+function mediaFromRecord(
+  media: UnknownRecord,
+  field: string,
+): { mediaId: string; mime: string; filename: string; text: string; waType: NonNullable<InboundWhatsappMessage['waType']> } | null {
+  const id = String(media.id ?? '').trim();
+  if (!id || id.length > 200 || id.startsWith('wamid')) return null;
+  const mime = String(media.mime_type ?? '').trim().slice(0, 80);
+  const filename = String(media.filename ?? '').trim().slice(0, 180);
+  const sha = String(media.sha256 ?? '').trim();
+  if (!mime && !filename && !sha) return null;
+  return {
+    mediaId: id,
+    mime,
+    filename,
+    text: String(media.caption ?? '').trim(),
+    waType: waTypeFor(field, mime),
+  };
+}
+
+/** Finds a file even when WhatsApp puts it under an unexpected key. */
+function findNestedMedia(value: unknown, depth = 0): ReturnType<typeof mediaFromRecord> {
+  if (depth > 4 || !value || typeof value !== 'object') return null;
+  if (Array.isArray(value)) {
+    for (const item of value) {
+      const found = findNestedMedia(item, depth + 1);
+      if (found) return found;
+    }
+    return null;
+  }
+  const record = value as UnknownRecord;
+  for (const [key, child] of Object.entries(record)) {
+    if (key === 'context' || key === 'errors' || key === 'contacts' || key === 'referral') continue;
+    const media = asRecord(child);
+    if (!media) continue;
+    const direct = mediaFromRecord(media, key);
+    if (direct) return direct;
+    const nested = findNestedMedia(media, depth + 1);
+    if (nested) return nested;
+  }
+  return null;
+}
+
+/** Any file object on the webhook, even when WhatsApp labels the message unsupported. */
 function inboundMedia(
   msg: UnknownRecord,
   type: string,
 ): { mediaId: string; mime: string; filename: string; text: string; waType: NonNullable<InboundWhatsappMessage['waType']> } | null {
-  const keys =
-    type === 'voice' || type === 'ptt' ? [type, 'audio', 'voice'] : type === 'sticker' ? ['sticker', 'image'] : [type];
-  let media: UnknownRecord | null = null;
-  for (const key of keys) {
-    media = asRecord(msg[key]);
-    if (media) break;
+  const preferred =
+    type === 'voice' || type === 'ptt'
+      ? ['voice', 'audio', 'ptt']
+      : type === 'sticker'
+        ? ['sticker', 'image']
+        : [type];
+  const seen = new Set<string>();
+  for (const key of [...preferred, ...MEDIA_FIELDS]) {
+    if (seen.has(key)) continue;
+    seen.add(key);
+    const media = asRecord(msg[key]);
+    if (!media) continue;
+    const direct = mediaFromRecord(media, key);
+    if (direct) return direct;
   }
-  const id = String(media?.id ?? '').trim();
-  if (!id || id.length > 200) return null;
-  const waType: NonNullable<InboundWhatsappMessage['waType']> =
-    type === 'document' ? 'document' : type === 'video' ? 'video' : type === 'audio' || type === 'voice' || type === 'ptt' ? 'audio' : 'image';
-  return {
-    mediaId: id,
-    mime: String(media?.mime_type ?? '').trim().slice(0, 80),
-    filename: String(media?.filename ?? '').trim().slice(0, 180),
-    text: String(media?.caption ?? '').trim(),
-    waType,
-  };
+  return findNestedMedia(msg);
+}
+
+function locationText(msg: UnknownRecord): string {
+  const loc = asRecord(msg.location);
+  if (!loc) return '';
+  const lat = Number(loc.latitude);
+  const lng = Number(loc.longitude);
+  const name = String(loc.name ?? loc.address ?? '').trim();
+  const link = Number.isFinite(lat) && Number.isFinite(lng) ? `https://maps.google.com/?q=${lat},${lng}` : '';
+  return [name, link].filter(Boolean).join('\n');
+}
+
+function contactsText(msg: UnknownRecord): string {
+  const rows = Array.isArray(msg.contacts) ? msg.contacts : [];
+  const lines = rows
+    .map((row) => {
+      const contact = asRecord(row);
+      if (!contact) return '';
+      const name = String(asRecord(contact.name)?.formatted_name ?? '').trim();
+      const phones = Array.isArray(contact.phones) ? contact.phones : [];
+      const phone = phones
+        .map((item) => String(asRecord(item)?.phone ?? '').trim())
+        .filter(Boolean)
+        .join(', ');
+      return [name, phone].filter(Boolean).join(' · ');
+    })
+    .filter(Boolean);
+  return lines.join('\n');
 }
 
 /** Same person, one key: 9876543210 and 919876543210 both become 919876543210. */
@@ -89,7 +171,8 @@ export function extractInboundMessages(body: unknown): InboundWhatsappMessage[] 
         const messageId = String(msg.id ?? '').trim();
         if (!/^[0-9]{8,15}$/.test(phone) || !messageId || messageId.length > 200) continue;
 
-        const type = String(msg.type ?? 'unknown').slice(0, 40);
+        const type = String(msg.type ?? 'unknown').trim().toLowerCase().slice(0, 40);
+        const unsupportedKind = String(asRecord(msg.unsupported)?.type ?? '').trim().toLowerCase();
         let text = '';
         let buttonId = '';
         let waType: InboundWhatsappMessage['waType'];
@@ -105,6 +188,13 @@ export function extractInboundMessages(body: unknown): InboundWhatsappMessage[] 
           const reply = asRecord(interactive?.button_reply) || asRecord(interactive?.list_reply);
           text = String(reply?.title ?? '').trim();
           buttonId = String(reply?.id ?? '').trim();
+        } else if (type === 'location') {
+          text = locationText(msg);
+        } else if (type === 'contacts') {
+          text = contactsText(msg);
+        } else if (type === 'reaction') {
+          const emoji = String(asRecord(msg.reaction)?.emoji ?? '').trim();
+          text = emoji ? `Reacted ${emoji}` : '';
         } else {
           const pulled = inboundMedia(msg, type);
           if (pulled) {
@@ -114,6 +204,14 @@ export function extractInboundMessages(body: unknown): InboundWhatsappMessage[] 
             text = pulled.text;
             waType = pulled.waType;
           }
+        }
+
+        // Edits and deletes are not a customer file. Do not show a blank bubble.
+        if (!text && !mediaId && (unsupportedKind === 'edit' || unsupportedKind === 'revoke' || type === 'system' || type === 'reaction')) {
+          continue;
+        }
+        if (!text && !mediaId && (type === 'unsupported' || type === 'unknown')) {
+          text = 'This file did not come through. Ask the customer to send it again as a photo or PDF.';
         }
 
         const contact = contacts

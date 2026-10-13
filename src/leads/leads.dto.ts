@@ -40,6 +40,7 @@ export const INS_TYPE_VALUES = FALLBACK_INSURANCE_TYPES.map((t) => t.value);
 
 export const LEAD_STATUS_VALUES = [
   'pending',
+  'kyc_progress',
   'in_process',
   'approved',
   'rejected',
@@ -103,10 +104,12 @@ export class CreateLeadDto {
   @Matches(INS_TYPE_SLUG_PATTERN, { message: 'Invalid insurance type' })
   insType?: string;
 
-  /** Optional. Stored on a loan when salaried or self_employed. */
-  @IsOptional()
-  @IsString()
-  employmentType?: string;
+  /** Required on a loan: salaried or self_employed. */
+  @ValidateIf((o) => isStoredLoanCategory(o.category))
+  @IsIn(['salaried', 'self_employed'], {
+    message: 'Select salaried or self employee / business.',
+  })
+  employmentType?: string | null;
 
   @ValidateIf((o) => isStoredLoanCategory(o.category))
   @IsNumber({}, { message: 'Net monthly income is required' })
@@ -220,7 +223,10 @@ export class UpdateLeadDto {
   insType?: string | null;
 
   @IsOptional()
-  @IsString()
+  @ValidateIf((o) => o.employmentType != null && o.employmentType !== '')
+  @IsIn(['salaried', 'self_employed'], {
+    message: 'Select salaried or self employee / business.',
+  })
   employmentType?: string | null;
 
   @IsOptional()
@@ -309,10 +315,12 @@ export class AdminCreateLeadDto {
   @Matches(INS_TYPE_SLUG_PATTERN, { message: 'Invalid insurance type' })
   insType?: string;
 
-  /** Optional. Stored on personal loan when salaried or self_employed. */
+  /** Optional. salaried or self_employed. Null clears it. */
   @IsOptional()
-  @IsString()
-  employmentType?: string;
+  @IsIn(['salaried', 'self_employed'], {
+    message: 'Select salaried or self employee / business.',
+  })
+  employmentType?: string | null;
 
   @ValidateIf((o) => o.category === 'personal_loan')
   @IsNumber({}, { message: 'Net monthly income is required for personal loan' })

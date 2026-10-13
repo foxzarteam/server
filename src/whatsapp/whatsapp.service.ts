@@ -2,16 +2,20 @@ import { Inject, Injectable, OnModuleInit } from '@nestjs/common';
 import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { SupabaseClient } from '@supabase/supabase-js';
-import { TABLE_WP_ENQUIRIES } from '../common/constants';
+import { TABLE_LEADS, TABLE_WP_ENQUIRIES } from '../common/constants';
 import { LEAD_DRAFT_FULL_NAME } from '../leads/lead-draft';
+import { isDraftLead } from '../leads/lead-present';
+import { storedEmploymentType } from '../leads/personal-loan-employment';
 import { normalizeStoredCategory } from '../leads/lead-present';
 import { SUPABASE_CLIENT } from '../config/supabase';
 import { isGreeting, pickBotReply } from './whatsapp-bot-rules';
 import { allowRateLimitedAction } from '../security/rate-limit';
 import {
+  adminCustomerName,
   asChat,
   emptyFlow,
   MAX_MESSAGES,
+  unreadCustomerCount,
   type ChatDoc,
   type ChatMessage,
   type EnquiryRow,
@@ -36,8 +40,10 @@ import {
   alreadyKycDocsAsked,
   alreadyKycStarted,
   alreadyOfferedProduct,
+  alreadyStatusSent,
   alreadyThanked,
   alreadyWelcomed,
+  templateSettled,
   isKycStartClick,
   isKycStatusClick,
   kycDocsRequestText,
@@ -49,7 +55,7 @@ import {
   productImageFilename,
   productImageUrl,
   withCachedProductImage,
-  thankYouText,
+  underReviewText,
   welcomeText,
   type ProductChoice,
 } from './whatsapp-templates';
@@ -57,6 +63,8 @@ import {
 export type { WhatsappEnquiryDetail, WhatsappEnquiryListItem } from './whatsapp-chat';
 
 const MAX_ADMIN_FILE = 16 * 1024 * 1024;
+/** Customer files WhatsApp delivers (documents can be up to 100 MB). */
+const MAX_CUSTOMER_FILE = 100 * 1024 * 1024;
 const ADMIN_UPLOAD_MIME =
   /^(image\/(jpeg|jpg|png|webp|gif)|audio\/(aac|mp4|mpeg|amr|ogg|opus)|video\/(mp4|3gpp|quicktime)|application\/pdf|text\/(plain|csv)|application\/msword|application\/vnd\.(ms-|openxmlformats-)|application\/zip)/i;
 
@@ -71,6 +79,9 @@ export class WhatsappService implements OnModuleInit {
   private persistTail = new Map<string, Promise<void>>();
   private kycTemplateSent = new Set<string>();
   private kycLeadSent = new Set<string>();
+  private underReviewSent = new Set<string>();
+  /** Phone has no application. Avoids a leads query on every photo. */
+  private applicationMiss = new Map<string, number>();
   private inboundTail = new Map<string, Promise<void>>();
 
   constructor(
@@ -188,18 +199,21 @@ export class WhatsappService implements OnModuleInit {
       return [];
     }
 
-    return ((data as EnquiryRow[]) ?? []).map((row) => {
+    const rows = (data as EnquiryRow[]) ?? [];
+    const applicationNames = await this.applicationNames(rows.map((row) => row.phone));
+    return rows.map((row) => {
       const chat = asChat(row.chat);
       const last = chat.messages[chat.messages.length - 1];
       return {
         id: row.id,
         phone: row.phone,
-        profileName: chat.profileName,
+        profileName: adminCustomerName(chat.profileName, applicationNames.get(row.phone) || ''),
         lastMessage:
           last?.text?.trim() ||
           (last?.waType === 'image' ? 'Photo' : last?.filename || (last?.waType === 'document' ? 'File' : last?.waType) || ''),
         lastChatAt: row.last_chat_at,
         createdAt: row.created_at,
+        unreadCount: unreadCustomerCount(chat),
       };
     });
   }
@@ -228,10 +242,12 @@ export class WhatsappService implements OnModuleInit {
 
     const row = data as EnquiryRow;
     const chat = asChat(row.chat);
+    const applicationNames = await this.applicationNames([row.phone]);
+    void this.markAdminRead(row.id);
     return {
       id: row.id,
       phone: row.phone,
-      profileName: chat.profileName,
+      profileName: adminCustomerName(chat.profileName, applicationNames.get(row.phone) || ''),
       lastChatAt: row.last_chat_at,
       createdAt: row.created_at,
       messages: chat.messages.map((item) => ({
@@ -291,11 +307,11 @@ export class WhatsappService implements OnModuleInit {
           Authorization: `Bearer ${token}`,
           'User-Agent': 'ApniZarooratWhatsApp/1.0',
         },
-        signal: AbortSignal.timeout(20_000),
+        signal: AbortSignal.timeout(60_000),
       });
       if (!bin.ok) return null;
       const buffer = Buffer.from(await bin.arrayBuffer());
-      if (!buffer.length || buffer.length > MAX_ADMIN_FILE) return null;
+      if (!buffer.length || buffer.length > MAX_CUSTOMER_FILE) return null;
       const mime = String(item.mime || meta.mime_type || bin.headers.get('content-type') || 'application/octet-stream').slice(0, 80);
       return { buffer, mime, filename: item.filename };
     } catch (error) {
@@ -307,8 +323,13 @@ export class WhatsappService implements OnModuleInit {
   private userText(message: InboundWhatsappMessage): string {
     const textLike = message.type === 'text' || message.type === 'button' || message.type === 'interactive';
     if (textLike && message.text) return message.text;
-    if (textLike) return '[empty message]';
-    return `[${message.type} message]`;
+    if (textLike) return '';
+    if (message.filename) return message.filename;
+    if (message.waType === 'image') return 'Photo';
+    if (message.waType === 'video') return 'Video';
+    if (message.waType === 'audio') return 'Audio';
+    if (message.waType === 'document') return 'File';
+    return 'File';
   }
 
   private inboundUserMessage(message: InboundWhatsappMessage): ChatMessage {
@@ -364,6 +385,13 @@ export class WhatsappService implements OnModuleInit {
     const userMessage = this.inboundUserMessage(message);
     const choice = productChoice(message.buttonId, message.text);
     let reply = this.decideReply(phone, message, assistantId);
+    if (reply?.kind === 'kyc_docs') {
+      const employment = await this.employmentForPhone(phone);
+      reply = { ...reply, text: kycDocsRequestText(employment) };
+    }
+    if (reply && (reply.kind === 'welcome' || reply.kind === 'personal_loan' || reply.kind === 'insurance')) {
+      if (await this.recentlyApplied(phone)) reply = null;
+    }
     if (
       reply &&
       reply.kind !== 'welcome' &&
@@ -386,14 +414,23 @@ export class WhatsappService implements OnModuleInit {
     this.rememberIds(phone, [userMessage.id, ...(reply ? [reply.id] : [])]);
     if (reply) this.noteFlow(phone, reply);
 
-    if (reply) {
-      reply.sent = true;
-      void this.deliverBotReply(settings, phone, reply, message.phoneNumberId);
-    }
-
     this.queuePersist(phone, () =>
-      this.persistInbound(phone, message.profileName, userMessage, reply, message.phoneNumberId),
+      this.persistInbound(phone, message.profileName, userMessage, null, message.phoneNumberId),
     );
+
+    if (reply) {
+      const outbound = reply;
+      void this.deliverBotReply(settings, phone, outbound, message.phoneNumberId)
+        .catch((error) => {
+          outbound.sent = false;
+          outbound.sendError = error instanceof Error ? error.message : 'WhatsApp send failed';
+          this.releaseFailedReply(phone, outbound);
+          console.error('WhatsappService.deliverBotReply', outbound.sendError);
+        })
+        .finally(() => {
+          this.queuePersist(phone, () => this.persistInbound(phone, message.profileName, outbound, null, message.phoneNumberId));
+        });
+    }
   }
 
   /** KYC Start / Status check: no DB wait. Does not count as Namaste welcome. */
@@ -421,19 +458,33 @@ export class WhatsappService implements OnModuleInit {
   ) {
     const result = await this.sendWhatsapp(settings, phone, reply, waPhoneNumberId);
     if (result.ok) {
+      reply.sent = true;
+      delete reply.sendError;
       this.rememberSent(reply.id);
       return;
     }
     reply.sent = false;
-    reply.sendError = result.error;
-    if (reply.kind === 'kyc_docs') {
-      const mem = this.flowMem.get(phone);
-      if (mem) mem.kycDocs = false;
-    }
+    reply.sendError = result.error || 'WhatsApp send failed';
+    this.releaseFailedReply(phone, reply);
     console.error('WhatsappService.deliverBotReply', result.error);
-    this.queuePersist(phone, async () => {
-      await this.noteSendError(phone, reply.id, result.error || 'WhatsApp send failed');
-    });
+  }
+
+  /** A failed send can be tried once more. A successful one is never sent again. */
+  private releaseFailedReply(phone: string, reply: ChatMessage) {
+    const mem = this.flowMem.get(phone);
+    if (!mem) return;
+    if (reply.kind === 'kyc_docs') mem.kycDocs = false;
+    if (reply.kind === 'welcome') mem.welcomed = false;
+    if (reply.kind === 'status') mem.statusSent = false;
+    if (reply.kind === 'personal_loan') {
+      mem.loanOffered = false;
+      if (mem.product === 'personal_loan') mem.product = undefined;
+    }
+    if (reply.kind === 'insurance') {
+      mem.insuranceOffered = false;
+      if (mem.product === 'insurance') mem.product = undefined;
+    }
+    mem.offered = Boolean(mem.loanOffered || mem.insuranceOffered);
   }
 
   private async hydrateFlow(phone: string) {
@@ -444,13 +495,9 @@ export class WhatsappService implements OnModuleInit {
     const offered = alreadyOfferedProduct(messages) || prev.offered;
     const thanked = alreadyThanked(messages) || prev.thanked;
     const kycDocs = alreadyKycDocsAsked(messages) || prev.kycDocs;
-    const kyc = alreadyKycStarted(messages) || kycDocs || prev.kyc;
-    const loanOffered =
-      prev.loanOffered ||
-      messages.some((item) => item.role === 'assistant' && item.kind === 'personal_loan');
-    const insuranceOffered =
-      prev.insuranceOffered ||
-      messages.some((item) => item.role === 'assistant' && item.kind === 'insurance');
+    const kyc = alreadyKycStarted(messages) || kycDocs || prev.kyc || this.kycTemplateSent.has(phone);
+    const loanOffered = prev.loanOffered || templateSettled(messages, 'personal_loan');
+    const insuranceOffered = prev.insuranceOffered || templateSettled(messages, 'insurance');
     if (kyc) this.rememberKycPhone(phone);
     if (!prev.product) {
       for (const item of messages) {
@@ -467,6 +514,7 @@ export class WhatsappService implements OnModuleInit {
     prev.thanked = thanked;
     prev.kyc = kyc;
     prev.kycDocs = kycDocs;
+    prev.statusSent = prev.statusSent || alreadyStatusSent(messages);
     this.flowMem.set(phone, prev);
   }
 
@@ -481,6 +529,7 @@ export class WhatsappService implements OnModuleInit {
       loanOffered: Boolean(mem?.loanOffered),
       insuranceOffered: Boolean(mem?.insuranceOffered),
       thanked: Boolean(mem?.thanked),
+      statusSent: Boolean(mem?.statusSent),
       product: mem?.product,
     });
     if (picked.kind === null) return null;
@@ -508,17 +557,6 @@ export class WhatsappService implements OnModuleInit {
     }
     if (picked.kind === 'personal_loan' || picked.kind === 'insurance') {
       return this.productTemplateMessage(assistantId, name, picked.kind);
-    }
-    if (picked.kind === 'thanks') {
-      return {
-        id: assistantId,
-        role: 'assistant',
-        text: thankYouText(name),
-        at: new Date().toISOString(),
-        replyBy: 'template',
-        kind: 'thanks',
-        waType: 'text',
-      };
     }
     return {
       id: assistantId,
@@ -551,6 +589,7 @@ export class WhatsappService implements OnModuleInit {
       prev.kycDocs = true;
       prev.kyc = true;
     }
+    if (reply.kind === 'status') prev.statusSent = true;
     prev.ids.add(reply.id);
     this.flowMem.set(phone, prev);
   }
@@ -589,7 +628,13 @@ export class WhatsappService implements OnModuleInit {
     reply: ChatMessage | null,
     waPhoneNumberId: string,
   ) {
-    await this.appendMessages(phone, profileName, reply ? [userMessage, reply] : [userMessage], waPhoneNumberId);
+    const incoming = reply ? [userMessage, reply] : [userMessage];
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const saved = await this.appendMessages(phone, profileName, incoming, waPhoneNumberId);
+      if (saved) return;
+      await new Promise((resolve) => setTimeout(resolve, 200 * (attempt + 1)));
+    }
+    console.error('WhatsappService.persistInbound failed', phone, incoming.map((item) => item.id).join(','));
   }
 
   private rememberSent(id: string) {
@@ -731,6 +776,151 @@ export class WhatsappService implements OnModuleInit {
     }
   }
 
+  /** Latest non-draft application name for each chat phone. Keyed by the enquiry phone. */
+  private async applicationNames(phones: string[]): Promise<Map<string, string>> {
+    const out = new Map<string, string>();
+    const unique = [...new Set(phones.map((phone) => phone.trim()).filter(Boolean))];
+    if (!unique.length) return out;
+    const numbers = [...new Set(unique.flatMap((phone) => this.phoneLookupKeys(phone)))];
+    if (!numbers.length) return out;
+    const byNumber = new Map<string, string>();
+    for (let i = 0; i < numbers.length; i += 100) {
+      const chunk = numbers.slice(i, i + 100);
+      const { data, error } = await this.supabase
+        .from(TABLE_LEADS)
+        .select('mobile_number, full_name, pan, updated_at')
+        .in('mobile_number', chunk)
+        .eq('is_active', true)
+        .order('updated_at', { ascending: false })
+        .limit(500);
+      if (error) {
+        console.error('WhatsappService.applicationNames', error.message);
+        continue;
+      }
+      for (const row of data ?? []) {
+        const record = row as Record<string, unknown>;
+        if (isDraftLead(record)) continue;
+        const mobile = String(record.mobile_number ?? '').trim();
+        const name = String(record.full_name ?? '').trim();
+        if (!mobile || !name || byNumber.has(mobile)) continue;
+        byNumber.set(mobile, name);
+      }
+    }
+    for (const phone of unique) {
+      const name = this.phoneLookupKeys(phone)
+        .map((key) => byNumber.get(key))
+        .find((value) => value);
+      if (name) out.set(phone, name);
+    }
+    return out;
+  }
+
+  private phoneLookupKeys(phone: string): string[] {
+    const canonical = canonicalWhatsappPhone(phone);
+    const ten = canonical.startsWith('91') && canonical.length === 12 ? canonical.slice(2) : canonical;
+    return [...new Set([canonical, ten].filter((value) => value.length >= 10))];
+  }
+
+  /** Leads lookup only when a welcome, loan, or insurance reply is about to go out. */
+  private async recentlyApplied(phone: string): Promise<boolean> {
+    if (this.kycTemplateSent.has(phone) || this.flowMem.get(phone)?.kyc) return true;
+    const missUntil = this.applicationMiss.get(phone) ?? 0;
+    if (missUntil > Date.now()) return false;
+    const applied = await this.phoneHasApplication(phone);
+    if (applied) {
+      this.applicationMiss.delete(phone);
+      this.rememberKycPhone(phone);
+      const mem = this.flowMem.get(phone);
+      if (mem) mem.kyc = true;
+      return true;
+    }
+    this.applicationMiss.set(phone, Date.now() + 2 * 60_000);
+    if (this.applicationMiss.size > 4000) {
+      const first = this.applicationMiss.keys().next().value;
+      if (first) this.applicationMiss.delete(first);
+    }
+    return false;
+  }
+
+  /** Real application on this WhatsApp number. Draft placeholders do not count. */
+  private async phoneHasApplication(phone: string): Promise<boolean> {
+    const numbers = this.phoneLookupKeys(phone);
+    if (!numbers.length) return false;
+    const { data, error } = await this.supabase
+      .from(TABLE_LEADS)
+      .select('full_name, pan')
+      .in('mobile_number', numbers)
+      .eq('is_active', true)
+      .limit(20);
+    if (error) {
+      console.error('WhatsappService.phoneHasApplication', error.message);
+      return false;
+    }
+    return (data ?? []).some((row) => !isDraftLead(row as Record<string, unknown>));
+  }
+
+  /** Latest real application’s employment, so the KYC document list matches the form. */
+  private async employmentForPhone(phone: string): Promise<'salaried' | 'self_employed' | null> {
+    const numbers = this.phoneLookupKeys(phone);
+    if (!numbers.length) return null;
+    const { data, error } = await this.supabase
+      .from(TABLE_LEADS)
+      .select('full_name, pan, employment_type, updated_at')
+      .in('mobile_number', numbers)
+      .eq('is_active', true)
+      .order('updated_at', { ascending: false })
+      .limit(20);
+    if (error) {
+      console.error('WhatsappService.employmentForPhone', error.message);
+      return null;
+    }
+    for (const row of data ?? []) {
+      const record = row as Record<string, unknown>;
+      if (isDraftLead(record)) continue;
+      return storedEmploymentType(String(record.employment_type ?? ''));
+    }
+    return null;
+  }
+
+  /** One Under Review note per phone, even if the admin flips that status again. */
+  notifyUnderReview(mobile: string, name: string): void {
+    void this.sendUnderReviewOnce(mobile, name).catch((error) => {
+      console.error('WhatsappService.notifyUnderReview', error);
+    });
+  }
+
+  private async sendUnderReviewOnce(mobile: string, name: string): Promise<void> {
+    const phone = canonicalWhatsappPhone(mobile);
+    if (!/^[0-9]{8,15}$/.test(phone)) return;
+    if (this.underReviewSent.has(phone)) return;
+    this.underReviewSent.add(phone);
+
+    const existing = await this.readByPhone(phone);
+    const already = existing?.chat.messages.some((item) => item.kind === 'under_review' && !item.sendError);
+    if (already) return;
+
+    const settings = this.settings.peekEffective() ?? (await this.settings.getEffective());
+    const message: ChatMessage = {
+      id: `review:${phone}`,
+      role: 'assistant',
+      text: underReviewText(),
+      at: new Date().toISOString(),
+      replyBy: 'template',
+      kind: 'under_review',
+      waType: 'text',
+    };
+    const sent = await this.sendWhatsapp(settings, phone, message, existing?.chat.waPhoneNumberId || '');
+    if (!sent.ok) {
+      this.underReviewSent.delete(phone);
+      message.sent = false;
+      message.sendError = sent.error || 'WhatsApp send failed';
+      console.error('WhatsappService.sendUnderReviewOnce', message.sendError);
+      return;
+    }
+    message.sent = true;
+    await this.appendMessage(phone, name, message, existing?.chat.waPhoneNumberId || '');
+  }
+
   private rememberKycPhone(phone: string) {
     this.kycTemplateSent.add(phone);
     if (this.kycTemplateSent.size <= 4000) return;
@@ -763,6 +953,12 @@ export class WhatsappService implements OnModuleInit {
     if (!token || !fromId) {
       this.kycLeadSent.delete(leadKey);
       console.error('WhatsappService.dispatchKycTemplate missing WhatsApp settings');
+      return;
+    }
+
+    const existing = await this.readByPhone(phone);
+    if (existing?.chat.messages.some((item) => item.id === `kyc:${leadKey}` && !item.sendError)) {
+      this.rememberKycPhone(phone);
       return;
     }
 
@@ -959,12 +1155,18 @@ export class WhatsappService implements OnModuleInit {
         return current ? { row: current, added: false } : null;
       }
 
-      const messages = [...(current?.chat.messages ?? []), ...toAdd].slice(-MAX_MESSAGES);
+      const prior = current?.chat.messages ?? [];
+      const messages = [...prior, ...toAdd].slice(-MAX_MESSAGES);
+      let adminReadAt = current?.chat.adminReadAt;
+      if (!adminReadAt && toAdd.some((item) => item.role === 'user')) {
+        adminReadAt = prior[prior.length - 1]?.at || '1970-01-01T00:00:00.000Z';
+      }
       const chat: ChatDoc = {
         profileName: profileName.trim() || current?.chat.profileName || '',
         waPhoneNumberId: (waPhoneNumberId || current?.chat.waPhoneNumberId || '').replace(/\D/g, '').slice(0, 30),
         messages,
         ...(current?.chat.leadNote !== undefined ? { leadNote: current.chat.leadNote } : {}),
+        ...(adminReadAt ? { adminReadAt } : {}),
       };
       const now = new Date().toISOString();
       const lastChatAt = toAdd[toAdd.length - 1]?.at || now;
@@ -1002,6 +1204,28 @@ export class WhatsappService implements OnModuleInit {
       if (error) console.error('WhatsappService.appendMessage.update', error.message);
     }
     return null;
+  }
+
+  /** Opening a chat marks customer messages seen. Retries so a new message is not overwritten. */
+  private async markAdminRead(id: string): Promise<void> {
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const { data, error } = await this.table
+        .select('id, phone, chat, last_chat_at, created_at, updated_at')
+        .eq('id', id)
+        .maybeSingle();
+      if (error || !data) return;
+      const row = data as EnquiryRow;
+      const chat = asChat(row.chat);
+      if (chat.adminReadAt && unreadCustomerCount(chat) === 0) return;
+      const next: ChatDoc = { ...chat, adminReadAt: new Date().toISOString() };
+      const saved = await this.table
+        .update({ chat: next, updated_at: next.adminReadAt })
+        .eq('id', id)
+        .eq('updated_at', row.updated_at)
+        .select('id')
+        .maybeSingle();
+      if (!saved.error && saved.data) return;
+    }
   }
 
   private async appendMessage(

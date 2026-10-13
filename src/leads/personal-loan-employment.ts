@@ -10,13 +10,17 @@ export function leadFullNameError(name?: string | null): string | null {
   return null;
 }
 
-/** Personal-loan income check. Employment type is optional on website apply. */
+/** Loan apply: income and salaried / self-employed business are both required. */
 export function personalLoanEmploymentError(dto: {
   netMonthlyIncome?: number | null;
+  employmentType?: string | null;
 }): string | null {
   const income = dto.netMonthlyIncome;
   if (income == null || !Number.isFinite(Number(income)) || Number(income) < 1) {
     return 'Net monthly income is required.';
+  }
+  if (!storedEmploymentType(dto.employmentType)) {
+    return 'Select salaried or self employee / business.';
   }
   return null;
 }

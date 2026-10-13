@@ -12,7 +12,7 @@ export type ChatMessage = {
   sendingAt?: string;
   sendError?: string;
   replyBy?: 'template' | 'admin';
-  kind?: 'welcome' | 'personal_loan' | 'insurance' | 'status' | 'admin' | 'thanks' | 'kyc' | 'kyc_docs';
+  kind?: 'welcome' | 'personal_loan' | 'insurance' | 'status' | 'admin' | 'thanks' | 'kyc' | 'kyc_docs' | 'under_review';
   waType?: 'text' | 'interactive' | 'image' | 'document' | 'audio' | 'video';
   mediaId?: string;
   mediaUrl?: string;
@@ -25,6 +25,8 @@ export type ChatDoc = {
   waPhoneNumberId: string;
   messages: ChatMessage[];
   leadNote?: string;
+  /** Admin last opened this chat. Customer messages after this are unseen. */
+  adminReadAt?: string;
 };
 
 export type EnquiryRow = {
@@ -43,7 +45,21 @@ export type WhatsappEnquiryListItem = {
   lastMessage: string;
   lastChatAt: string | null;
   createdAt: string;
+  unreadCount: number;
 };
+
+/** Admin sidebar and document export: application name when the form was filled, otherwise the WhatsApp profile name. */
+export function adminCustomerName(profileName: string, applicationName: string): string {
+  const application = applicationName.trim().replace(/\s+/g, ' ').slice(0, 120);
+  if (application) return application;
+  return profileName.trim().slice(0, 120);
+}
+
+export function unreadCustomerCount(chat: ChatDoc): number {
+  const readAt = Date.parse(chat.adminReadAt ?? '');
+  if (!Number.isFinite(readAt)) return 0;
+  return chat.messages.filter((item) => item.role === 'user' && Date.parse(item.at) > readAt).length;
+}
 
 export type WhatsappEnquiryDetail = {
   id: string;
@@ -75,6 +91,7 @@ export type FlowMem = {
   thanked: boolean;
   kyc: boolean;
   kycDocs: boolean;
+  statusSent: boolean;
   product?: ProductChoice;
   ids: Set<string>;
 };
@@ -88,6 +105,7 @@ export function emptyFlow(): FlowMem {
     thanked: false,
     kyc: false,
     kycDocs: false,
+    statusSent: false,
     ids: new Set(),
   };
 }
@@ -108,6 +126,7 @@ export function asChat(raw: unknown): ChatDoc {
           messages?: unknown;
           waPhoneNumberId?: unknown;
           leadNote?: unknown;
+          adminReadAt?: unknown;
         })
       : {};
   const messages = Array.isArray(obj.messages) ? obj.messages : [];
@@ -133,7 +152,8 @@ export function asChat(raw: unknown): ChatDoc {
       row.kind === 'admin' ||
       row.kind === 'thanks' ||
       row.kind === 'kyc' ||
-      row.kind === 'kyc_docs'
+      row.kind === 'kyc_docs' ||
+      row.kind === 'under_review'
         ? row.kind
         : undefined;
     const waType =
@@ -166,10 +186,12 @@ export function asChat(raw: unknown): ChatDoc {
       ...(row.mime ? { mime: String(row.mime).slice(0, 80) } : {}),
     });
   }
+  const adminReadAt = String(obj.adminReadAt ?? '').trim();
   return {
     profileName: String(obj.profileName ?? '').slice(0, 120),
     waPhoneNumberId: String(obj.waPhoneNumberId ?? '').replace(/\D/g, '').slice(0, 30),
     messages: clean.slice(-MAX_MESSAGES),
     ...(typeof obj.leadNote === 'string' ? { leadNote: obj.leadNote.slice(0, 1500) } : {}),
+    ...(Number.isFinite(Date.parse(adminReadAt)) ? { adminReadAt } : {}),
   };
 }

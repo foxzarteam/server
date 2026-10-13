@@ -14,6 +14,7 @@ import { isStoredLoanCategory, personalLoanAmountError } from '../src/wallet/loa
 import { sanitizePublicLead } from '../src/security/pan-crypto';
 import { slugToLeadCategory, isInsTypeSlug } from '../src/catalog/catalog';
 import { statusLabel } from '../src/leads/lead-present';
+import { underReviewText } from '../src/whatsapp/whatsapp-templates';
 
 // —— client IP ——
 assert.strictEqual(
@@ -67,7 +68,17 @@ assert.strictEqual(buildLocationLabel([null, undefined, '']), null);
 
 // —— employment ——
 assert.ok(personalLoanEmploymentError({})?.includes('income'));
-assert.strictEqual(personalLoanEmploymentError({ netMonthlyIncome: 50000 }), null);
+assert.ok(
+  personalLoanEmploymentError({ netMonthlyIncome: 50000 })?.includes('salaried'),
+);
+assert.strictEqual(
+  personalLoanEmploymentError({ netMonthlyIncome: 50000, employmentType: 'salaried' }),
+  null,
+);
+assert.strictEqual(
+  personalLoanEmploymentError({ netMonthlyIncome: 50000, employmentType: 'self_employed' }),
+  null,
+);
 
 assert.strictEqual(leadFullNameError('Rahul Sharma'), null);
 assert.ok(leadFullNameError('A')?.includes('required'));
@@ -128,6 +139,9 @@ assert.strictEqual(isInsTypeSlug('cyber_insurance'), true);
 assert.strictEqual(isInsTypeSlug('Travel Insurance'), false);
 
 assert.strictEqual(statusLabel('pending'), 'KYC pending');
+assert.strictEqual(statusLabel('kyc_progress'), 'KYC progress');
+assert.ok(/received your KYC documents/.test(underReviewText()));
+assert.ok(/under review/.test(underReviewText()));
 assert.strictEqual(statusLabel('in_process'), 'Under Review');
 assert.strictEqual(statusLabel('approved'), 'Approved');
 assert.strictEqual(statusLabel('rejected'), 'Not Approved');
