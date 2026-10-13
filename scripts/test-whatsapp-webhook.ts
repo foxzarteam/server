@@ -150,12 +150,12 @@ assert.deepStrictEqual(
   welcomeInteractive('hi').interactive.action.buttons.map((btn) => btn.reply.title),
   ['Loan', 'Insurance'],
 );
-assert.ok(/Loan chahiye ya Insurance/.test(welcomeText('Gaurav')));
+assert.ok(/do you need a Loan or Insurance/.test(welcomeText('Gaurav')));
 assert.ok(!/Personal Loan/.test(welcomeText('Gaurav')));
 assert.ok(!/Navya/i.test(welcomeText('Gaurav')));
 assert.ok(/apnizaroorat.com\/products\/loans\//.test(personalLoanText('Gaurav')));
-assert.ok(/\n\nAapke liye/.test(personalLoanText('Gaurav')));
-assert.ok(/\n\nAapke liye/.test(insuranceText('Gaurav')));
+assert.ok(/\n\nThe best loan options/.test(personalLoanText('Gaurav')));
+assert.ok(/\n\nHealth, Bike, Life/.test(insuranceText('Gaurav')));
 assert.ok(/apnizaroorat.com\/products\/insurance\//.test(insuranceText('Gaurav')));
 assert.ok(/Health, Bike, Life/.test(insuranceText('Gaurav')));
 assert.ok(!/50 Lakh/i.test(personalLoanText('Gaurav')));
@@ -181,7 +181,7 @@ assert.ok(insLinked.mediaUrl?.endsWith('/images/whatsapp/wa_ins.jpg'));
 assert.ok(alreadyWelcomed([{ role: 'assistant', kind: 'welcome', text: welcomeText('Gaurav') }]));
 assert.ok(!alreadyWelcomed([{ role: 'user', text: 'Hi' }]));
 assert.ok(/Thank you/.test(thankYouText('Gaurav')));
-assert.ok(/jald hi contact/.test(thankYouText('Gaurav')));
+assert.ok(/contact you shortly/.test(thankYouText('Gaurav')));
 assert.ok(/apnizaroorat.com\//.test(thankYouText('Gaurav')));
 
 assert.strictEqual(kycBodyName('  Raju   Patel\n'), 'Raju Patel');

@@ -11,19 +11,19 @@ export type ProductChoice = 'personal_loan' | 'insurance';
 
 function who(profileName: string): string {
   const name = profileName.trim();
-  return name ? `${name} ji` : 'ji';
+  return name || 'there';
 }
 
 export function welcomeText(profileName: string): string {
-  return `Namaste ${who(profileName)} 🙏\nApni Zaroorat me aapka swagat hai.\nBataiye, aapko Loan chahiye ya Insurance?\nNeeche button pe tap kijiye.`;
+  return `Hello ${who(profileName)} 🙏\nWelcome to Apni Zaroorat.\nTell us, do you need a Loan or Insurance?\nTap a button below.`;
 }
 
 export function personalLoanText(profileName: string): string {
-  return `Great, ${who(profileName)}! 💰\n\nAapke liye bilkul affordable EMI par loan ke best options available hain.\n\nApni loan eligibility jaanne ke liye abhi apply karein 👇\n${LOAN_URL}`;
+  return `Great, ${who(profileName)}! 💰\n\nThe best loan options are available for you at a very affordable EMI.\n\nApply now to check your loan eligibility 👇\n${LOAN_URL}`;
 }
 
 export function insuranceText(profileName: string): string {
-  return `Great, ${who(profileName)}! 🛡️\n\nAapke liye affordable plans par Health, Bike, Life aur har tarah ke insurance options available hain.\n\nApni zaroorat ke hisaab se insurance ke liye abhi apply karein 👇\n${INSURANCE_URL}`;
+  return `Great, ${who(profileName)}! 🛡️\n\nHealth, Bike, Life, and every kind of insurance option is available for you on affordable plans.\n\nApply now for the insurance that fits your needs 👇\n${INSURANCE_URL}`;
 }
 
 export function productImageUrl(choice: ProductChoice): string {
@@ -101,7 +101,7 @@ export function productChoice(buttonId: string, text: string): ProductChoice | '
 }
 
 export function thankYouText(profileName: string): string {
-  return `Thank you, ${who(profileName)} 🙏\n\nAapka message hume mil gaya hai. Hamari team aapse jald hi contact karegi. Tab tak hamari website visit karein 👇\nhttps://apnizaroorat.com/`;
+  return `Thank you, ${who(profileName)} 🙏\n\nWe have received your message. Our team will contact you shortly. Until then, please visit our website 👇\nhttps://apnizaroorat.com/`;
 }
 
 export function alreadyThanked(messages: { role: string; kind?: string }[]): boolean {
@@ -118,7 +118,8 @@ export function alreadyWelcomed(messages: { role: string; kind?: string; text: s
   return messages.some(
     (item) =>
       item.role === 'assistant' &&
-      (item.kind === 'welcome' || /loan chahiye ya insurance/i.test(item.text)),
+      (item.kind === 'welcome' ||
+        /loan chahiye ya insurance|do you need a loan or insurance/i.test(item.text)),
   );
 }
 
@@ -149,7 +150,7 @@ export function kycDocsRequestText(): string {
   return [
     'Great! 🎉',
     '',
-    'Apni file aage badhane ke liye in 4 documents ki bilkul clear photo ya PDF isi chat me bhej dijiye:',
+    'To move your file forward, please send a very clear photo or PDF of these 4 documents in this chat:',
     '',
     '1️⃣ PAN Card 🪪',
     '2️⃣ Aadhaar Card 🆔',
