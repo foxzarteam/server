@@ -243,7 +243,8 @@ const statusPayload = graphMessageBody('919876543210', {
 }) as { text?: { preview_url?: boolean; body?: string } };
 assert.strictEqual(statusPayload?.text?.preview_url, false);
 assert.ok(/registered phone number/i.test(statusText));
-assert.ok(/apnizaroorat.com\/customer\/login\//.test(statusText));
+assert.ok(statusText.includes('https://apnizaroorat.com/customer/login'));
+assert.ok(!statusText.includes('customer/login/'));
 assert.ok(/click here/.test(statusText));
 assert.ok(/📱/.test(statusText));
 assert.ok(/👇/.test(statusText));
@@ -344,6 +345,57 @@ assert.strictEqual(hiddenFile[0].filename, 'statement.pdf');
 assert.strictEqual(hiddenFile[1].waType, 'image');
 assert.strictEqual(hiddenFile[1].mediaId, 'media-jpg');
 assert.ok(!hiddenFile.some((item) => /unsupported/i.test(item.text)));
+
+const album = extractInboundMessages({
+  object: 'whatsapp_business_account',
+  entry: [
+    {
+      changes: [
+        {
+          value: {
+            messages: [
+              {
+                from: '919876543210',
+                id: 'wamid.album',
+                type: 'unsupported',
+                errors: [{ code: 131051, title: 'Message type unknown' }],
+              },
+              {
+                from: '919876543210',
+                id: 'wamid.shot1',
+                type: 'image',
+                image: { id: 'media-1', mime_type: 'image/jpeg' },
+              },
+              {
+                from: '919876543210',
+                id: 'wamid.shot2',
+                type: 'image',
+                image: { id: 'media-2', mime_type: 'image/jpeg' },
+              },
+            ],
+          },
+        },
+      ],
+    },
+  ],
+});
+assert.strictEqual(album.length, 2);
+assert.ok(album.every((item) => item.mediaId));
+
+const notice = 'This file did not come through. Ask the customer to send it again as a photo or PDF.';
+const withPhotos = asChat({
+  messages: [
+    { id: 'miss', role: 'user', text: notice, at: '2026-10-14T01:15:00.000Z' },
+    { id: 'pic', role: 'user', text: 'Photo', at: '2026-10-14T01:15:02.000Z', waType: 'image', mediaId: 'media-1' },
+  ],
+});
+assert.strictEqual(withPhotos.messages.length, 1);
+assert.strictEqual(withPhotos.messages[0].id, 'pic');
+const alone = asChat({
+  messages: [{ id: 'miss', role: 'user', text: notice, at: '2026-10-14T01:15:00.000Z' }],
+});
+assert.strictEqual(alone.messages.length, 1);
+assert.strictEqual(alone.messages[0].text, notice);
 
 const voice = extractInboundMessages({
   object: 'whatsapp_business_account',

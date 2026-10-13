@@ -239,5 +239,8 @@ export function extractInboundMessages(body: unknown): InboundWhatsappMessage[] 
     }
   }
 
-  return out;
+  return out.filter((item) => {
+    if (item.mediaId || !item.text.startsWith('This file did not come through')) return true;
+    return !out.some((other) => other.phone === item.phone && other.mediaId);
+  });
 }

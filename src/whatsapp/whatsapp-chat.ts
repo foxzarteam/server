@@ -1,6 +1,28 @@
 import type { ProductChoice } from './whatsapp-templates';
 
 export const MAX_MESSAGES = 1000;
+const MISSING_FILE_NOTICE = 'This file did not come through. Ask the customer to send it again as a photo or PDF.';
+const MISSING_FILE_WINDOW_MS = 2 * 60 * 1000;
+
+function isMissingFileNotice(message: { role?: string; text?: string; mediaId?: string }): boolean {
+  if (message.role !== 'user' || message.mediaId) return false;
+  const text = String(message.text ?? '').trim();
+  return text === MISSING_FILE_NOTICE || /^\[(unsupported|unknown|empty) message\]$/i.test(text);
+}
+
+/** WhatsApp sends an empty album shell plus the real photos. Drop the shell when a photo arrived. */
+export function dropFalseMissingFileNotices(messages: ChatMessage[]): ChatMessage[] {
+  return messages.filter((message) => {
+    if (!isMissingFileNotice(message)) return true;
+    const at = Date.parse(message.at);
+    return !messages.some((other) => {
+      if (other.id === message.id || other.role !== 'user' || !other.mediaId) return false;
+      const otherAt = Date.parse(other.at);
+      if (!Number.isFinite(at) || !Number.isFinite(otherAt)) return false;
+      return Math.abs(otherAt - at) <= MISSING_FILE_WINDOW_MS;
+    });
+  });
+}
 
 export type ChatMessage = {
   id: string;
@@ -92,6 +114,8 @@ export type FlowMem = {
   kyc: boolean;
   kycDocs: boolean;
   statusSent: boolean;
+  /** Chat history was read in this process, so Check Status need not wait on the database. */
+  loaded: boolean;
   product?: ProductChoice;
   ids: Set<string>;
 };
@@ -106,6 +130,7 @@ export function emptyFlow(): FlowMem {
     kyc: false,
     kycDocs: false,
     statusSent: false,
+    loaded: false,
     ids: new Set(),
   };
 }
@@ -190,7 +215,7 @@ export function asChat(raw: unknown): ChatDoc {
   return {
     profileName: String(obj.profileName ?? '').slice(0, 120),
     waPhoneNumberId: String(obj.waPhoneNumberId ?? '').replace(/\D/g, '').slice(0, 30),
-    messages: clean.slice(-MAX_MESSAGES),
+    messages: dropFalseMissingFileNotices(clean).slice(-MAX_MESSAGES),
     ...(typeof obj.leadNote === 'string' ? { leadNote: obj.leadNote.slice(0, 1500) } : {}),
     ...(Number.isFinite(Date.parse(adminReadAt)) ? { adminReadAt } : {}),
   };

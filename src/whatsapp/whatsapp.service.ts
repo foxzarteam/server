@@ -13,6 +13,7 @@ import { allowRateLimitedAction } from '../security/rate-limit';
 import {
   adminCustomerName,
   asChat,
+  dropFalseMissingFileNotices,
   emptyFlow,
   MAX_MESSAGES,
   unreadCustomerCount,
@@ -80,6 +81,8 @@ export class WhatsappService implements OnModuleInit {
   private kycTemplateSent = new Set<string>();
   private kycLeadSent = new Set<string>();
   private underReviewSent = new Set<string>();
+  /** Check Status already claimed for this phone, so a second tap does not wait or send again. */
+  private statusFlight = new Set<string>();
   /** Phone has no application. Avoids a leads query on every photo. */
   private applicationMiss = new Map<string, number>();
   private inboundTail = new Map<string, Promise<void>>();
@@ -358,13 +361,18 @@ export class WhatsappService implements OnModuleInit {
     if (this.sentIds.has(assistantId) || this.inflight.has(message.messageId)) return;
     this.inflight.add(message.messageId);
     const phone = canonicalWhatsappPhone(message.phone);
-    this.enqueueInbound(phone, async () => {
+    const run = async () => {
       try {
         await this.prepareInbound(settings, message, phone, assistantId);
       } finally {
         this.inflight.delete(message.messageId);
       }
-    });
+    };
+    if (isKycStatusClick(message.buttonId, message.text)) {
+      void run();
+      return;
+    }
+    this.enqueueInbound(phone, run);
   }
 
   private async prepareInbound(
@@ -377,7 +385,12 @@ export class WhatsappService implements OnModuleInit {
     const statusClick = isKycStatusClick(message.buttonId, message.text);
     if (kycClick || statusClick) this.seedKycFlow(phone);
     else this.ensureFlowFast(phone);
-    await this.hydrateFlow(phone);
+    const known = this.flowMem.get(phone);
+    const statusAlready = statusClick && (Boolean(known?.statusSent) || this.statusFlight.has(phone));
+    if (statusClick && !statusAlready) this.statusFlight.add(phone);
+    if (!(statusClick && known?.loaded)) {
+      await this.hydrateFlow(phone);
+    }
 
     const seen = this.flowMem.get(phone)?.ids;
     if (seen?.has(message.messageId) || seen?.has(assistantId)) return;
@@ -385,6 +398,7 @@ export class WhatsappService implements OnModuleInit {
     const userMessage = this.inboundUserMessage(message);
     const choice = productChoice(message.buttonId, message.text);
     let reply = this.decideReply(phone, message, assistantId);
+    if (statusAlready && reply?.kind === 'status') reply = null;
     if (reply?.kind === 'kyc_docs') {
       const employment = await this.employmentForPhone(phone);
       reply = { ...reply, text: kycDocsRequestText(employment) };
@@ -475,7 +489,10 @@ export class WhatsappService implements OnModuleInit {
     if (!mem) return;
     if (reply.kind === 'kyc_docs') mem.kycDocs = false;
     if (reply.kind === 'welcome') mem.welcomed = false;
-    if (reply.kind === 'status') mem.statusSent = false;
+    if (reply.kind === 'status') {
+      mem.statusSent = false;
+      this.statusFlight.delete(phone);
+    }
     if (reply.kind === 'personal_loan') {
       mem.loanOffered = false;
       if (mem.product === 'personal_loan') mem.product = undefined;
@@ -515,6 +532,7 @@ export class WhatsappService implements OnModuleInit {
     prev.kyc = kyc;
     prev.kycDocs = kycDocs;
     prev.statusSent = prev.statusSent || alreadyStatusSent(messages);
+    prev.loaded = true;
     this.flowMem.set(phone, prev);
   }
 
@@ -1156,7 +1174,14 @@ export class WhatsappService implements OnModuleInit {
       }
 
       const prior = current?.chat.messages ?? [];
-      const messages = [...prior, ...toAdd].slice(-MAX_MESSAGES);
+      const messages = dropFalseMissingFileNotices([...prior, ...toAdd]).slice(-MAX_MESSAGES);
+      if (
+        current &&
+        messages.length === prior.length &&
+        messages.every((item, index) => item.id === prior[index]?.id)
+      ) {
+        return { row: current, added: false };
+      }
       let adminReadAt = current?.chat.adminReadAt;
       if (!adminReadAt && toAdd.some((item) => item.role === 'user')) {
         adminReadAt = prior[prior.length - 1]?.at || '1970-01-01T00:00:00.000Z';
