@@ -1156,6 +1156,105 @@ export class LeadsService {
     return this.enrichWithPartnerSource(withGeo);
   }
 
+  /**
+   * Admin Excel export. Decrypts PAN for the file only.
+   * Each decrypted PAN is audited. Plaintext is never logged.
+   * If the audit insert fails, nothing is returned.
+   */
+  async exportAllForAdmin(actor: {
+    adminId?: string;
+    adminEmail?: string;
+    adminRole?: string;
+    ipAddress?: string;
+    userAgent?: string;
+  }): Promise<
+    { ok: true; rows: Record<string, unknown>[] } | { ok: false; message: string }
+  > {
+    const { data, error } = await this.leads
+      .select()
+      .eq('is_active', true)
+      .order('created_at', { ascending: false });
+
+    if (error) {
+      console.error('LeadsService.exportAllForAdmin', error.message);
+      return { ok: false, message: 'Could not load leads' };
+    }
+
+    const leads = (data as Record<string, unknown>[]) || [];
+    const withOtp = await this.withOtpVerified(leads);
+    const withGeo = await this.enrichMissingIpLocations(withOtp);
+    const withPartner = await this.enrichWithPartnerSource(withGeo);
+
+    const audits: Array<{
+      leadId: string;
+      action: 'reveal' | 'decrypt_failed';
+      panMasked?: string;
+    }> = [];
+    const rows: Record<string, unknown>[] = [];
+
+    for (const row of withPartner) {
+      const revealed = this.plainPanForExport(row);
+      const leadId = String(row.id ?? '').trim();
+      if (revealed.audit) {
+        if (!leadId) {
+          revealed.pan = '';
+        } else {
+          audits.push({
+            leadId,
+            action: revealed.audit,
+            panMasked: revealed.pan ? maskPan(revealed.pan) : undefined,
+          });
+        }
+      }
+      const safe = toSafeLeadRow(row);
+      safe.pan = revealed.pan;
+      rows.push(safe);
+    }
+
+    const audited = await this.panAudit.recordMany(
+      audits.map((entry) => ({
+        leadId: entry.leadId,
+        action: entry.action,
+        adminId: actor.adminId,
+        adminEmail: actor.adminEmail,
+        adminRole: actor.adminRole,
+        ipAddress: actor.ipAddress,
+        userAgent: actor.userAgent,
+        reason: 'admin_excel_export',
+        metadata: {
+          bulk: true,
+          ...(entry.panMasked ? { pan_masked: entry.panMasked } : {}),
+        },
+      })),
+    );
+    if (!audited) {
+      return { ok: false, message: 'Audit logging failed; export stopped' };
+    }
+
+    return { ok: true, rows };
+  }
+
+  /** Full PAN for export. Draft / masked-only rows stay blank. */
+  private plainPanForExport(row: Record<string, unknown>): {
+    pan: string;
+    audit: 'reveal' | 'decrypt_failed' | null;
+  } {
+    if (isDraftLead(row)) return { pan: '', audit: null };
+    const encrypted = row.pan_encrypted != null ? String(row.pan_encrypted).trim() : '';
+    if (encrypted) {
+      try {
+        return { pan: decryptPan(encrypted), audit: 'reveal' };
+      } catch {
+        return { pan: '', audit: 'decrypt_failed' };
+      }
+    }
+    const legacy = normalizePan(String(row.pan ?? ''));
+    if (isValidPanFormat(legacy) && legacy !== LEAD_DRAFT_PAN) {
+      return { pan: legacy, audit: 'reveal' };
+    }
+    return { pan: '', audit: null };
+  }
+
   /** Attach partner name / Direct for admin CRM view. */
   private async enrichWithPartnerSource(
     rows: Record<string, unknown>[],

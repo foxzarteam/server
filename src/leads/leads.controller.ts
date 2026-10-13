@@ -104,6 +104,35 @@ export class LeadsController {
     return { success: true, data: leads };
   }
 
+  /** Full lead sheet for admin/staff. PAN is decrypted here, never on the website. */
+  @Get('admin/export')
+  @UseGuards(AdminCrmGuard)
+  @HttpCode(HttpStatus.OK)
+  async exportForAdmin(@Req() req: Request & { adminActor?: AdminActor }) {
+    const actor = req.adminActor;
+    if (!actor || !isCrmAdminActor(actor)) {
+      throw new UnauthorizedException('Unauthorized');
+    }
+
+    const rateKey = `lead-export:${actor.email || actor.sub}`;
+    if (!allowRateLimitedAction(rateKey, 5, 60_000)) {
+      throw new BadRequestException('Too many exports. Try again in a minute.');
+    }
+
+    const userAgent = req.headers['user-agent'];
+    const result = await this.leadsService.exportAllForAdmin({
+      adminId: actor.sub,
+      adminEmail: actor.email,
+      adminRole: actor.role,
+      ipAddress: requestClientIp(req) ?? undefined,
+      userAgent: typeof userAgent === 'string' ? userAgent.slice(0, 300) : undefined,
+    });
+    if (!result.ok) {
+      throw new BadRequestException(result.message);
+    }
+    return { success: true, data: result.rows };
+  }
+
   @Get('admin/by-agent/:agentId')
   @HttpCode(HttpStatus.OK)
   async getByAgentForAdmin(
