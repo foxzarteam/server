@@ -53,8 +53,9 @@ export class WhatsappController {
   @Get('admin/enquiries')
   @UseGuards(AdminCrmGuard)
   @HttpCode(HttpStatus.OK)
-  async adminEnquiries() {
-    const data = await this.whatsapp.listForAdmin();
+  async adminEnquiries(@Query('page') page?: string, @Query('q') q?: string) {
+    const parsed = Number(page);
+    const data = await this.whatsapp.listForAdmin(Number.isFinite(parsed) ? parsed : 1, q ?? '');
     return { success: true, data };
   }
 

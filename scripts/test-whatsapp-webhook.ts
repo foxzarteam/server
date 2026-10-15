@@ -446,7 +446,8 @@ assert.strictEqual(pickBotReply('personal_loan', '', { ...idle, kyc: true }).kin
 assert.strictEqual(pickBotReply('insurance', '', { ...idle, kyc: true }).kind, null);
 assert.ok(alreadyKycStarted([{ role: 'assistant', text: 'Dear Atul. Your account application is in progress. KYC verification is pending. Complete it in just 2 mins' }]));
 assert.ok(!alreadyKycStarted([{ role: 'user', text: 'KYC verification is pending' }]));
-assert.strictEqual(pickBotReply('', 'ok', { ...idle, kyc: true }).kind, null);
+assert.strictEqual(pickBotReply('', 'Okay which bank ?', { ...idle, kyc: true, welcomed: false }).kind, null);
+assert.ok(alreadyKycStarted([{ role: 'assistant', text: 'To complete your KYC, please share clear photos or PDFs of these documents:' }]));
 assert.strictEqual(pickBotReply('Haan, KYC Start Karein', '', idle).kind, 'kyc_docs');
 assert.strictEqual(pickBotReply('Complete KYC', '', idle).kind, 'kyc_docs');
 assert.strictEqual(pickBotReply('Application Status Check Karein', '', idle).kind, 'status');

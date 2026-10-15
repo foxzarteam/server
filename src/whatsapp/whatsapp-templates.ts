@@ -133,7 +133,9 @@ export function alreadyKycStarted(messages: { role: string; kind?: string; text?
   return messages.some((item) => {
     if (item.role !== 'assistant') return false;
     if (item.kind === 'kyc' || item.kind === 'kyc_docs') return true;
-    return /kyc verification is pending|account application is in progress/i.test(item.text || '');
+    return /kyc verification is pending|account application is in progress|complete your kyc|in just 2 mins/i.test(
+      item.text || '',
+    );
   });
 }
 

@@ -83,9 +83,9 @@ export class WhatsappService implements OnModuleInit {
   private underReviewSent = new Set<string>();
   /** Check Status already claimed for this phone, so a second tap does not wait or send again. */
   private statusFlight = new Set<string>();
-  /** Phone has no application. Avoids a leads query on every photo. */
-  private applicationMiss = new Map<string, number>();
   private inboundTail = new Map<string, Promise<void>>();
+  /** One welcome, loan, or insurance send in flight per number. */
+  private marketingFlight = new Set<string>();
 
   constructor(
     @Inject(SUPABASE_CLIENT) private readonly supabase: SupabaseClient,
@@ -191,20 +191,43 @@ export class WhatsappService implements OnModuleInit {
     this.linkCache = null;
   }
 
-  async listForAdmin(): Promise<WhatsappEnquiryListItem[]> {
-    const { data, error } = await this.table
-      .select('id, phone, chat, last_chat_at, created_at')
+  async listForAdmin(
+    page = 1,
+    q = '',
+  ): Promise<{ rows: WhatsappEnquiryListItem[]; total: number; page: number; pageSize: number }> {
+    const pageSize = 100;
+    const safePage = Number.isFinite(page) && page > 0 ? Math.floor(page) : 1;
+    const from = (safePage - 1) * pageSize;
+    const raw = String(q ?? '').trim().slice(0, 40);
+    const name = raw.replace(/[%_*,.()"'\\]/g, '').trim();
+    const digits = raw.replace(/\D/g, '');
+    const filters: string[] = [];
+    if (digits.length >= 3) filters.push(`phone.ilike."*${digits}*"`);
+    if (/[a-z]/i.test(name)) filters.push(`chat->>profileName.ilike."*${name}*"`);
+    if (/[a-z]/i.test(name)) {
+      const leadPhones = await this.phonesForLeadName(name);
+      for (const phone of leadPhones) filters.push(`phone.eq.${phone}`);
+    }
+
+    let query = this.table.select('id, phone, chat, last_chat_at, created_at', { count: 'exact' });
+    if (filters.length) query = query.or(filters.join(','));
+    const { data, error, count } = await query
       .order('last_chat_at', { ascending: false, nullsFirst: false })
-      .limit(80);
+      .order('created_at', { ascending: false })
+      .range(from, from + pageSize - 1);
 
     if (error) {
       console.error('WhatsappService.listForAdmin', error.message);
-      return [];
+      return { rows: [], total: 0, page: safePage, pageSize };
     }
 
     const rows = (data as EnquiryRow[]) ?? [];
     const applicationNames = await this.applicationNames(rows.map((row) => row.phone));
-    return rows.map((row) => {
+    return {
+      total: count ?? rows.length,
+      page: safePage,
+      pageSize,
+      rows: rows.map((row) => {
       const chat = asChat(row.chat);
       const last = chat.messages[chat.messages.length - 1];
       return {
@@ -218,7 +241,26 @@ export class WhatsappService implements OnModuleInit {
         createdAt: row.created_at,
         unreadCount: unreadCustomerCount(chat),
       };
-    });
+    }),
+    };
+  }
+
+  /** Application names are shown in the sidebar, so search must find those phones too. */
+  private async phonesForLeadName(name: string): Promise<string[]> {
+    const { data, error } = await this.supabase
+      .from(TABLE_LEADS)
+      .select('mobile_number')
+      .ilike('full_name', `%${name}%`)
+      .eq('is_active', true)
+      .limit(20);
+    if (error || !data) return [];
+    return [
+      ...new Set(
+        data
+          .map((row) => canonicalWhatsappPhone(String((row as { mobile_number?: string }).mobile_number ?? '')))
+          .filter((phone) => /^[0-9]{8,15}$/.test(phone)),
+      ),
+    ];
   }
 
   async deleteForAdmin(id: string): Promise<boolean> {
@@ -404,7 +446,12 @@ export class WhatsappService implements OnModuleInit {
       reply = { ...reply, text: kycDocsRequestText(employment) };
     }
     if (reply && (reply.kind === 'welcome' || reply.kind === 'personal_loan' || reply.kind === 'insurance')) {
-      if (await this.recentlyApplied(phone)) reply = null;
+      const claim = `${phone}:${reply.kind}`;
+      if (this.marketingFlight.has(claim) || (await this.recentlyApplied(phone))) {
+        reply = null;
+      } else {
+        this.marketingFlight.add(claim);
+      }
     }
     if (
       reply &&
@@ -492,6 +539,9 @@ export class WhatsappService implements OnModuleInit {
     if (reply.kind === 'status') {
       mem.statusSent = false;
       this.statusFlight.delete(phone);
+    }
+    if (reply.kind === 'welcome' || reply.kind === 'personal_loan' || reply.kind === 'insurance') {
+      this.marketingFlight.delete(`${phone}:${reply.kind}`);
     }
     if (reply.kind === 'personal_loan') {
       mem.loanOffered = false;
@@ -836,26 +886,22 @@ export class WhatsappService implements OnModuleInit {
   private phoneLookupKeys(phone: string): string[] {
     const canonical = canonicalWhatsappPhone(phone);
     const ten = canonical.startsWith('91') && canonical.length === 12 ? canonical.slice(2) : canonical;
-    return [...new Set([canonical, ten].filter((value) => value.length >= 10))];
+    const keys = [canonical, ten];
+    if (ten.length === 10) keys.push(`+91${ten}`, `+${canonical}`);
+    return [...new Set(keys.filter((value) => value.length >= 10))];
   }
 
-  /** Leads lookup only when a welcome, loan, or insurance reply is about to go out. */
+  /** Leads lookup whenever a welcome, loan, or insurance reply is about to go out. */
   private async recentlyApplied(phone: string): Promise<boolean> {
-    if (this.kycTemplateSent.has(phone) || this.flowMem.get(phone)?.kyc) return true;
-    const missUntil = this.applicationMiss.get(phone) ?? 0;
-    if (missUntil > Date.now()) return false;
+    const mem = this.flowMem.get(phone);
+    if (this.kycTemplateSent.has(phone) || mem?.kyc) return true;
+    const history = mem?.ids;
+    if (history && [...history].some((id) => id.startsWith('kyc:'))) return true;
     const applied = await this.phoneHasApplication(phone);
     if (applied) {
-      this.applicationMiss.delete(phone);
       this.rememberKycPhone(phone);
-      const mem = this.flowMem.get(phone);
       if (mem) mem.kyc = true;
       return true;
-    }
-    this.applicationMiss.set(phone, Date.now() + 2 * 60_000);
-    if (this.applicationMiss.size > 4000) {
-      const first = this.applicationMiss.keys().next().value;
-      if (first) this.applicationMiss.delete(first);
     }
     return false;
   }
@@ -1003,9 +1049,7 @@ export class WhatsappService implements OnModuleInit {
       waType: 'text',
     };
     this.noteFlow(phone, message);
-    this.queuePersist(phone, async () => {
-      await this.appendMessage(phone, name, message);
-    });
+    await this.appendMessage(phone, name, message);
   }
 
   private async sendWhatsapp(
