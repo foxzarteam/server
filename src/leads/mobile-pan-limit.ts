@@ -153,15 +153,28 @@ export function normalizeLeadInsType(
   return t || null;
 }
 
+function canonicalCategory(category?: string | null): string {
+  const c = String(category ?? '').trim();
+  if (c === 'car_loan' || c === 'car-loan') return 'vehicle_loan';
+  return c || 'personal_loan';
+}
+
+function canonicalInsType(insType?: string | null): string {
+  const t = String(insType ?? '').trim().toLowerCase();
+  if (t === 'car_insurance') return 'vehicle_insurance';
+  if (t === 'third_party_pvt_car_insurance') return 'third_party_pvt_vehicle_insurance';
+  return t;
+}
+
 export function isSameProduct(
   a: { category?: string | null; insType?: string | null },
   b: { category?: string | null; insType?: string | null },
 ): boolean {
-  const catA = normalizeLeadCategory(a.category);
-  const catB = normalizeLeadCategory(b.category);
-  if (catA !== catB) return false;
+  const catA = canonicalCategory(a.category);
+  const catB = canonicalCategory(b.category);
+  if (!catA || !catB || catA !== catB) return false;
   if (catA !== 'insurance') return true;
-  return normalizeLeadInsType(catA, a.insType) === normalizeLeadInsType(catB, b.insType);
+  return canonicalInsType(a.insType) === canonicalInsType(b.insType);
 }
 
 /**

@@ -64,7 +64,9 @@ import { LEAD_DRAFT_PAN } from './lead-draft';
 import {
   blockingApplicationMessage,
   categoryLabel,
+  categoryLookupKeys,
   insTypeLabel,
+  insTypeLookupKeys,
   isDraftLead,
   normalizeStoredCategory,
   normalizeStoredInsType,
@@ -372,10 +374,10 @@ export class LeadsService {
     let q = this.leads
       .select()
       .eq('mobile_number', mobile)
-      .eq('category', cat)
+      .in('category', categoryLookupKeys(cat))
       .eq('is_active', true);
     if (cat === 'insurance' && ins) {
-      q = q.eq('ins_type', ins);
+      q = q.in('ins_type', insTypeLookupKeys(ins));
     }
     const { data, error } = await q.order('created_at', { ascending: false }).limit(20);
     if (error) {
@@ -500,7 +502,7 @@ export class LeadsService {
     insType?: string | null;
   }> {
     const category = normalizeStoredCategory(input.category);
-    const ins = normalizeStoredInsType(category, input.insType);
+    let ins = normalizeStoredInsType(category, input.insType);
     if (category === 'insurance' && !ins) {
       return {
         allowed: false,
@@ -509,27 +511,26 @@ export class LeadsService {
         categoryLabel: categoryLabel(category),
       };
     }
-
-    const [insOk, blocking] = await Promise.all([
-      category === 'insurance' && ins
-        ? this.servicesService.isAllowedInsuranceType(ins)
-        : Promise.resolve(true),
-      this.findBlockingSameCategoryLead(
-        input.mobileNumber,
-        input.pan,
-        category,
-        ins,
-        input.ignoreLeadId,
-      ),
-    ]);
-    if (!insOk) {
-      return {
-        allowed: false,
-        message: 'Invalid insurance type.',
-        category,
-        categoryLabel: categoryLabel(category),
-      };
+    if (category === 'insurance' && ins) {
+      const stored = await this.servicesService.resolveInsuranceTypeSlug(ins);
+      if (!stored) {
+        return {
+          allowed: false,
+          message: 'Invalid insurance type.',
+          category,
+          categoryLabel: categoryLabel(category),
+        };
+      }
+      ins = stored;
     }
+
+    const blocking = await this.findBlockingSameCategoryLead(
+      input.mobileNumber,
+      input.pan,
+      category,
+      ins,
+      input.ignoreLeadId,
+    );
     if (blocking) {
       const status =
         String(blocking.status ?? 'pending').trim().toLowerCase() || 'pending';
@@ -658,10 +659,10 @@ export class LeadsService {
     let q = this.leads
       .select()
       .eq('mobile_number', mobile)
-      .eq('category', cat)
+      .in('category', categoryLookupKeys(cat))
       .eq('is_active', true);
     if (cat === 'insurance' && ins) {
-      q = q.eq('ins_type', ins);
+      q = q.in('ins_type', insTypeLookupKeys(ins));
     }
     const { data, error } = await q
       .order('created_at', { ascending: false })
@@ -693,10 +694,10 @@ export class LeadsService {
     let byHash = this.leads
       .select()
       .eq('pan_hash', digest)
-      .eq('category', cat)
+      .in('category', categoryLookupKeys(cat))
       .eq('is_active', true);
     if (cat === 'insurance' && ins) {
-      byHash = byHash.eq('ins_type', ins);
+      byHash = byHash.in('ins_type', insTypeLookupKeys(ins));
     }
     const hashed = await byHash
       .order('created_at', { ascending: false })
@@ -710,10 +711,10 @@ export class LeadsService {
     let byPan = this.leads
       .select()
       .eq('pan', panUpper)
-      .eq('category', cat)
+      .in('category', categoryLookupKeys(cat))
       .eq('is_active', true);
     if (cat === 'insurance' && ins) {
-      byPan = byPan.eq('ins_type', ins);
+      byPan = byPan.in('ins_type', insTypeLookupKeys(ins));
     }
     const { data, error } = await byPan
       .order('created_at', { ascending: false })
@@ -762,7 +763,7 @@ export class LeadsService {
     }
 
     const category = normalizeStoredCategory(dto.category);
-    const ins = normalizeStoredInsType(category, dto.insType);
+    let ins = normalizeStoredInsType(category, dto.insType);
     if (isStoredLoanCategory(category)) {
       const empErr = this.personalLoanEmploymentError(dto);
       if (empErr) return { ok: false, message: empErr };
@@ -801,6 +802,7 @@ export class LeadsService {
         code: gates.code,
       };
     }
+    if (gates.insType) ins = gates.insType;
 
     let panFields: ReturnType<typeof panStorageFields>;
     try {
@@ -1041,8 +1043,8 @@ export class LeadsService {
       const employment = storedEmploymentType(dto.employmentType);
       if (employment) payload.employment_type = employment;
     }
-    if (category === 'insurance' && dto.insType) {
-      payload.ins_type = dto.insType;
+    if (category === 'insurance' && (gates.insType || dto.insType)) {
+      payload.ins_type = gates.insType || dto.insType;
     }
 
     const { data, errorMessage } = await this.insertLead(payload, 'LeadsService.create');

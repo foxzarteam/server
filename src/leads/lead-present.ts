@@ -5,6 +5,21 @@ import { LEAD_DRAFT_FULL_NAME, LEAD_DRAFT_PAN } from './lead-draft';
 export { isApprovedLeadStatus };
 
 /** Stored category key: lowercase, hyphens folded to underscores. */
+export function categoryLookupKeys(category?: string | null): string[] {
+  const c = normalizeStoredCategory(category);
+  if (c === 'vehicle_loan' || c === 'car_loan') return ['vehicle_loan', 'car_loan'];
+  return [c];
+}
+
+export function insTypeLookupKeys(insType?: string | null): string[] {
+  const t = String(insType ?? '').trim().toLowerCase();
+  if (t === 'vehicle_insurance' || t === 'car_insurance') return ['vehicle_insurance', 'car_insurance'];
+  if (t === 'third_party_pvt_vehicle_insurance' || t === 'third_party_pvt_car_insurance') {
+    return ['third_party_pvt_vehicle_insurance', 'third_party_pvt_car_insurance'];
+  }
+  return t ? [t] : [];
+}
+
 export function normalizeStoredCategory(category?: string | null): string {
   const c = String(category ?? '')
     .trim()
@@ -38,6 +53,7 @@ export function categoryLabel(category: unknown): string {
   const c = normalizeStoredCategory(String(category ?? ''));
   if (c === 'personal_loan') return 'Personal Loan';
   if (c === 'insurance') return 'Insurance';
+  if (c === 'vehicle_loan' || c === 'car_loan') return 'Vehicle Loan';
   return c.replace(/_/g, ' ').replace(/\b\w/g, (ch) => ch.toUpperCase());
 }
 
@@ -46,6 +62,10 @@ export function insTypeLabel(insType: unknown): string {
     .trim()
     .toLowerCase();
   if (!t) return 'Insurance';
+  if (t === 'vehicle_insurance' || t === 'car_insurance') return 'Vehicle Insurance';
+  if (t === 'third_party_pvt_vehicle_insurance' || t === 'third_party_pvt_car_insurance') {
+    return 'Third Party Pvt Vehicle Insurance';
+  }
   const found = FALLBACK_INSURANCE_TYPES.find((row) => row.value === t);
   if (found) return found.label;
   if (t === 'motor_insurance') return 'Motor Insurance';

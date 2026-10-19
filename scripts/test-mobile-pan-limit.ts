@@ -73,7 +73,7 @@ function lead(
 {
   const r = evaluateDuplicateGates({
     mobile: MOBILE_A,
-    category: 'car_loan',
+    category: 'vehicle_loan',
     existingLeads: [lead({ category: 'car_loan', status: 'rejected' })],
   });
   assert.strictEqual(r.allowed, false);

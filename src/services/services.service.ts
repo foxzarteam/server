@@ -35,11 +35,19 @@ export class ServicesService {
   }
 
   private rowToPublic(item: Record<string, unknown>): ServicePublic {
+    let slug = String(item.slug ?? '');
+    let title = String(item.title ?? '');
+    let description = String(item.description ?? '');
+    if (slug === 'car-loan') {
+      slug = 'vehicle-loan';
+      title = 'Vehicle Loan';
+      description = description.replace(/car loan/gi, 'vehicle loan');
+    }
     return {
       id: String(item.id ?? ''),
-      slug: String(item.slug ?? ''),
-      title: String(item.title ?? ''),
-      description: String(item.description ?? ''),
+      slug,
+      title,
+      description,
       imageUrl: typeof item.image_url === 'string' ? item.image_url.trim() : '',
       sortOrder: (item.sort_order as number) ?? 0,
       isActive: (item.is_active as boolean) ?? true,
@@ -72,11 +80,18 @@ export class ServicesService {
 
     const types: InsuranceTypePublic[] = [];
     for (const row of data) {
-      const value = String((row as { slug?: unknown }).slug ?? '')
+      let value = String((row as { slug?: unknown }).slug ?? '')
         .trim()
         .toLowerCase();
-      const label = String((row as { label?: unknown }).label ?? '').trim();
+      let label = String((row as { label?: unknown }).label ?? '').trim();
       const image = String((row as { image?: unknown }).image ?? '').trim();
+      if (value === 'car_insurance' || value === 'vehicle_insurance') {
+        value = 'vehicle_insurance';
+        label = 'Vehicle Insurance';
+      } else if (value === 'third_party_pvt_car_insurance' || value === 'third_party_pvt_vehicle_insurance') {
+        value = 'third_party_pvt_vehicle_insurance';
+        label = 'Third Party Pvt Vehicle Insurance';
+      }
       if (!INS_TYPE_SLUG_PATTERN.test(value) || !label) continue;
       types.push({ value, label, image });
     }
@@ -113,23 +128,55 @@ export class ServicesService {
   async amountBoundsBySlug(slug: string): Promise<{ min: number; max: number } | null> {
     const key = slug.trim().toLowerCase();
     if (!key) return null;
-    const { data, error } = await this.table
-      .select('limit_start, limit_end')
-      .eq('slug', key)
-      .maybeSingle();
-    if (error || !data) return null;
-    const row = data as { limit_start?: unknown; limit_end?: unknown };
-    const min = rupeeLimit(row.limit_start);
-    const max = rupeeLimit(row.limit_end);
-    if (min == null || max == null || max < min) return null;
-    return { min, max };
+    const keys = key === 'vehicle-loan' || key === 'car-loan' ? ['vehicle-loan', 'car-loan'] : [key];
+    for (const candidate of keys) {
+      const { data, error } = await this.table
+        .select('limit_start, limit_end')
+        .eq('slug', candidate)
+        .maybeSingle();
+      if (error || !data) continue;
+      const row = data as { limit_start?: unknown; limit_end?: unknown };
+      const min = rupeeLimit(row.limit_start);
+      const max = rupeeLimit(row.limit_end);
+      if (min == null || max == null || max < min) continue;
+      return { min, max };
+    }
+    return null;
+  }
+
+  /** Vehicle Insurance keeps working while the database slug is still car_insurance. */
+  async resolveInsuranceTypeSlug(slug: string): Promise<string | null> {
+    const t = slug.trim().toLowerCase();
+    if (!INS_TYPE_SLUG_PATTERN.test(t)) return null;
+    const aliases: Record<string, string[]> = {
+      car_insurance: ['vehicle_insurance', 'car_insurance'],
+      vehicle_insurance: ['vehicle_insurance', 'car_insurance'],
+      third_party_pvt_car_insurance: ['third_party_pvt_vehicle_insurance', 'third_party_pvt_car_insurance'],
+      third_party_pvt_vehicle_insurance: ['third_party_pvt_vehicle_insurance', 'third_party_pvt_car_insurance'],
+    };
+    const candidates = aliases[t] ?? [t];
+    const { data, error } = await this.supabase
+      .from(TABLE_INSURANCE_TYPES)
+      .select('slug')
+      .in('slug', candidates)
+      .eq('is_active', true);
+    if (!error && data?.length) {
+      const have = new Set(data.map((row) => String((row as { slug?: string }).slug ?? '')));
+      for (const candidate of candidates) {
+        if (have.has(candidate)) return candidate;
+      }
+    }
+    if (error) {
+      const known = new Set(FALLBACK_INSURANCE_TYPES.map((row) => row.value));
+      for (const candidate of candidates) {
+        if (known.has(candidate)) return candidate;
+      }
+    }
+    return null;
   }
 
   async isAllowedInsuranceType(slug: string): Promise<boolean> {
-    const t = slug.trim().toLowerCase();
-    if (!INS_TYPE_SLUG_PATTERN.test(t)) return false;
-    const { insuranceTypes } = await this.getPublicCatalog();
-    return insuranceTypes.some((x) => x.value === t);
+    return (await this.resolveInsuranceTypeSlug(slug)) != null;
   }
 
   async getAll(): Promise<Record<string, unknown>[]> {
