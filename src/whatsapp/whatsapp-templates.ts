@@ -170,6 +170,15 @@ export function underReviewText(): string {
   ].join('\n');
 }
 
+/** Gentle note when an admin marks an application not approved. Sent once per phone. */
+export function rejectedText(): string {
+  return [
+    'Thank you for applying with Apni Zaroorat. 🙏',
+    '',
+    'Sorry, your loan application could not be approved as it did not meet eligibility criteria. Please message us if you need any help.',
+  ].join('\n');
+}
+
 function kycDocsIntro(): string {
   return 'To complete your KYC, please share clear photos or PDFs of these documents:';
 }

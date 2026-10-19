@@ -20,6 +20,7 @@ import {
   isKycStartClick,
   isKycStatusClick,
   kycDocsRequestText,
+  rejectedText,
   personalLoanText,
   productChoice,
   statusCheckText,
@@ -273,6 +274,11 @@ assert.ok(/Passport-Size Photo/.test(businessDocs));
 assert.ok(/Your CIBIL Score/.test(businessDocs));
 assert.ok(!/Salary Slips/.test(businessDocs));
 assert.strictEqual(kycDocsRequestText('salaried'), docs);
+
+const rejectedNote = rejectedText();
+assert.strictEqual(rejectedNote.split('\n').filter((line) => line.trim()).length, 2);
+assert.ok(rejectedNote.includes('Thank you for applying with Apni Zaroorat. 🙏'));
+assert.ok(rejectedNote.includes('could not be approved'));
 assert.strictEqual(asChat({ messages: [{ id: 'docs:1', role: 'assistant', kind: 'kyc_docs', text: 'x' }] }).messages[0].kind, 'kyc_docs');
 const kycView = kycChatText('Atul', 'personal_loan');
 assert.ok(/Dear Atul\./.test(kycView));

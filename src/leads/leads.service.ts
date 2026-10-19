@@ -1613,11 +1613,13 @@ export class LeadsService {
 
     const from = fromStatus.trim().toLowerCase();
     const to = toStatus.trim().toLowerCase();
+    const mobile = String((data as Record<string, unknown>).mobile_number ?? existing.mobile_number ?? '');
+    const fullName = String((data as Record<string, unknown>).full_name ?? existing.full_name ?? '');
     if (to === 'in_process' && from !== 'in_process') {
-      this.whatsapp.notifyUnderReview(
-        String((data as Record<string, unknown>).mobile_number ?? existing.mobile_number ?? ''),
-        String((data as Record<string, unknown>).full_name ?? existing.full_name ?? ''),
-      );
+      this.whatsapp.notifyUnderReview(mobile, fullName);
+    }
+    if (to === 'rejected' && from !== 'rejected') {
+      this.whatsapp.notifyRejected(mobile, fullName);
     }
 
     return this.safeLead(data);

@@ -56,6 +56,7 @@ import {
   productImageFilename,
   productImageUrl,
   withCachedProductImage,
+  rejectedText,
   underReviewText,
   welcomeText,
   type ProductChoice,
@@ -81,6 +82,7 @@ export class WhatsappService implements OnModuleInit {
   private kycTemplateSent = new Set<string>();
   private kycLeadSent = new Set<string>();
   private underReviewSent = new Set<string>();
+  private rejectedSent = new Set<string>();
   /** Check Status already claimed for this phone, so a second tap does not wait or send again. */
   private statusFlight = new Set<string>();
   private inboundTail = new Map<string, Promise<void>>();
@@ -979,6 +981,45 @@ export class WhatsappService implements OnModuleInit {
       message.sent = false;
       message.sendError = sent.error || 'WhatsApp send failed';
       console.error('WhatsappService.sendUnderReviewOnce', message.sendError);
+      return;
+    }
+    message.sent = true;
+    await this.appendMessage(phone, name, message, existing?.chat.waPhoneNumberId || '');
+  }
+
+  /** One not-approved note per phone, even if the admin sets that status again. */
+  notifyRejected(mobile: string, name: string): void {
+    void this.sendRejectedOnce(mobile, name).catch((error) => {
+      console.error('WhatsappService.notifyRejected', error);
+    });
+  }
+
+  private async sendRejectedOnce(mobile: string, name: string): Promise<void> {
+    const phone = canonicalWhatsappPhone(mobile);
+    if (!/^[0-9]{8,15}$/.test(phone)) return;
+    if (this.rejectedSent.has(phone)) return;
+    this.rejectedSent.add(phone);
+
+    const existing = await this.readByPhone(phone);
+    const already = existing?.chat.messages.some((item) => item.kind === 'rejected' && !item.sendError);
+    if (already) return;
+
+    const settings = this.settings.peekEffective() ?? (await this.settings.getEffective());
+    const message: ChatMessage = {
+      id: `reject:${phone}`,
+      role: 'assistant',
+      text: rejectedText(),
+      at: new Date().toISOString(),
+      replyBy: 'template',
+      kind: 'rejected',
+      waType: 'text',
+    };
+    const sent = await this.sendWhatsapp(settings, phone, message, existing?.chat.waPhoneNumberId || '');
+    if (!sent.ok) {
+      this.rejectedSent.delete(phone);
+      message.sent = false;
+      message.sendError = sent.error || 'WhatsApp send failed';
+      console.error('WhatsappService.sendRejectedOnce', message.sendError);
       return;
     }
     message.sent = true;
