@@ -9,6 +9,7 @@ import {
   Patch,
   Post,
   Delete,
+  Res,
   UnauthorizedException,
   NotFoundException,
   BadRequestException,
@@ -16,7 +17,8 @@ import {
   UseGuards,
   Req,
 } from '@nestjs/common';
-import type { Request } from 'express';
+import type { Request, Response } from 'express';
+import { cibilDownloadDisposition } from '../storage/r2-cibil';
 import type { AdminActor } from '../common/admin-actor';
 import { isCrmAdminActor } from '../common/admin-actor';
 import {
@@ -304,6 +306,45 @@ export class LeadsController {
       if (err instanceof NotFoundException) throw err;
       throwLeadMutation(err);
     }
+  }
+
+  /** Private CIBIL file. Admin and staff can open any lead. A partner can open only their own. */
+  @Get('admin/:id/cibil-report')
+  @UseGuards(AdminPanelGuard)
+  async downloadCibilReport(
+    @Param('id') id: string,
+    @Req() req: Request & { adminActor?: AdminActor },
+    @Res() res: Response,
+  ) {
+    const actor = req.adminActor;
+    if (!actor) {
+      res.status(401).json({ success: false, message: 'Unauthorized' });
+      return;
+    }
+    if (!allowRateLimitedAction(`cibil-download:${actor.sub}`, 30, 60_000)) {
+      res.status(400).json({ success: false, message: 'Too many downloads. Try again in a minute.' });
+      return;
+    }
+
+    const opened = await this.leadsService.openCibilReport(id, actor);
+    if (!opened.ok) {
+      res.status(opened.status).json({ success: false, message: opened.message });
+      return;
+    }
+
+    res.setHeader('Content-Type', opened.mime);
+    res.setHeader('Content-Disposition', cibilDownloadDisposition(opened.filename));
+    res.setHeader('Cache-Control', 'private, no-store');
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    if (opened.size != null) res.setHeader('Content-Length', String(opened.size));
+    opened.stream.on('error', () => {
+      if (!res.headersSent) {
+        res.status(404).json({ success: false, message: 'Could not download the CIBIL report.' });
+        return;
+      }
+      res.destroy();
+    });
+    opened.stream.pipe(res);
   }
 
   /**

@@ -69,7 +69,6 @@ export type CustomerApplication = {
   cibil_band: string | null;
   has_existing_emi: boolean | null;
   total_monthly_emi: number | null;
-  cibil_report_name: string | null;
   created_at: string | null;
   updated_at: string | null;
   otp_verified: boolean;
@@ -122,7 +121,6 @@ export function sanitizeApplication(row: Record<string, unknown>): CustomerAppli
     cibil_band: asString(row.cibil_band) || null,
     has_existing_emi: asOptionalBool(row.has_existing_emi),
     total_monthly_emi: asAmount(row.total_monthly_emi),
-    cibil_report_name: asString(row.cibil_report_name) || null,
     created_at: asString(row.created_at) || null,
     updated_at: asString(row.updated_at) || null,
     otp_verified: asBool(row.otp_verified),

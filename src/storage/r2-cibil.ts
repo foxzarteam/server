@@ -1,4 +1,5 @@
-import { PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import { GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import type { Readable } from 'node:stream';
 
 type R2Settings = {
   endpoint: string;
@@ -58,4 +59,50 @@ export async function uploadCibilReport(
     console.error('uploadCibilReport', message);
     return { error: message };
   }
+}
+
+function reportFileName(key: string): string {
+  const raw = key.split('/').pop()?.trim() || 'cibil-report';
+  const cleaned = raw.replace(/[\r\n"]/g, '').slice(0, 120);
+  return cleaned || 'cibil-report';
+}
+
+/** Reads a private CIBIL object. The key must be the path stored on the lead. */
+export async function openCibilObject(key: string): Promise<
+  { stream: Readable; mime: string; filename: string; size: number | null } | { error: string }
+> {
+  const safeKey = key.trim();
+  if (!/^cibil\/[0-9a-f-]{36}\/[^/]+$/i.test(safeKey) || safeKey.includes('..')) {
+    return { error: 'Invalid report.' };
+  }
+  const settings = r2Settings();
+  if (!settings) return { error: 'CIBIL storage is not configured.' };
+  try {
+    const out = await r2Client(settings).send(
+      new GetObjectCommand({
+        Bucket: settings.bucket,
+        Key: safeKey,
+      }),
+    );
+    const body = out.Body;
+    if (!body || typeof (body as Readable).pipe !== 'function') {
+      return { error: 'Report file is missing.' };
+    }
+    const filename = reportFileName(safeKey);
+    return {
+      stream: body as Readable,
+      mime: out.ContentType?.trim() || 'application/octet-stream',
+      filename,
+      size: typeof out.ContentLength === 'number' ? out.ContentLength : null,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : 'download failed';
+    console.error('openCibilObject', message);
+    return { error: message };
+  }
+}
+
+export function cibilDownloadDisposition(filename: string): string {
+  const safe = filename.replace(/[\r\n"]/g, '').slice(0, 120) || 'cibil-report';
+  return `attachment; filename="${safe}"; filename*=UTF-8''${encodeURIComponent(safe)}`;
 }

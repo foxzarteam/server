@@ -64,7 +64,8 @@ import {
   storedEmploymentType,
   type CibilReportFile,
 } from './personal-loan-employment';
-import { uploadCibilReport } from '../storage/r2-cibil';
+import { openCibilObject, uploadCibilReport } from '../storage/r2-cibil';
+import type { Readable } from 'node:stream';
 import { LEAD_DRAFT_PAN } from './lead-draft';
 import {
   blockingApplicationMessage,
@@ -631,6 +632,37 @@ export class LeadsService {
       return null;
     }
     return (data as Record<string, unknown>) ?? null;
+  }
+
+  /** Private CIBIL file for admin, staff, or the partner who owns the lead. */
+  async openCibilReport(
+    leadId: string,
+    actor: { sub: string; role: string },
+  ): Promise<
+    | { ok: true; stream: Readable; mime: string; filename: string; size: number | null }
+    | { ok: false; status: 403 | 404; message: string }
+  > {
+    const lead = await this.getById(leadId);
+    if (!lead) return { ok: false, status: 404, message: 'CIBIL report not found.' };
+
+    const role = String(actor.role ?? '').trim().toLowerCase();
+    if (role === 'agent') {
+      const owner = String(lead.agent_id ?? '').trim();
+      if (!owner || owner !== actor.sub.trim()) {
+        return { ok: false, status: 404, message: 'CIBIL report not found.' };
+      }
+    } else if (role !== 'admin' && role !== 'staff') {
+      return { ok: false, status: 403, message: 'Unauthorized' };
+    }
+
+    const key = String(lead.cibil_report_name ?? '').trim();
+    if (!key) return { ok: false, status: 404, message: 'No CIBIL report on this lead.' };
+
+    const file = await openCibilObject(key);
+    if ('error' in file) {
+      return { ok: false, status: 404, message: 'Could not download the CIBIL report.' };
+    }
+    return { ok: true, stream: file.stream, mime: file.mime, filename: file.filename, size: file.size };
   }
 
   /** All active leads for a mobile (newest first). Used by customer track status. */
