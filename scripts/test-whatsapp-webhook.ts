@@ -263,7 +263,7 @@ assert.ok(/Aadhaar Card/.test(docs));
 assert.ok(/Bank Statement/.test(docs));
 assert.ok(/Salary Slips/.test(docs));
 assert.ok(/Passport-Size Photo/.test(docs));
-assert.ok(/Your CIBIL Score/.test(docs));
+assert.ok(!/CIBIL/.test(docs));
 assert.ok(!/ITR/.test(docs));
 assert.ok(!/Thank you/.test(docs));
 const businessDocs = kycDocsRequestText('self_employed');
@@ -271,7 +271,7 @@ assert.ok(/Last 12 Months/.test(businessDocs));
 assert.ok(/ITR with Computation/.test(businessDocs));
 assert.ok(/GST \/ Udyam \/ Shop Licence/.test(businessDocs));
 assert.ok(/Passport-Size Photo/.test(businessDocs));
-assert.ok(/Your CIBIL Score/.test(businessDocs));
+assert.ok(!/CIBIL/.test(businessDocs));
 assert.ok(!/Salary Slips/.test(businessDocs));
 assert.strictEqual(kycDocsRequestText('salaried'), docs);
 

@@ -57,6 +57,7 @@ async function bootstrap() {
     methods: 'GET,HEAD,PUT,PATCH,POST,DELETE,OPTIONS',
     allowedHeaders: CORS_ALLOWED_HEADERS,
   });
+  app.useBodyParser('json', { limit: '300mb' });
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,

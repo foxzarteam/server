@@ -5,7 +5,7 @@ import { SupabaseClient } from '@supabase/supabase-js';
 import { TABLE_LEADS, TABLE_WP_ENQUIRIES } from '../common/constants';
 import { LEAD_DRAFT_FULL_NAME } from '../leads/lead-draft';
 import { isDraftLead } from '../leads/lead-present';
-import { storedEmploymentType } from '../leads/personal-loan-employment';
+import { kycEmploymentBucket } from '../leads/personal-loan-employment';
 import { normalizeStoredCategory } from '../leads/lead-present';
 import { SUPABASE_CLIENT } from '../config/supabase';
 import { isGreeting, pickBotReply } from './whatsapp-bot-rules';
@@ -943,7 +943,7 @@ export class WhatsappService implements OnModuleInit {
     for (const row of data ?? []) {
       const record = row as Record<string, unknown>;
       if (isDraftLead(record)) continue;
-      return storedEmploymentType(String(record.employment_type ?? ''));
+      return kycEmploymentBucket(String(record.employment_type ?? ''));
     }
     return null;
   }

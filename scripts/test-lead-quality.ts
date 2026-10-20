@@ -9,7 +9,7 @@ import {
   isPrivateOrLocalIp,
 } from '../src/common/ip-geo';
 import { mapLeadWriteError } from '../src/leads/lead-write-errors';
-import { leadFullNameError, personalLoanEmploymentError } from '../src/leads/personal-loan-employment';
+import { leadFullNameError, kycEmploymentBucket, loanNotEligibleMessage, loanProfileError, personalLoanEmploymentError } from '../src/leads/personal-loan-employment';
 import { isStoredLoanCategory, personalLoanAmountError } from '../src/wallet/loan-amount';
 import { sanitizePublicLead } from '../src/security/pan-crypto';
 import { slugToLeadCategory, isInsTypeSlug } from '../src/catalog/catalog';
@@ -76,9 +76,44 @@ assert.strictEqual(
   null,
 );
 assert.strictEqual(
-  personalLoanEmploymentError({ netMonthlyIncome: 50000, employmentType: 'self_employed' }),
+  personalLoanEmploymentError({ netMonthlyIncome: 50000, employmentType: 'salaried_bank' }),
   null,
 );
+assert.strictEqual(
+  personalLoanEmploymentError({ netMonthlyIncome: 50000, employmentType: 'salaried_cash' }),
+  null,
+);
+assert.ok(personalLoanEmploymentError({ netMonthlyIncome: 17999, employmentType: 'salaried_bank' })?.includes('18,000'));
+assert.strictEqual(
+  personalLoanEmploymentError({ netMonthlyIncome: 18000, employmentType: 'salaried_bank' }),
+  null,
+);
+assert.strictEqual(
+  loanNotEligibleMessage({ netMonthlyIncome: 50000, cibilBand: 'below_680', hasExistingEmi: false, totalMonthlyEmi: 0 }),
+  'Sorry, you are not eligible for this loan. A CIBIL score below 680 does not meet the current criteria.',
+);
+assert.strictEqual(
+  loanNotEligibleMessage({ netMonthlyIncome: 50000, cibilBand: 'above_680', hasExistingEmi: false, totalMonthlyEmi: 0 }),
+  null,
+);
+assert.strictEqual(
+  loanNotEligibleMessage({ netMonthlyIncome: 17000, cibilBand: 'above_680', hasExistingEmi: true, totalMonthlyEmi: 1000 }),
+  null,
+);
+assert.strictEqual(
+  loanNotEligibleMessage({ netMonthlyIncome: 40000, cibilBand: 'above_680', hasExistingEmi: true, totalMonthlyEmi: 20000 }),
+  'Sorry, you are not eligible for this loan. Your existing EMI is half or more of your net monthly income.',
+);
+assert.strictEqual(
+  loanNotEligibleMessage({ netMonthlyIncome: 40000, cibilBand: 'above_680', hasExistingEmi: true, totalMonthlyEmi: 19999 }),
+  null,
+);
+assert.strictEqual(loanProfileError({ cibilBand: 'above_680', hasExistingEmi: false, totalMonthlyEmi: 0 }), null);
+assert.strictEqual(loanProfileError({ cibilBand: 'unknown', hasExistingEmi: true, totalMonthlyEmi: 4500 }), null);
+assert.ok(loanProfileError({ cibilBand: 'above_680', hasExistingEmi: true, totalMonthlyEmi: 0 }));
+assert.ok(loanProfileError({ cibilBand: 'nope', hasExistingEmi: false, totalMonthlyEmi: 0 }));
+assert.strictEqual(kycEmploymentBucket('salaried_cash'), 'salaried');
+assert.strictEqual(kycEmploymentBucket('self_employed'), 'self_employed');
 
 assert.strictEqual(leadFullNameError('Rahul Sharma'), null);
 assert.ok(leadFullNameError('A')?.includes('required'));

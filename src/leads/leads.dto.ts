@@ -15,7 +15,12 @@ import {
 } from 'class-validator';
 import { FALLBACK_INSURANCE_TYPES, INS_TYPE_SLUG_PATTERN } from '../catalog/catalog';
 import { isMaskedPan, PAN_FORMAT_REGEX } from '../security/pan-crypto';
-import { LEAD_FULL_NAME_REGEX } from './personal-loan-employment';
+import {
+  CIBIL_BANDS,
+  LEAD_FULL_NAME_REGEX,
+  MIN_NET_MONTHLY_INCOME,
+  STORED_EMPLOYMENT_TYPES,
+} from './personal-loan-employment';
 import { isStoredLoanCategory } from '../wallet/loan-amount';
 
 /** Matches active service slugs stored as lead category (e.g. personal-loan → personal_loan). */
@@ -104,17 +109,50 @@ export class CreateLeadDto {
   @Matches(INS_TYPE_SLUG_PATTERN, { message: 'Invalid insurance type' })
   insType?: string;
 
-  /** Required on a loan: salaried or self_employed. */
+  /** Required on a loan. Old rows may still be `salaried`. */
   @ValidateIf((o) => isStoredLoanCategory(o.category))
-  @IsIn(['salaried', 'self_employed'], {
+  @IsIn([...STORED_EMPLOYMENT_TYPES], {
     message: 'Select salaried or self employee / business.',
   })
   employmentType?: string | null;
 
   @ValidateIf((o) => isStoredLoanCategory(o.category))
   @IsNumber({}, { message: 'Net monthly income is required' })
-  @Min(1, { message: 'Net monthly income must be at least 1' })
+  @Min(MIN_NET_MONTHLY_INCOME, { message: 'Net monthly income must be at least ₹18,000' })
   netMonthlyIncome?: number;
+
+  @ValidateIf((o) => isStoredLoanCategory(o.category))
+  @IsIn([...CIBIL_BANDS], { message: 'Select your CIBIL score.' })
+  cibilBand?: string;
+
+  @ValidateIf((o) => isStoredLoanCategory(o.category))
+  @Transform(({ value }) => {
+    if (value === true || value === 'true') return true;
+    if (value === false || value === 'false') return false;
+    return value;
+  })
+  @IsBoolean({ message: 'Tell us if a loan EMI is already running.' })
+  hasExistingEmi?: boolean;
+
+  @ValidateIf((o) => isStoredLoanCategory(o.category))
+  @IsNumber({}, { message: 'Enter the total monthly EMI you pay.' })
+  @Min(0, { message: 'Total monthly EMI cannot be negative.' })
+  totalMonthlyEmi?: number;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  cibilReportName?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(40)
+  cibilReportMime?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(280_000_000)
+  cibilReportData?: string;
 
   @IsOptional()
   @IsString()
@@ -224,7 +262,7 @@ export class UpdateLeadDto {
 
   @IsOptional()
   @ValidateIf((o) => o.employmentType != null && o.employmentType !== '')
-  @IsIn(['salaried', 'self_employed'], {
+  @IsIn([...STORED_EMPLOYMENT_TYPES], {
     message: 'Select salaried or self employee / business.',
   })
   employmentType?: string | null;
@@ -232,8 +270,33 @@ export class UpdateLeadDto {
   @IsOptional()
   @IsNumber()
   @ValidateIf((o) => o.netMonthlyIncome != null)
-  @Min(0, { message: 'Net monthly income must be positive' })
+  @Min(MIN_NET_MONTHLY_INCOME, { message: 'Net monthly income must be at least ₹18,000' })
   netMonthlyIncome?: number | null;
+
+  @IsOptional()
+  @ValidateIf((o) => o.cibilBand != null && o.cibilBand !== '')
+  @IsIn([...CIBIL_BANDS], { message: 'Select your CIBIL score.' })
+  cibilBand?: string | null;
+
+  @IsOptional()
+  @Transform(({ value }) => {
+    if (value === true || value === 'true') return true;
+    if (value === false || value === 'false') return false;
+    return value;
+  })
+  @IsBoolean()
+  hasExistingEmi?: boolean | null;
+
+  @IsOptional()
+  @IsNumber()
+  @ValidateIf((o) => o.totalMonthlyEmi != null)
+  @Min(0)
+  totalMonthlyEmi?: number | null;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  cibilReportName?: string | null;
 
   @IsOptional()
   @IsString()
@@ -315,16 +378,16 @@ export class AdminCreateLeadDto {
   @Matches(INS_TYPE_SLUG_PATTERN, { message: 'Invalid insurance type' })
   insType?: string;
 
-  /** Optional. salaried or self_employed. Null clears it. */
+  /** Optional. salaried, salaried_bank, salaried_cash, or self_employed. */
   @IsOptional()
-  @IsIn(['salaried', 'self_employed'], {
+  @IsIn([...STORED_EMPLOYMENT_TYPES], {
     message: 'Select salaried or self employee / business.',
   })
   employmentType?: string | null;
 
   @ValidateIf((o) => o.category === 'personal_loan')
   @IsNumber({}, { message: 'Net monthly income is required for personal loan' })
-  @Min(1, { message: 'Net monthly income must be at least 1' })
+  @Min(MIN_NET_MONTHLY_INCOME, { message: 'Net monthly income must be at least ₹18,000' })
   netMonthlyIncome?: number;
 
   /** Ignored on admin/partner create. Those leads are stored with consent yes. */

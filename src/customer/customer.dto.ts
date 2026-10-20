@@ -4,7 +4,6 @@ import {
   Length,
   Matches,
   MinLength,
-  Min,
 } from 'class-validator';
 
 export class CheckMobileDto {
@@ -67,6 +66,10 @@ export type CustomerApplication = {
   ins_type: string | null;
   employment_type: string | null;
   net_monthly_income: number | null;
+  cibil_band: string | null;
+  has_existing_emi: boolean | null;
+  total_monthly_emi: number | null;
+  cibil_report_name: string | null;
   created_at: string | null;
   updated_at: string | null;
   otp_verified: boolean;
@@ -90,6 +93,12 @@ export function asBool(value: unknown): boolean {
   return value === true || value === 1 || value === 'true';
 }
 
+function asOptionalBool(value: unknown): boolean | null {
+  if (value === true || value === 1 || value === 'true') return true;
+  if (value === false || value === 0 || value === 'false') return false;
+  return null;
+}
+
 export function applicationNumberFromId(id: string): string {
   const clean = id.replace(/[^a-zA-Z0-9]/g, '');
   const short = clean.slice(-8).toUpperCase() || clean.toUpperCase() || '--------';
@@ -110,6 +119,10 @@ export function sanitizeApplication(row: Record<string, unknown>): CustomerAppli
     ins_type: asString(row.ins_type) || null,
     employment_type: asString(row.employment_type) || null,
     net_monthly_income: asAmount(row.net_monthly_income),
+    cibil_band: asString(row.cibil_band) || null,
+    has_existing_emi: asOptionalBool(row.has_existing_emi),
+    total_monthly_emi: asAmount(row.total_monthly_emi),
+    cibil_report_name: asString(row.cibil_report_name) || null,
     created_at: asString(row.created_at) || null,
     updated_at: asString(row.updated_at) || null,
     otp_verified: asBool(row.otp_verified),

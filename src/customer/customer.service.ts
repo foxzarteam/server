@@ -9,7 +9,6 @@ import {
   CustomerApplication,
   CustomerProfile,
   sanitizeApplication,
-  UpdateProfileDto,
 } from './customer.dto';
 
 @Injectable()

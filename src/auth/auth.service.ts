@@ -4,7 +4,6 @@ import * as bcrypt from 'bcryptjs';
 import { SUPABASE_CLIENT } from '../config/supabase';
 import { TABLE_AUTH } from '../common/constants';
 import {
-  AdminLoginDto,
   AUTH_FAIL,
   AuthRow,
   AuthUserPublic,

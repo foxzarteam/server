@@ -175,7 +175,7 @@ export function rejectedText(): string {
   return [
     'Thank you for applying with Apni Zaroorat. 🙏',
     '',
-    'Sorry, your loan application could not be approved as it did not meet eligibility criteria. Please message us if you need any help.',
+    'Sorry, your loan application could not be approved as it did not meet eligibility criteria.',
   ].join('\n');
 }
 
@@ -199,7 +199,6 @@ export function kycDocsRequestText(employment?: string | null): string {
       '4️⃣ Last 3 Years’ ITR with Computation 📄',
       '5️⃣ Any Available Business Proof (GST / Udyam / Shop Licence) 🏪',
       '6️⃣ Passport-Size Photo 📸',
-      '7️⃣ Your CIBIL Score 📊',
     ].join('\n');
   }
   return [
@@ -210,6 +209,5 @@ export function kycDocsRequestText(employment?: string | null): string {
     '3️⃣ Last 6 Months’ Bank Statement 🏦',
     '4️⃣ Last 3 Months’ Salary Slips 📄',
     '5️⃣ Passport-Size Photo 📸',
-    '6️⃣ Your CIBIL Score 📊',
   ].join('\n');
 }

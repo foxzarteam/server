@@ -42,7 +42,6 @@ import {
   requiresAdminCommissionGate,
   WalletSyncError,
 } from '../wallet/wallet-sync';
-import { allowRateLimitedAction } from '../security/rate-limit';
 import {
   AdminCreateLeadDto,
   CreateLeadDto,
@@ -57,15 +56,20 @@ import {
 } from './mobile-pan-limit';
 import {
   leadFullNameError,
-  personalLoanEmploymentError as checkPersonalLoanEmployment,
+  loanNotEligibleMessage,
+  loanProfileError,
+  personalLoanEmploymentError,
+  readCibilReport,
+  storedCibilBand,
   storedEmploymentType,
+  type CibilReportFile,
 } from './personal-loan-employment';
+import { uploadCibilReport } from '../storage/r2-cibil';
 import { LEAD_DRAFT_PAN } from './lead-draft';
 import {
   blockingApplicationMessage,
   categoryLabel,
   categoryLookupKeys,
-  insTypeLabel,
   insTypeLookupKeys,
   isDraftLead,
   normalizeStoredCategory,
@@ -197,8 +201,8 @@ export class LeadsService {
         return { data: (data as Record<string, unknown>) ?? null };
       }
       const col = this.missingColumnFromError(error.message);
-      if (col === 'consent_accepted') {
-        console.error(`${logLabel}: leads.consent_accepted column is missing`);
+      if (this.keepMissingColumn(col)) {
+        console.error(`${logLabel}: leads.${col} column is missing`);
         return { data: null, errorMessage: error.message };
       }
       if (col && Object.prototype.hasOwnProperty.call(body, col)) {
@@ -231,8 +235,8 @@ export class LeadsService {
         return { data: (data as Record<string, unknown>) ?? null };
       }
       const col = this.missingColumnFromError(error.message);
-      if (col === 'consent_accepted') {
-        console.error(`${logLabel}: leads.consent_accepted column is missing`);
+      if (this.keepMissingColumn(col)) {
+        console.error(`${logLabel}: leads.${col} column is missing`);
         return { data: null, errorMessage: error.message };
       }
       if (col && Object.prototype.hasOwnProperty.call(body, col)) {
@@ -248,11 +252,56 @@ export class LeadsService {
     return { data: null, errorMessage: 'Update failed after schema retries' };
   }
 
-  private personalLoanEmploymentError(dto: {
-    employmentType?: string | null;
-    netMonthlyIncome?: number | null;
-  }): string | null {
-    return checkPersonalLoanEmployment(dto);
+  private keepMissingColumn(col: string | null): boolean {
+    return (
+      col === 'consent_accepted' ||
+      col === 'cibil_band' ||
+      col === 'has_existing_emi' ||
+      col === 'total_monthly_emi' ||
+      col === 'cibil_report_name'
+    );
+  }
+
+  private loanProfileColumns(
+    dto: {
+      cibilBand?: string | null;
+      hasExistingEmi?: boolean | null;
+      totalMonthlyEmi?: number | null;
+    },
+    reportName: string | null,
+  ): Record<string, unknown> {
+    const noEmi = dto.hasExistingEmi === false;
+    return {
+      cibil_band: storedCibilBand(dto.cibilBand),
+      has_existing_emi: dto.hasExistingEmi === true,
+      total_monthly_emi: noEmi ? 0 : Math.round(Number(dto.totalMonthlyEmi)),
+      cibil_report_name: reportName,
+    };
+  }
+
+  /** Optional CIBIL file goes to private R2. The lead row stores only the object path. */
+  private async attachCibilReport(
+    lead: Record<string, unknown>,
+    file: CibilReportFile | null,
+    deleteLeadOnFailure: boolean,
+  ): Promise<string | null> {
+    if (!file) return null;
+    const leadId = String(lead.id ?? '').trim();
+    if (!leadId) {
+      return 'Could not save the CIBIL report. Try a PDF or image, or submit without the file.';
+    }
+    const uploaded = await uploadCibilReport(leadId, file);
+    if ('key' in uploaded) {
+      const { error } = await this.leads.update({ cibil_report_name: uploaded.key }).eq('id', leadId);
+      if (!error) {
+        lead.cibil_report_name = uploaded.key;
+        return null;
+      }
+    }
+    if (deleteLeadOnFailure) {
+      await this.leads.delete().eq('id', leadId);
+    }
+    return 'Could not save the CIBIL report. Try a PDF or image, or submit without the file.';
   }
 
   private async personalLoanAmountBounds(): Promise<{ min: number; max: number } | undefined> {
@@ -765,7 +814,7 @@ export class LeadsService {
     const category = normalizeStoredCategory(dto.category);
     let ins = normalizeStoredInsType(category, dto.insType);
     if (isStoredLoanCategory(category)) {
-      const empErr = this.personalLoanEmploymentError(dto);
+      const empErr = personalLoanEmploymentError(dto);
       if (empErr) return { ok: false, message: empErr };
     }
     if (category === 'insurance' && !ins) {
@@ -830,12 +879,21 @@ export class LeadsService {
     Object.assign(payload, this.ipFields(meta?.clientIp));
     const publicLoan = await this.publicLoanAmounts(category, dto);
     if (publicLoan && !publicLoan.ok) return { ok: false, message: publicLoan.message };
+    let cibilFile: CibilReportFile | null = null;
     if (publicLoan?.ok) {
+      const profileErr = loanProfileError(dto);
+      if (profileErr) return { ok: false, message: profileErr };
+      const notEligible = loanNotEligibleMessage(dto);
+      if (notEligible) return { ok: false, message: notEligible };
+      const report = readCibilReport(dto);
+      if (!report.ok) return { ok: false, message: report.message };
+      cibilFile = report.file;
       payload.required_amount = publicLoan.amounts.requiredAmount;
       payload.loan_amt = publicLoan.amounts.loanAmt;
       payload.net_monthly_income = dto.netMonthlyIncome;
       const employment = storedEmploymentType(dto.employmentType);
       if (employment) payload.employment_type = employment;
+      Object.assign(payload, this.loanProfileColumns(dto, null));
     }
     if (category === 'insurance') {
       payload.required_amount = null;
@@ -860,6 +918,10 @@ export class LeadsService {
           insType: category === 'insurance' ? ins : null,
           netMonthlyIncome: loanAmounts ? dto.netMonthlyIncome ?? null : null,
           employmentType: loanAmounts ? dto.employmentType : undefined,
+          cibilBand: loanAmounts ? dto.cibilBand : undefined,
+          hasExistingEmi: loanAmounts ? dto.hasExistingEmi : undefined,
+          totalMonthlyEmi: loanAmounts ? dto.totalMonthlyEmi : undefined,
+          cibilReportName: loanAmounts ? null : undefined,
           clientIp: meta?.clientIp ?? undefined,
           agentId: !byMobile.agent_id && agentId ? agentId : undefined,
           consentAccepted: true,
@@ -871,6 +933,8 @@ export class LeadsService {
           };
         }
         this.scheduleIpLocationFill(String(byMobile.id), meta?.clientIp);
+        const fileErr = await this.attachCibilReport(updated, cibilFile, false);
+        if (fileErr) return { ok: false, message: fileErr };
         void this.panAudit.record({
           leadId: String(byMobile.id),
           action: 'update',
@@ -893,6 +957,8 @@ export class LeadsService {
 
     const lead = data;
     if (lead.id) {
+      const fileErr = await this.attachCibilReport(lead, cibilFile, true);
+      if (fileErr) return { ok: false, message: fileErr };
       this.scheduleIpLocationFill(String(lead.id), meta?.clientIp);
       void this.panAudit.record({
         leadId: String(lead.id),
@@ -921,7 +987,7 @@ export class LeadsService {
 
     const category = normalizeStoredCategory(dto.category || 'personal_loan');
     if (category === 'personal_loan') {
-      const empErr = this.personalLoanEmploymentError(dto);
+      const empErr = personalLoanEmploymentError(dto);
       if (empErr) {
         return {
           ok: false,
@@ -975,7 +1041,7 @@ export class LeadsService {
 
     const category = normalizeStoredCategory(dto.category || 'personal_loan');
     if (category === 'personal_loan') {
-      const empErr = this.personalLoanEmploymentError(dto);
+      const empErr = personalLoanEmploymentError(dto);
       if (empErr) {
         throw new LeadRuleError(empErr);
       }
@@ -1406,6 +1472,15 @@ export class LeadsService {
     }
     if (dto.employmentType !== undefined) {
       payload.employment_type = storedEmploymentType(dto.employmentType);
+    }
+    if (dto.cibilBand !== undefined) payload.cibil_band = storedCibilBand(dto.cibilBand);
+    if (dto.hasExistingEmi !== undefined) payload.has_existing_emi = dto.hasExistingEmi === true;
+    if (dto.totalMonthlyEmi !== undefined || dto.hasExistingEmi === false) {
+      payload.total_monthly_emi =
+        dto.hasExistingEmi === false ? 0 : dto.totalMonthlyEmi ?? null;
+    }
+    if (dto.cibilReportName !== undefined) {
+      payload.cibil_report_name = dto.cibilReportName?.trim() || null;
     }
     const hasPartner = Boolean(String(payload.agent_id ?? existing.agent_id ?? '').trim());
     const approved = isApprovedLeadStatus(payload.status ?? existing.status);
