@@ -305,11 +305,6 @@ export class LeadsService {
     return 'Could not save the CIBIL report. Try a PDF or image, or submit without the file.';
   }
 
-  private async personalLoanAmountBounds(): Promise<{ min: number; max: number } | undefined> {
-    const bounds = await this.servicesService.amountBoundsBySlug('personal-loan');
-    return bounds ?? undefined;
-  }
-
   /** Public apply: amount must sit inside that product's limit_start / limit_end. */
   private async publicLoanAmounts(
     category: string,
@@ -916,7 +911,7 @@ export class LeadsService {
       const profileErr = loanProfileError(dto);
       if (profileErr) return { ok: false, message: profileErr };
       const notEligible = loanNotEligibleMessage(dto);
-      if (notEligible) return { ok: false, message: notEligible };
+      if (notEligible) return { ok: false, message: notEligible, code: 'LOAN_NOT_ELIGIBLE' };
       const report = readCibilReport(dto);
       if (!report.ok) return { ok: false, message: report.message };
       cibilFile = report.file;
@@ -1002,6 +997,47 @@ export class LeadsService {
     return { ok: true, lead: this.safeLead(lead)! };
   }
 
+  /** Same loan profile and eligibility as the public form. No OTP. */
+  private readPortalLoan(dto: {
+    category?: string | null;
+    netMonthlyIncome?: number | null;
+    employmentType?: string | null;
+    cibilBand?: string | null;
+    hasExistingEmi?: boolean | null;
+    totalMonthlyEmi?: number | null;
+    cibilReportName?: string | null;
+    cibilReportMime?: string | null;
+    cibilReportData?: string | null;
+  }):
+    | { ok: true; file: CibilReportFile | null }
+    | { ok: false; message: string; field?: string; code?: string } {
+    if (!isStoredLoanCategory(normalizeStoredCategory(dto.category))) {
+      return { ok: true, file: null };
+    }
+    const empErr = personalLoanEmploymentError(dto);
+    if (empErr) {
+      return {
+        ok: false,
+        field: /income/i.test(empErr) ? 'netMonthlyIncome' : 'employmentType',
+        message: empErr,
+      };
+    }
+    const profileErr = loanProfileError(dto);
+    if (profileErr) {
+      const field = /cibil score/i.test(profileErr)
+        ? 'cibilBand'
+        : /already running/i.test(profileErr)
+          ? 'hasExistingEmi'
+          : 'totalMonthlyEmi';
+      return { ok: false, field, message: profileErr };
+    }
+    const notEligible = loanNotEligibleMessage(dto);
+    if (notEligible) return { ok: false, message: notEligible, code: 'LOAN_NOT_ELIGIBLE' };
+    const report = readCibilReport(dto);
+    if (!report.ok) return { ok: false, message: report.message };
+    return { ok: true, file: report.file };
+  }
+
   /**
    * Same PAN / mobile / product rules as create, without inserting a lead.
    */
@@ -1018,21 +1054,18 @@ export class LeadsService {
     if (nameErr) return { ok: false, message: nameErr };
 
     const category = normalizeStoredCategory(dto.category || 'personal_loan');
-    if (category === 'personal_loan') {
-      const empErr = personalLoanEmploymentError(dto);
-      if (empErr) {
-        return {
-          ok: false,
-          field: /income/i.test(empErr) ? 'netMonthlyIncome' : 'employmentType',
-          message: empErr,
-        };
+    if (isStoredLoanCategory(category)) {
+      const profile = this.readPortalLoan(dto);
+      if (!profile.ok) {
+        return { ok: false, field: profile.field, message: profile.message, code: profile.code };
       }
       const amounts = resolvePersonalLoanAmounts({
         requiredAmount: dto.requiredAmount,
         loanAmt: dto.loanAmt,
       });
-      const amtErr = personalLoanAmountError(amounts.requiredAmount, await this.personalLoanAmountBounds());
-      if (amtErr) return { ok: false, message: amtErr };
+      const bounds = await this.servicesService.amountBoundsBySlug(category.replace(/_/g, '-'));
+      const amtErr = personalLoanAmountError(amounts.requiredAmount, bounds ?? undefined);
+      if (amtErr) return { ok: false, field: 'requiredAmount', message: amtErr };
     }
     if (category === 'insurance' && !normalizeStoredInsType(category, dto.insType)) {
       return { ok: false, message: 'Please select insurance type.' };
@@ -1072,11 +1105,9 @@ export class LeadsService {
     }
 
     const category = normalizeStoredCategory(dto.category || 'personal_loan');
-    if (category === 'personal_loan') {
-      const empErr = personalLoanEmploymentError(dto);
-      if (empErr) {
-        throw new LeadRuleError(empErr);
-      }
+    const portalLoan = this.readPortalLoan(dto);
+    if (!portalLoan.ok) {
+      throw new LeadRuleError(portalLoan.message, portalLoan.code);
     }
 
     const nameErr = leadFullNameError(dto.fullName);
@@ -1128,18 +1159,20 @@ export class LeadsService {
     }
     Object.assign(payload, this.ipFields(meta?.clientIp));
 
-    if (category === 'personal_loan') {
+    if (isStoredLoanCategory(category)) {
       const amounts = resolvePersonalLoanAmounts({
         requiredAmount: dto.requiredAmount,
         loanAmt: dto.loanAmt,
       });
-      const amtErr = personalLoanAmountError(amounts.requiredAmount, await this.personalLoanAmountBounds());
+      const bounds = await this.servicesService.amountBoundsBySlug(category.replace(/_/g, '-'));
+      const amtErr = personalLoanAmountError(amounts.requiredAmount, bounds ?? undefined);
       if (amtErr) throw new LeadRuleError(amtErr);
       payload.required_amount = amounts.requiredAmount;
       payload.loan_amt = amounts.loanAmt;
       payload.net_monthly_income = dto.netMonthlyIncome;
       const employment = storedEmploymentType(dto.employmentType);
       if (employment) payload.employment_type = employment;
+      Object.assign(payload, this.loanProfileColumns(dto, null));
     }
     if (category === 'insurance' && (gates.insType || dto.insType)) {
       payload.ins_type = gates.insType || dto.insType;
@@ -1155,6 +1188,10 @@ export class LeadsService {
     }
 
     this.scheduleIpLocationFill(data.id != null ? String(data.id) : null, meta?.clientIp);
+    if (portalLoan.file) {
+      const fileErr = await this.attachCibilReport(data, portalLoan.file, true);
+      if (fileErr) throw new LeadRuleError(fileErr);
+    }
 
     if (data.id) {
       await this.panAudit.record({
@@ -1218,6 +1255,12 @@ export class LeadsService {
           insType: dto.insType,
           netMonthlyIncome: dto.netMonthlyIncome,
           employmentType: dto.employmentType,
+          cibilBand: dto.cibilBand,
+          hasExistingEmi: dto.hasExistingEmi,
+          totalMonthlyEmi: dto.totalMonthlyEmi,
+          cibilReportName: dto.cibilReportName,
+          cibilReportMime: dto.cibilReportMime,
+          cibilReportData: dto.cibilReportData,
           consentAccepted: true,
         },
         { agentId: uid },
@@ -1226,7 +1269,12 @@ export class LeadsService {
       if (err instanceof LeadRuleError) {
         return {
           ok: false,
-          field: err.code === CODE_MOBILE_PAN_LIMIT_REACHED || err.code === CODE_PHONE_PRODUCT_BLOCKED ? 'mobileNumber' : 'pan',
+          field:
+            err.code === 'LOAN_NOT_ELIGIBLE'
+              ? undefined
+              : err.code === CODE_MOBILE_PAN_LIMIT_REACHED || err.code === CODE_PHONE_PRODUCT_BLOCKED
+                ? 'mobileNumber'
+                : 'pan',
           message: err.message,
           code: err.code,
         };

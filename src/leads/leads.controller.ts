@@ -219,6 +219,12 @@ export class LeadsController {
           insType: dto.insType,
           netMonthlyIncome: dto.netMonthlyIncome,
           employmentType: dto.employmentType,
+          cibilBand: dto.cibilBand,
+          hasExistingEmi: dto.hasExistingEmi,
+          totalMonthlyEmi: dto.totalMonthlyEmi,
+          cibilReportName: dto.cibilReportName,
+          cibilReportMime: dto.cibilReportMime,
+          cibilReportData: dto.cibilReportData,
           consentAccepted: true,
         },
         { agentId: isAgent && actor?.sub ? actor.sub : undefined },
@@ -228,9 +234,11 @@ export class LeadsController {
         return {
           success: false,
           field:
-            err.code === CODE_MOBILE_PAN_LIMIT_REACHED || err.code === CODE_PHONE_PRODUCT_BLOCKED
-              ? 'mobileNumber'
-              : 'pan',
+            err.code === 'LOAN_NOT_ELIGIBLE'
+              ? undefined
+              : err.code === CODE_MOBILE_PAN_LIMIT_REACHED || err.code === CODE_PHONE_PRODUCT_BLOCKED
+                ? 'mobileNumber'
+                : 'pan',
           message: err.message,
           code: err.code,
         };

@@ -378,17 +378,49 @@ export class AdminCreateLeadDto {
   @Matches(INS_TYPE_SLUG_PATTERN, { message: 'Invalid insurance type' })
   insType?: string;
 
-  /** Optional. salaried, salaried_bank, salaried_cash, or self_employed. */
-  @IsOptional()
+  @ValidateIf((o) => isStoredLoanCategory(o.category))
   @IsIn([...STORED_EMPLOYMENT_TYPES], {
     message: 'Select salaried or self employee / business.',
   })
   employmentType?: string | null;
 
-  @ValidateIf((o) => o.category === 'personal_loan')
-  @IsNumber({}, { message: 'Net monthly income is required for personal loan' })
+  @ValidateIf((o) => isStoredLoanCategory(o.category))
+  @IsNumber({}, { message: 'Net monthly income is required' })
   @Min(MIN_NET_MONTHLY_INCOME, { message: 'Net monthly income must be at least ₹18,000' })
   netMonthlyIncome?: number;
+
+  @ValidateIf((o) => isStoredLoanCategory(o.category))
+  @IsIn([...CIBIL_BANDS], { message: 'Select your CIBIL score.' })
+  cibilBand?: string;
+
+  @ValidateIf((o) => isStoredLoanCategory(o.category))
+  @Transform(({ value }) => {
+    if (value === true || value === 'true') return true;
+    if (value === false || value === 'false') return false;
+    return value;
+  })
+  @IsBoolean({ message: 'Tell us if a loan EMI is already running.' })
+  hasExistingEmi?: boolean;
+
+  @ValidateIf((o) => isStoredLoanCategory(o.category))
+  @IsNumber({}, { message: 'Enter the total monthly EMI you pay.' })
+  @Min(0, { message: 'Total monthly EMI cannot be negative.' })
+  totalMonthlyEmi?: number;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(120)
+  cibilReportName?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(40)
+  cibilReportMime?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(280_000_000)
+  cibilReportData?: string;
 
   /** Ignored on admin/partner create. Those leads are stored with consent yes. */
   @IsOptional()
