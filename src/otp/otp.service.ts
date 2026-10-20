@@ -173,19 +173,26 @@ export class OtpService {
     return { success: true, message: MSG_OTP_VERIFIED };
   }
 
-  /** Form-submit leads start as Verified No; OTP flips them to Yes. */
+  /** Form-submit leads start as Verified No. OTP flips them to Yes and sends KYC WhatsApp. */
   private async markLeadsVerifiedForMobile(mobile: string): Promise<void> {
-    const { data: unverified, error: peekErr } = await this.supabase
+    const { data, error: peekErr } = await this.supabase
       .from(TABLE_LEADS)
-      .select('id, full_name, category, ins_type')
+      .select('id, full_name, category, ins_type, otp_verified')
       .eq('mobile_number', mobile)
       .eq('is_active', true)
-      .or('otp_verified.eq.false,otp_verified.is.null')
       .limit(20);
 
-    if (peekErr && process.env.NODE_ENV !== 'production') {
+    if (peekErr) {
       console.error('OtpService.markLeadsVerifiedForMobile peek', peekErr.message);
+      return;
     }
+
+    const justVerified = (Array.isArray(data) ? data : []).filter((row) => {
+      const record = row as { full_name?: string; otp_verified?: boolean | string | null };
+      if (record.otp_verified === true || record.otp_verified === 'true') return false;
+      const name = String(record.full_name ?? '').trim();
+      return name.length > 0 && name.toLowerCase() !== 'unknown';
+    }) as { id?: string; full_name?: string; category?: string; ins_type?: string | null }[];
 
     const { error } = await this.supabase
       .from(TABLE_LEADS)
@@ -193,15 +200,10 @@ export class OtpService {
       .eq('mobile_number', mobile)
       .eq('is_active', true);
 
-    if (error && process.env.NODE_ENV !== 'production') {
+    if (error) {
       console.error('OtpService.markLeadsVerifiedForMobile', error.message);
+      return;
     }
-
-    if (peekErr) return;
-    const justVerified = (Array.isArray(unverified) ? unverified : []).filter((row) => {
-      const name = String((row as { full_name?: string }).full_name ?? '').trim();
-      return name.length > 0 && name.toLowerCase() !== 'unknown';
-    }) as { id?: string; full_name?: string; category?: string; ins_type?: string | null }[];
     if (justVerified.length === 0) return;
     this.whatsapp.notifyAfterOtpVerified(mobile, justVerified);
   }

@@ -146,7 +146,7 @@ export class LeadsService {
     return ip ? { ip } : {};
   }
 
-  /** Admin/API create only. Public apply waits for OTP (`notifyAfterOtpVerified`). */
+  /** Admin create, and public apply only after OTP marks the lead verified. */
   private notifyApplicationWhatsapp(
     lead: Record<string, unknown> | null | undefined,
     fallbackPhone = '',
