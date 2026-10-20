@@ -64,10 +64,7 @@ export function pickBotReply(
 
   const choice = productChoice(buttonId, text);
   if (choice === 'personal_loan' || choice === 'insurance') {
-    const already =
-      choice === 'personal_loan'
-        ? Boolean(state.loanOffered || state.product === 'personal_loan')
-        : Boolean(state.insuranceOffered || state.product === 'insurance');
+    const already = choice === 'personal_loan' ? Boolean(state.loanOffered) : Boolean(state.insuranceOffered);
     if (already) return { kind: null };
     return { kind: choice, product: choice };
   }

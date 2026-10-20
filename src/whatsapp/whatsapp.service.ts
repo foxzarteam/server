@@ -570,6 +570,7 @@ export class WhatsappService implements OnModuleInit {
     if (kyc) this.rememberKycPhone(phone);
     if (!prev.product) {
       for (const item of messages) {
+        if (item.sendError) continue;
         if (item.role === 'assistant' && (item.kind === 'personal_loan' || item.kind === 'insurance')) {
           prev.product = item.kind;
         }
@@ -943,7 +944,8 @@ export class WhatsappService implements OnModuleInit {
     for (const row of data ?? []) {
       const record = row as Record<string, unknown>;
       if (isDraftLead(record)) continue;
-      return kycEmploymentBucket(String(record.employment_type ?? ''));
+      const bucket = kycEmploymentBucket(String(record.employment_type ?? ''));
+      if (bucket) return bucket;
     }
     return null;
   }

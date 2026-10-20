@@ -2,8 +2,6 @@ import type { ChatMessage } from './whatsapp-chat';
 import { welcomeInteractive, welcomeText } from './whatsapp-templates';
 
 export const GRAPH_VERSION = 'v21.0';
-/** How long we wait for Meta's HTTP ack. Do not abort the POST — Meta may still deliver. */
-export const GRAPH_SEND_MS = 6_000;
 export const GRAPH_UPLOAD_MS = 8_000;
 
 export function isGraphTimeout(error?: string): boolean {
@@ -76,26 +74,16 @@ async function postGraphOnce(
 ): Promise<{ ok: boolean; error?: string }> {
   const url = `https://graph.facebook.com/${GRAPH_VERSION}/${encodeURIComponent(fromId)}/messages`;
   try {
-    const pending = fetch(url, {
+    const res = await fetch(url, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${token}`,
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(payload),
-    }).then(async (res) => {
-      if (!res.ok) return { ok: false as const, error: await metaErrorText(res) };
-      return { ok: true as const };
     });
-    void pending.catch(() => undefined);
-
-    const ack = await Promise.race([
-      pending,
-      new Promise<{ ok: true }>((resolve) => {
-        setTimeout(() => resolve({ ok: true }), GRAPH_SEND_MS);
-      }),
-    ]);
-    return ack;
+    if (!res.ok) return { ok: false, error: await metaErrorText(res) };
+    return { ok: true };
   } catch (error) {
     const fail = error instanceof Error ? error.message : 'WhatsApp send failed';
     if (isGraphTimeout(fail)) return { ok: true };

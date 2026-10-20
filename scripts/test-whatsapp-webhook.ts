@@ -226,6 +226,8 @@ assert.ok(isKycStartClick('Haan, KYC Start Karein', ''));
 assert.ok(isKycStartClick('', 'Haan, KYC Start Karein'));
 assert.ok(isKycStartClick('Complete KYC', ''));
 assert.ok(isKycStartClick('', 'Complete KYC'));
+assert.ok(isKycStartClick('Start KYC', ''));
+assert.ok(isKycStartClick('kyc_start', ''));
 assert.ok(!isKycStartClick('Application Status Check Karein', ''));
 assert.ok(isKycStatusClick('Application Status Check Karein', ''));
 assert.ok(isKycStatusClick('', 'Application Status Check Karein'));
@@ -462,6 +464,7 @@ assert.strictEqual(pickBotReply('Application Status Check Karein', '', idle).kin
 assert.strictEqual(pickBotReply('Application Status Check Karein', '', { ...idle, statusSent: true }).kind, null);
 assert.strictEqual(pickBotReply('personal_loan', '', idle).kind, 'personal_loan');
 assert.strictEqual(pickBotReply('personal_loan', '', { ...idle, loanOffered: true }).kind, null);
+assert.strictEqual(pickBotReply('personal_loan', '', { ...idle, product: 'personal_loan' }).kind, 'personal_loan');
 assert.strictEqual(pickBotReply('insurance', '', { ...idle, loanOffered: true }).kind, 'insurance');
 assert.strictEqual(pickBotReply('insurance', '', { ...idle, insuranceOffered: true }).kind, null);
 assert.strictEqual(pickBotReply('personal_loan', '', { ...idle, product: 'insurance', loanOffered: true }).kind, null);
