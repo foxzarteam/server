@@ -1,6 +1,7 @@
 /**
- * The only loan eligibility rules. The website imports this file.
- * Change a limit or a sentence here, and both sides follow it.
+ * Loan eligibility rules for the API.
+ * The website repo has the same rules in az_web/app/lib/leads/loan-rules.ts.
+ * The two repos deploy separately, so a change here must be copied there too.
  */
 
 export const MIN_NET_MONTHLY_INCOME = 18000;
