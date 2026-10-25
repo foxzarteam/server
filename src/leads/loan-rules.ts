@@ -7,19 +7,19 @@
 export const MIN_NET_MONTHLY_INCOME = 18000;
 export const MIN_VEHICLE_NET_MONTHLY_INCOME = 10000;
 
-export const CIBIL_BANDS = ['above_680', 'below_680', 'unknown', 'above_650', 'below_650'] as const;
+export const CIBIL_BANDS = ['above_680', 'below_680', 'unknown', 'above_650', 'below_650', 'above_600', 'below_600'] as const;
 export type CibilBand = (typeof CIBIL_BANDS)[number];
 
-/** Bands the public and staff forms may select. Vehicle uses the 650 set. */
+/** Bands the public and staff forms may select. Vehicle uses the 600 set. */
 export const SELECTABLE_CIBIL_BANDS = ['above_680', 'below_680', 'unknown'] as const;
-export const SELECTABLE_VEHICLE_CIBIL_BANDS = ['above_650', 'below_650', 'unknown'] as const;
+export const SELECTABLE_VEHICLE_CIBIL_BANDS = ['above_600', 'below_600', 'unknown'] as const;
 
 export const MSG_NET_INCOME_MIN = 'Net monthly income must be at least ₹18,000';
 export const MSG_VEHICLE_NET_INCOME_MIN = 'Net monthly income must be at least ₹10,000';
 export const MSG_CIBIL_BELOW =
   'Sorry, you are not eligible for this loan. A CIBIL score below 680 does not meet the current criteria.';
-export const MSG_CIBIL_BELOW_650 =
-  'Sorry, you are not eligible for this loan. A CIBIL score below 650 does not meet the current criteria.';
+export const MSG_CIBIL_BELOW_600 =
+  'Sorry, you are not eligible for this loan. A CIBIL score below 600 does not meet the current criteria.';
 export const MSG_EMI_HALF =
   'Sorry, you are not eligible for this loan. Your existing EMI is half or more of your net monthly income.';
 
@@ -50,7 +50,9 @@ export function storedCibilBand(raw?: string | null): CibilBand | null {
     v === 'below_680' ||
     v === 'unknown' ||
     v === 'above_650' ||
-    v === 'below_650'
+    v === 'below_650' ||
+    v === 'above_600' ||
+    v === 'below_600'
   ) {
     return v;
   }
@@ -63,7 +65,7 @@ export function netMonthlyIncomeTooLow(income: number | null | undefined, catego
 
 /**
  * Other loans: reject CIBIL below 680, or existing EMI that is half or more of net income.
- * Vehicle loan: reject only when the applicant says CIBIL is below 650. No EMI rule.
+ * Vehicle loan: reject only when the applicant says CIBIL is below 600. No EMI rule.
  * A missing or non-positive income is a field error, not this popup.
  */
 export function loanNotEligibleMessage(dto: {
@@ -77,10 +79,10 @@ export function loanNotEligibleMessage(dto: {
   if (!Number.isFinite(income) || income <= 0) return null;
   const band = storedCibilBand(dto.cibilBand);
   if (isVehicleLoanCategory(dto.category)) {
-    if (band === 'below_650') return MSG_CIBIL_BELOW_650;
+    if (band === 'below_600') return MSG_CIBIL_BELOW_600;
     return null;
   }
-  if (band === 'below_680' || band === 'below_650') return MSG_CIBIL_BELOW;
+  if (band === 'below_680' || band === 'below_650' || band === 'below_600') return MSG_CIBIL_BELOW;
   const emi = Number(dto.totalMonthlyEmi);
   if (dto.hasExistingEmi === true && Number.isFinite(emi) && emi * 2 >= income) return MSG_EMI_HALF;
   return null;

@@ -30,7 +30,6 @@ import {
   GRAPH_VERSION,
   graphMessageBody,
   graphWaType,
-  isGraphTimeout,
   metaErrorText,
   postGraphMessage,
 } from './whatsapp-graph';
@@ -445,8 +444,16 @@ export class WhatsappService implements OnModuleInit {
     let reply = this.decideReply(phone, message, assistantId);
     if (statusAlready && reply?.kind === 'status') reply = null;
     if (reply?.kind === 'kyc_docs') {
-      const profile = await this.kycProfileForPhone(phone);
-      reply = { ...reply, text: kycDocsRequestText(profile.employment, profile.category) };
+      const profile = await Promise.race([
+        this.kycProfileForPhone(phone),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), 2_500)),
+      ]);
+      reply = {
+        ...reply,
+        text: profile
+          ? kycDocsRequestText(profile.employment, profile.category)
+          : kycDocsRequestText(),
+      };
     }
     if (reply && (reply.kind === 'welcome' || reply.kind === 'personal_loan' || reply.kind === 'insurance')) {
       const claim = `${phone}:${reply.kind}`;
@@ -459,6 +466,9 @@ export class WhatsappService implements OnModuleInit {
     if (
       reply &&
       reply.kind !== 'welcome' &&
+      reply.kind !== 'kyc' &&
+      reply.kind !== 'kyc_docs' &&
+      reply.kind !== 'status' &&
       !choice &&
       !kycClick &&
       !statusClick &&
@@ -1127,7 +1137,7 @@ export class WhatsappService implements OnModuleInit {
     const payload = graphMessageBody(phone, outbound);
     if (!payload) return { ok: false, error: 'Nothing to send.' };
     const sent = await postGraphMessage(token, fromId, payload);
-    if (sent.ok || isGraphTimeout(sent.error)) {
+    if (sent.ok) {
       if (outbound.mediaId) message.mediaId = outbound.mediaId;
       if (outbound.waType) message.waType = outbound.waType;
       if (outbound.filename) message.filename = outbound.filename;

@@ -130,9 +130,8 @@ export class CreateLeadDto {
   @Matches(INS_TYPE_SLUG_PATTERN, { message: 'Invalid insurance type' })
   insType?: string;
 
-  /** Optional. The public form does not ask for employment type. */
-  @IsOptional()
-  @ValidateIf((o) => o.employmentType != null && o.employmentType !== '')
+  /** Required on personal, home, business, and vehicle loans. */
+  @ValidateIf((o) => isStoredLoanCategory(o.category))
   @IsIn([...STORED_EMPLOYMENT_TYPES], {
     message: 'Select salaried or self employee / business.',
   })
@@ -391,7 +390,7 @@ export class AdminCreateLeadDto {
   @Matches(INS_TYPE_SLUG_PATTERN, { message: 'Invalid insurance type' })
   insType?: string;
 
-  @ValidateIf((o) => isStoredLoanCategory(o.category) && !isVehicleLoanCategory(o.category))
+  @ValidateIf((o) => isStoredLoanCategory(o.category))
   @IsIn([...STORED_EMPLOYMENT_TYPES], {
     message: 'Select salaried or self employee / business.',
   })

@@ -150,23 +150,6 @@ export class LeadsController {
     return { success: true, data: leads };
   }
 
-  /** PAN, mobile, and product checks only. Does not insert a lead. */
-  @Post('admin/precheck')
-  @UseGuards(AdminPanelGuard)
-  @HttpCode(HttpStatus.OK)
-  async precheckForAdmin(@Body() dto: AdminCreateLeadDto) {
-    const ready = await this.leadsService.validateAdminCreate(dto);
-    if (!ready.ok) {
-      return {
-        success: false,
-        field: ready.field,
-        message: ready.message,
-        code: ready.code,
-      };
-    }
-    return { success: true };
-  }
-
   /** Always insert a new lead (admin CRM / partner panel). Does not upsert by mobile. */
   @Post('admin')
   @UseGuards(AdminPanelGuard)

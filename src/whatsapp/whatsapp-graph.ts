@@ -3,9 +3,19 @@ import { welcomeInteractive, welcomeText } from './whatsapp-templates';
 
 export const GRAPH_VERSION = 'v21.0';
 export const GRAPH_UPLOAD_MS = 8_000;
+/** Wait for a slow Meta response, then try again. */
+const GRAPH_SEND_MS = 12_000;
+const GRAPH_RETRY_MS = [800, 2_000];
 
 export function isGraphTimeout(error?: string): boolean {
   return /timeout|aborted|abort/i.test(error || '');
+}
+
+/** Meta was slow, busy, or the connection dropped. Auth and bad payloads are not retried. */
+export function isRetryableGraphError(error?: string, status?: number): boolean {
+  if (status === 408 || status === 429 || (status != null && status >= 500)) return true;
+  if (status != null && status >= 400 && status < 500) return false;
+  return isGraphTimeout(error) || /network|fetch failed|ECONNRESET|ETIMEDOUT|socket/i.test(error || '');
 }
 
 export function graphWaType(mime: string): NonNullable<ChatMessage['waType']> {
@@ -71,7 +81,7 @@ async function postGraphOnce(
   token: string,
   fromId: string,
   payload: Record<string, unknown>,
-): Promise<{ ok: boolean; error?: string }> {
+): Promise<{ ok: boolean; error?: string; status?: number }> {
   const url = `https://graph.facebook.com/${GRAPH_VERSION}/${encodeURIComponent(fromId)}/messages`;
   try {
     const res = await fetch(url, {
@@ -81,12 +91,12 @@ async function postGraphOnce(
         'Content-Type': 'application/json',
       },
       body: JSON.stringify(payload),
+      signal: AbortSignal.timeout(GRAPH_SEND_MS),
     });
-    if (!res.ok) return { ok: false, error: await metaErrorText(res) };
+    if (!res.ok) return { ok: false, status: res.status, error: await metaErrorText(res) };
     return { ok: true };
   } catch (error) {
     const fail = error instanceof Error ? error.message : 'WhatsApp send failed';
-    if (isGraphTimeout(fail)) return { ok: true };
     return { ok: false, error: fail.slice(0, 300) };
   }
 }
@@ -96,9 +106,12 @@ export async function postGraphMessage(
   fromId: string,
   payload: Record<string, unknown>,
 ): Promise<{ ok: boolean; error?: string }> {
-  const sent = await postGraphOnce(token, fromId, payload);
-  if (!sent.ok && !isGraphTimeout(sent.error)) {
-    console.error('WhatsappService.sendWhatsapp', sent.error);
+  let sent = await postGraphOnce(token, fromId, payload);
+  for (let attempt = 0; !sent.ok && attempt < GRAPH_RETRY_MS.length; attempt += 1) {
+    if (!isRetryableGraphError(sent.error, sent.status)) break;
+    await new Promise((resolve) => setTimeout(resolve, GRAPH_RETRY_MS[attempt]));
+    sent = await postGraphOnce(token, fromId, payload);
   }
-  return sent;
+  if (!sent.ok) console.error('WhatsappService.sendWhatsapp', sent.error);
+  return { ok: sent.ok, error: sent.error };
 }

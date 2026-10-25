@@ -1,3 +1,4 @@
+import { isStoredLoanCategory } from '../wallet/loan-amount';
 import {
   incomeMinMessage,
   isVehicleLoanCategory,
@@ -36,7 +37,7 @@ export const STORED_EMPLOYMENT_TYPES = [
 
 export type StoredEmployment = (typeof STORED_EMPLOYMENT_TYPES)[number];
 
-/** Loan apply: income is required. Employment type is optional. */
+/** Loan apply: income and employment type are required on every loan, including vehicle. */
 export function personalLoanEmploymentError(dto: {
   category?: string | null;
   netMonthlyIncome?: number | null;
@@ -44,6 +45,9 @@ export function personalLoanEmploymentError(dto: {
 }): string | null {
   if (netMonthlyIncomeTooLow(dto.netMonthlyIncome, dto.category)) return incomeMinMessage(dto.category);
   const employment = String(dto.employmentType ?? '').trim();
+  if (isStoredLoanCategory(dto.category) && !storedEmploymentType(employment)) {
+    return 'Select salaried or self employee / business.';
+  }
   if (employment && !storedEmploymentType(employment)) {
     return 'Select salaried or self employee / business.';
   }

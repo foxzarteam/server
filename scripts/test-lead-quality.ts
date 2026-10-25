@@ -70,6 +70,28 @@ assert.strictEqual(buildLocationLabel([null, undefined, '']), null);
 // —— employment ——
 assert.ok(personalLoanEmploymentError({})?.includes('income'));
 assert.strictEqual(personalLoanEmploymentError({ netMonthlyIncome: 50000 }), null);
+assert.ok(
+  personalLoanEmploymentError({ category: 'personal_loan', netMonthlyIncome: 50000 })?.includes('salaried'),
+);
+assert.strictEqual(
+  personalLoanEmploymentError({
+    category: 'personal_loan',
+    netMonthlyIncome: 50000,
+    employmentType: 'self_employed',
+  }),
+  null,
+);
+assert.ok(
+  personalLoanEmploymentError({ category: 'vehicle_loan', netMonthlyIncome: 12000 })?.includes('salaried'),
+);
+assert.strictEqual(
+  personalLoanEmploymentError({
+    category: 'vehicle_loan',
+    netMonthlyIncome: 12000,
+    employmentType: 'salaried_bank',
+  }),
+  null,
+);
 assert.strictEqual(
   personalLoanEmploymentError({ netMonthlyIncome: 50000, employmentType: 'salaried' }),
   null,
@@ -108,7 +130,11 @@ assert.strictEqual(
   null,
 );
 assert.strictEqual(
-  personalLoanEmploymentError({ category: 'vehicle_loan', netMonthlyIncome: 10000 }),
+  personalLoanEmploymentError({
+    category: 'vehicle_loan',
+    netMonthlyIncome: 10000,
+    employmentType: 'self_employed',
+  }),
   null,
 );
 assert.ok(personalLoanEmploymentError({ category: 'vehicle_loan', netMonthlyIncome: 9999 })?.includes('10,000'));
@@ -116,10 +142,10 @@ assert.ok(
   loanNotEligibleMessage({
     category: 'vehicle_loan',
     netMonthlyIncome: 20000,
-    cibilBand: 'below_650',
+    cibilBand: 'below_600',
     hasExistingEmi: false,
     totalMonthlyEmi: 0,
-  })?.includes('650'),
+  })?.includes('600'),
 );
 assert.strictEqual(
   loanNotEligibleMessage({
@@ -225,6 +251,7 @@ async function assertAdminVehicleDto() {
     netMonthlyIncome: 10000,
     cibilBand: 'above_650',
     vehicleCategory: 'taxi',
+    employmentType: 'salaried_bank',
   });
   const vehicleErrors = await validate(vehicle);
   assert.strictEqual(

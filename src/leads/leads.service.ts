@@ -1516,7 +1516,11 @@ export class LeadsService {
       );
       if (!slug) throw new LeadRuleError('Select vehicle category.');
       payload.vehicle_category = slug;
-      payload.employment_type = null;
+      if (dto.employmentType !== undefined) {
+        const employment = storedEmploymentType(dto.employmentType);
+        if (!employment) throw new LeadRuleError('Select salaried or self employee / business.');
+        payload.employment_type = employment;
+      }
       payload.has_existing_emi = false;
       payload.total_monthly_emi = 0;
       const incomeErr = personalLoanEmploymentError({

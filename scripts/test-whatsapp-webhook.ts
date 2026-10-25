@@ -197,6 +197,7 @@ assert.strictEqual(kycPayload.template.language.code, KYC_TEMPLATE_LANG);
 assert.strictEqual(kycPayload.template.components[0].parameters.length, 1);
 assert.strictEqual(kycPayload.template.components[0].parameters[0].text, 'Raju Patel');
 assert.ok(alreadyKycStarted([{ role: 'assistant', kind: 'kyc' }]));
+assert.ok(!alreadyKycStarted([{ role: 'assistant', kind: 'kyc', sendError: 'timeout' }]));
 assert.ok(!alreadyKycStarted([{ role: 'assistant', kind: 'welcome' }]));
 assert.strictEqual(asChat({ messages: [{ id: 'kyc:1', role: 'assistant', kind: 'kyc', text: 'x' }] }).messages[0].kind, 'kyc');
 const kycBtn = extractInboundMessages({
