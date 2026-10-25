@@ -6,6 +6,7 @@ import { TABLE_LEADS, TABLE_WP_ENQUIRIES } from '../common/constants';
 import { LEAD_DRAFT_FULL_NAME } from '../leads/lead-draft';
 import { isDraftLead } from '../leads/lead-present';
 import { kycEmploymentBucket } from '../leads/personal-loan-employment';
+import { isVehicleLoanCategory } from '../leads/loan-rules';
 import { normalizeStoredCategory } from '../leads/lead-present';
 import { SUPABASE_CLIENT } from '../config/supabase';
 import { isGreeting, pickBotReply } from './whatsapp-bot-rules';
@@ -444,8 +445,8 @@ export class WhatsappService implements OnModuleInit {
     let reply = this.decideReply(phone, message, assistantId);
     if (statusAlready && reply?.kind === 'status') reply = null;
     if (reply?.kind === 'kyc_docs') {
-      const employment = await this.employmentForPhone(phone);
-      reply = { ...reply, text: kycDocsRequestText(employment) };
+      const profile = await this.kycProfileForPhone(phone);
+      reply = { ...reply, text: kycDocsRequestText(profile.employment, profile.category) };
     }
     if (reply && (reply.kind === 'welcome' || reply.kind === 'personal_loan' || reply.kind === 'insurance')) {
       const claim = `${phone}:${reply.kind}`;
@@ -926,28 +927,38 @@ export class WhatsappService implements OnModuleInit {
     return (data ?? []).some((row) => !isDraftLead(row as Record<string, unknown>));
   }
 
-  /** Latest real application’s employment, so the KYC document list matches the form. */
-  private async employmentForPhone(phone: string): Promise<'salaried' | 'self_employed' | null> {
+  /** Latest real application, so the KYC document list matches that product. */
+  private async kycProfileForPhone(phone: string): Promise<{
+    employment: 'salaried' | 'self_employed' | null;
+    category: string | null;
+  }> {
+    const empty = { employment: null as 'salaried' | 'self_employed' | null, category: null as string | null };
     const numbers = this.phoneLookupKeys(phone);
-    if (!numbers.length) return null;
+    if (!numbers.length) return empty;
     const { data, error } = await this.supabase
       .from(TABLE_LEADS)
-      .select('full_name, pan, employment_type, updated_at')
+      .select('full_name, pan, employment_type, category, updated_at')
       .in('mobile_number', numbers)
       .eq('is_active', true)
       .order('updated_at', { ascending: false })
       .limit(20);
     if (error) {
-      console.error('WhatsappService.employmentForPhone', error.message);
-      return null;
+      console.error('WhatsappService.kycProfileForPhone', error.message);
+      return empty;
     }
+    let category: string | null = null;
     for (const row of data ?? []) {
       const record = row as Record<string, unknown>;
       if (isDraftLead(record)) continue;
+      const leadCategory = String(record.category ?? '').trim().toLowerCase();
+      if (!category) category = leadCategory;
+      if (isVehicleLoanCategory(leadCategory) && category === leadCategory) {
+        return { employment: null, category: leadCategory };
+      }
       const bucket = kycEmploymentBucket(String(record.employment_type ?? ''));
-      if (bucket) return bucket;
+      if (bucket) return { employment: bucket, category };
     }
-    return null;
+    return { employment: null, category };
   }
 
   /** One Under Review note per phone, even if the admin flips that status again. */

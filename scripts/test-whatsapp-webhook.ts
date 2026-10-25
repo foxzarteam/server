@@ -276,6 +276,16 @@ assert.ok(/Passport-Size Photo/.test(businessDocs));
 assert.ok(!/CIBIL/.test(businessDocs));
 assert.ok(!/Salary Slips/.test(businessDocs));
 assert.strictEqual(kycDocsRequestText('salaried'), docs);
+const vehicleDocs = kycDocsRequestText('self_employed', 'vehicle_loan');
+assert.ok(/PAN Card/.test(vehicleDocs));
+assert.ok(/Aadhaar Card/.test(vehicleDocs));
+assert.ok(/Passport-Size Photo/.test(vehicleDocs));
+assert.ok(/Vehicle Quotation 🚗 OR RC \(if you have\)/.test(vehicleDocs));
+assert.ok(!/5️⃣/.test(vehicleDocs));
+assert.ok(!/Salary Slips/.test(vehicleDocs));
+assert.ok(!/Bank Statement/.test(vehicleDocs));
+assert.ok(!/ITR/.test(vehicleDocs));
+assert.strictEqual(kycDocsRequestText(null, 'car_loan'), vehicleDocs);
 
 const rejectedNote = rejectedText();
 assert.strictEqual(rejectedNote.split('\n').filter((line) => line.trim()).length, 2);

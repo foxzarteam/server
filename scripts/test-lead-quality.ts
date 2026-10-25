@@ -9,6 +9,7 @@ import {
   isPrivateOrLocalIp,
 } from '../src/common/ip-geo';
 import { mapLeadWriteError } from '../src/leads/lead-write-errors';
+import { LeadRuleError, leadRuleField } from '../src/leads/mobile-pan-limit';
 import { leadFullNameError, kycEmploymentBucket, loanNotEligibleMessage, loanProfileError, personalLoanEmploymentError } from '../src/leads/personal-loan-employment';
 import { isStoredLoanCategory, personalLoanAmountError } from '../src/wallet/loan-amount';
 import { sanitizePublicLead } from '../src/security/pan-crypto';
@@ -68,9 +69,7 @@ assert.strictEqual(buildLocationLabel([null, undefined, '']), null);
 
 // —— employment ——
 assert.ok(personalLoanEmploymentError({})?.includes('income'));
-assert.ok(
-  personalLoanEmploymentError({ netMonthlyIncome: 50000 })?.includes('salaried'),
-);
+assert.strictEqual(personalLoanEmploymentError({ netMonthlyIncome: 50000 }), null);
 assert.strictEqual(
   personalLoanEmploymentError({ netMonthlyIncome: 50000, employmentType: 'salaried' }),
   null,
@@ -108,6 +107,31 @@ assert.strictEqual(
   loanNotEligibleMessage({ netMonthlyIncome: 40000, cibilBand: 'above_680', hasExistingEmi: true, totalMonthlyEmi: 19999 }),
   null,
 );
+assert.strictEqual(
+  personalLoanEmploymentError({ category: 'vehicle_loan', netMonthlyIncome: 10000 }),
+  null,
+);
+assert.ok(personalLoanEmploymentError({ category: 'vehicle_loan', netMonthlyIncome: 9999 })?.includes('10,000'));
+assert.ok(
+  loanNotEligibleMessage({
+    category: 'vehicle_loan',
+    netMonthlyIncome: 20000,
+    cibilBand: 'below_650',
+    hasExistingEmi: false,
+    totalMonthlyEmi: 0,
+  })?.includes('650'),
+);
+assert.strictEqual(
+  loanNotEligibleMessage({
+    category: 'vehicle_loan',
+    netMonthlyIncome: 20000,
+    cibilBand: 'above_650',
+    hasExistingEmi: true,
+    totalMonthlyEmi: 15000,
+  }),
+  null,
+);
+assert.strictEqual(loanProfileError({ category: 'vehicle_loan', cibilBand: 'unknown' }), null);
 assert.strictEqual(loanProfileError({ cibilBand: 'above_680', hasExistingEmi: false, totalMonthlyEmi: 0 }), null);
 assert.strictEqual(loanProfileError({ cibilBand: 'unknown', hasExistingEmi: true, totalMonthlyEmi: 4500 }), null);
 assert.ok(loanProfileError({ cibilBand: 'above_680', hasExistingEmi: true, totalMonthlyEmi: 0 }));
@@ -183,4 +207,55 @@ assert.strictEqual(statusLabel('rejected'), 'Not Approved');
 assert.strictEqual(statusLabel('action_required'), 'KYC pending');
 assert.strictEqual(statusLabel('PENDING'), 'KYC pending');
 
-console.log('test-lead-quality: all asserts passed');
+assert.strictEqual(leadRuleField(new LeadRuleError('Select vehicle category.')), 'vehicleCategory');
+assert.strictEqual(leadRuleField(new LeadRuleError('Net monthly income must be at least ₹10,000')), 'netMonthlyIncome');
+assert.strictEqual(leadRuleField(new LeadRuleError('Sorry, below 650.', 'LOAN_NOT_ELIGIBLE')), undefined);
+assert.strictEqual(leadRuleField(new LeadRuleError('Invalid PAN format.')), 'pan');
+
+async function assertAdminVehicleDto() {
+  const { validate } = await import('class-validator');
+  const { AdminCreateLeadDto } = await import('../src/leads/leads.dto');
+  const vehicle = Object.assign(new AdminCreateLeadDto(), {
+    pan: 'ABCDE1234F',
+    mobileNumber: '9876543210',
+    fullName: 'Raju Patel',
+    pincode: '302002',
+    category: 'vehicle_loan',
+    requiredAmount: 200000,
+    netMonthlyIncome: 10000,
+    cibilBand: 'above_650',
+    vehicleCategory: 'taxi',
+  });
+  const vehicleErrors = await validate(vehicle);
+  assert.strictEqual(
+    vehicleErrors.map((error) => error.property).join(','),
+    '',
+  );
+
+  const lowIncome = Object.assign(new AdminCreateLeadDto(), { ...vehicle, netMonthlyIncome: 9999 });
+  const lowErrors = await validate(lowIncome);
+  assert.ok(lowErrors.some((error) => error.property === 'netMonthlyIncome'));
+
+  const personal = Object.assign(new AdminCreateLeadDto(), {
+    pan: 'ABCDE1234F',
+    mobileNumber: '9876543210',
+    fullName: 'Raju Patel',
+    category: 'personal_loan',
+    netMonthlyIncome: 20000,
+    cibilBand: 'above_680',
+  });
+  const personalErrors = await validate(personal);
+  const personalFields = personalErrors.map((error) => error.property);
+  assert.ok(personalFields.includes('employmentType'));
+  assert.ok(personalFields.includes('hasExistingEmi'));
+  assert.ok(personalFields.includes('totalMonthlyEmi'));
+}
+
+assertAdminVehicleDto()
+  .then(() => {
+    console.log('test-lead-quality: all asserts passed');
+  })
+  .catch((err) => {
+    console.error(err);
+    process.exit(1);
+  });

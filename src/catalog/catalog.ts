@@ -31,6 +31,23 @@ export const FALLBACK_INSURANCE_TYPES: InsuranceTypePublic[] = [
   { value: 'cyber_insurance', label: 'Cyber Insurance', image: 'cyber-insurance.svg' },
 ];
 
+export type VehicleCategoryPublic = {
+  value: string;
+  label: string;
+  /** File name in `public/images/vehicle`, or a full path/URL. */
+  image: string;
+};
+
+/** Used when `vehicle_categories` is missing so the vehicle loan form still works. */
+export const FALLBACK_VEHICLE_CATEGORIES: VehicleCategoryPublic[] = [
+  { value: 'new_car', label: 'New Car', image: 'car.webp' },
+  { value: 'used_car', label: 'Used Car', image: 'used_car.webp' },
+  { value: 'taxi', label: 'Taxi', image: 'taxi.webp' },
+  { value: 'tractor', label: 'Tractor', image: 'tractor.webp' },
+  { value: 'commercial_vehicle', label: 'Commercial Vehicle', image: 'commercial.webp' },
+  { value: 'construction_equipment', label: 'Construction Equipment', image: 'construction.webp' },
+];
+
 export function slugToLeadCategory(slug: string): string {
   const s = slug.trim().toLowerCase();
   if (!s) return 'personal_loan';

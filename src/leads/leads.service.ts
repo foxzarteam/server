@@ -53,19 +53,17 @@ import {
   CODE_PHONE_PRODUCT_BLOCKED,
   LeadRuleError,
   MSG_MOBILE_PAN_LIMIT_REACHED,
+  leadRuleField,
 } from './mobile-pan-limit';
 import {
   leadFullNameError,
   loanNotEligibleMessage,
   loanProfileError,
   personalLoanEmploymentError,
-  readCibilReport,
   storedCibilBand,
   storedEmploymentType,
-  type CibilReportFile,
 } from './personal-loan-employment';
-import { openCibilObject, uploadCibilReport } from '../storage/r2-cibil';
-import type { Readable } from 'node:stream';
+import { isVehicleLoanCategory } from './loan-rules';
 import { LEAD_DRAFT_PAN } from './lead-draft';
 import {
   blockingApplicationMessage,
@@ -258,51 +256,28 @@ export class LeadsService {
       col === 'consent_accepted' ||
       col === 'cibil_band' ||
       col === 'has_existing_emi' ||
-      col === 'total_monthly_emi' ||
-      col === 'cibil_report_name'
+      col === 'total_monthly_emi'
     );
   }
 
-  private loanProfileColumns(
-    dto: {
-      cibilBand?: string | null;
-      hasExistingEmi?: boolean | null;
-      totalMonthlyEmi?: number | null;
-    },
-    reportName: string | null,
-  ): Record<string, unknown> {
-    const noEmi = dto.hasExistingEmi === false;
+  private loanProfileColumns(dto: {
+    category?: string | null;
+    vehicleCategory?: string | null;
+    cibilBand?: string | null;
+    hasExistingEmi?: boolean | null;
+    totalMonthlyEmi?: number | null;
+  }): Record<string, unknown> {
+    const vehicle = isVehicleLoanCategory(dto.category);
+    const noEmi = vehicle || dto.hasExistingEmi === false;
+    const vehicleCategory = String(dto.vehicleCategory ?? '')
+      .trim()
+      .toLowerCase();
     return {
       cibil_band: storedCibilBand(dto.cibilBand),
-      has_existing_emi: dto.hasExistingEmi === true,
+      has_existing_emi: vehicle ? false : dto.hasExistingEmi === true,
       total_monthly_emi: noEmi ? 0 : Math.round(Number(dto.totalMonthlyEmi)),
-      cibil_report_name: reportName,
+      vehicle_category: vehicle && vehicleCategory ? vehicleCategory : null,
     };
-  }
-
-  /** Optional CIBIL file goes to private R2. The lead row stores only the object path. */
-  private async attachCibilReport(
-    lead: Record<string, unknown>,
-    file: CibilReportFile | null,
-    deleteLeadOnFailure: boolean,
-  ): Promise<string | null> {
-    if (!file) return null;
-    const leadId = String(lead.id ?? '').trim();
-    if (!leadId) {
-      return 'Could not save the CIBIL report. Try a PDF or image, or submit without the file.';
-    }
-    const uploaded = await uploadCibilReport(leadId, file);
-    if ('key' in uploaded) {
-      const { error } = await this.leads.update({ cibil_report_name: uploaded.key }).eq('id', leadId);
-      if (!error) {
-        lead.cibil_report_name = uploaded.key;
-        return null;
-      }
-    }
-    if (deleteLeadOnFailure) {
-      await this.leads.delete().eq('id', leadId);
-    }
-    return 'Could not save the CIBIL report. Try a PDF or image, or submit without the file.';
   }
 
   /** Public apply: amount must sit inside that product's limit_start / limit_end. */
@@ -629,37 +604,6 @@ export class LeadsService {
     return (data as Record<string, unknown>) ?? null;
   }
 
-  /** Private CIBIL file for admin, staff, or the partner who owns the lead. */
-  async openCibilReport(
-    leadId: string,
-    actor: { sub: string; role: string },
-  ): Promise<
-    | { ok: true; stream: Readable; mime: string; filename: string; size: number | null }
-    | { ok: false; status: 403 | 404; message: string }
-  > {
-    const lead = await this.getById(leadId);
-    if (!lead) return { ok: false, status: 404, message: 'CIBIL report not found.' };
-
-    const role = String(actor.role ?? '').trim().toLowerCase();
-    if (role === 'agent') {
-      const owner = String(lead.agent_id ?? '').trim();
-      if (!owner || owner !== actor.sub.trim()) {
-        return { ok: false, status: 404, message: 'CIBIL report not found.' };
-      }
-    } else if (role !== 'admin' && role !== 'staff') {
-      return { ok: false, status: 403, message: 'Unauthorized' };
-    }
-
-    const key = String(lead.cibil_report_name ?? '').trim();
-    if (!key) return { ok: false, status: 404, message: 'No CIBIL report on this lead.' };
-
-    const file = await openCibilObject(key);
-    if ('error' in file) {
-      return { ok: false, status: 404, message: 'Could not download the CIBIL report.' };
-    }
-    return { ok: true, stream: file.stream, mime: file.mime, filename: file.filename, size: file.size };
-  }
-
   /** All active leads for a mobile (newest first). Used by customer track status. */
   async listByMobile(
     mobileNumber: string,
@@ -840,6 +784,13 @@ export class LeadsService {
 
     const category = normalizeStoredCategory(dto.category);
     let ins = normalizeStoredInsType(category, dto.insType);
+    if (isVehicleLoanCategory(category)) {
+      const vehicleCategory = await this.servicesService.resolveVehicleCategory(dto.vehicleCategory);
+      if (!vehicleCategory) return { ok: false, message: 'Select vehicle category.' };
+      dto.vehicleCategory = vehicleCategory;
+      dto.hasExistingEmi = false;
+      dto.totalMonthlyEmi = 0;
+    }
     if (isStoredLoanCategory(category)) {
       const empErr = personalLoanEmploymentError(dto);
       if (empErr) return { ok: false, message: empErr };
@@ -906,21 +857,17 @@ export class LeadsService {
     Object.assign(payload, this.ipFields(meta?.clientIp));
     const publicLoan = await this.publicLoanAmounts(category, dto);
     if (publicLoan && !publicLoan.ok) return { ok: false, message: publicLoan.message };
-    let cibilFile: CibilReportFile | null = null;
     if (publicLoan?.ok) {
       const profileErr = loanProfileError(dto);
       if (profileErr) return { ok: false, message: profileErr };
       const notEligible = loanNotEligibleMessage(dto);
       if (notEligible) return { ok: false, message: notEligible, code: 'LOAN_NOT_ELIGIBLE' };
-      const report = readCibilReport(dto);
-      if (!report.ok) return { ok: false, message: report.message };
-      cibilFile = report.file;
       payload.required_amount = publicLoan.amounts.requiredAmount;
       payload.loan_amt = publicLoan.amounts.loanAmt;
       payload.net_monthly_income = dto.netMonthlyIncome;
       const employment = storedEmploymentType(dto.employmentType);
       if (employment) payload.employment_type = employment;
-      Object.assign(payload, this.loanProfileColumns(dto, null));
+      Object.assign(payload, this.loanProfileColumns(dto));
     }
     if (category === 'insurance') {
       payload.required_amount = null;
@@ -948,7 +895,7 @@ export class LeadsService {
           cibilBand: loanAmounts ? dto.cibilBand : undefined,
           hasExistingEmi: loanAmounts ? dto.hasExistingEmi : undefined,
           totalMonthlyEmi: loanAmounts ? dto.totalMonthlyEmi : undefined,
-          cibilReportName: loanAmounts ? null : undefined,
+          vehicleCategory: loanAmounts ? dto.vehicleCategory : null,
           clientIp: meta?.clientIp ?? undefined,
           agentId: !byMobile.agent_id && agentId ? agentId : undefined,
           consentAccepted: true,
@@ -960,8 +907,6 @@ export class LeadsService {
           };
         }
         this.scheduleIpLocationFill(String(byMobile.id), meta?.clientIp);
-        const fileErr = await this.attachCibilReport(updated, cibilFile, false);
-        if (fileErr) return { ok: false, message: fileErr };
         void this.panAudit.record({
           leadId: String(byMobile.id),
           action: 'update',
@@ -984,8 +929,6 @@ export class LeadsService {
 
     const lead = data;
     if (lead.id) {
-      const fileErr = await this.attachCibilReport(lead, cibilFile, true);
-      if (fileErr) return { ok: false, message: fileErr };
       this.scheduleIpLocationFill(String(lead.id), meta?.clientIp);
       void this.panAudit.record({
         leadId: String(lead.id),
@@ -1005,14 +948,11 @@ export class LeadsService {
     cibilBand?: string | null;
     hasExistingEmi?: boolean | null;
     totalMonthlyEmi?: number | null;
-    cibilReportName?: string | null;
-    cibilReportMime?: string | null;
-    cibilReportData?: string | null;
   }):
-    | { ok: true; file: CibilReportFile | null }
+    | { ok: true }
     | { ok: false; message: string; field?: string; code?: string } {
     if (!isStoredLoanCategory(normalizeStoredCategory(dto.category))) {
-      return { ok: true, file: null };
+      return { ok: true };
     }
     const empErr = personalLoanEmploymentError(dto);
     if (empErr) {
@@ -1033,9 +973,7 @@ export class LeadsService {
     }
     const notEligible = loanNotEligibleMessage(dto);
     if (notEligible) return { ok: false, message: notEligible, code: 'LOAN_NOT_ELIGIBLE' };
-    const report = readCibilReport(dto);
-    if (!report.ok) return { ok: false, message: report.message };
-    return { ok: true, file: report.file };
+    return { ok: true };
   }
 
   /**
@@ -1054,6 +992,15 @@ export class LeadsService {
     if (nameErr) return { ok: false, message: nameErr };
 
     const category = normalizeStoredCategory(dto.category || 'personal_loan');
+    if (isVehicleLoanCategory(category)) {
+      const vehicleCategory = await this.servicesService.resolveVehicleCategory(dto.vehicleCategory);
+      if (!vehicleCategory) {
+        return { ok: false, field: 'vehicleCategory', message: 'Select vehicle category.' };
+      }
+      dto.vehicleCategory = vehicleCategory;
+      dto.hasExistingEmi = false;
+      dto.totalMonthlyEmi = 0;
+    }
     if (isStoredLoanCategory(category)) {
       const profile = this.readPortalLoan(dto);
       if (!profile.ok) {
@@ -1105,6 +1052,13 @@ export class LeadsService {
     }
 
     const category = normalizeStoredCategory(dto.category || 'personal_loan');
+    if (isVehicleLoanCategory(category)) {
+      const vehicleCategory = await this.servicesService.resolveVehicleCategory(dto.vehicleCategory);
+      if (!vehicleCategory) throw new LeadRuleError('Select vehicle category.');
+      dto.vehicleCategory = vehicleCategory;
+      dto.hasExistingEmi = false;
+      dto.totalMonthlyEmi = 0;
+    }
     const portalLoan = this.readPortalLoan(dto);
     if (!portalLoan.ok) {
       throw new LeadRuleError(portalLoan.message, portalLoan.code);
@@ -1172,7 +1126,7 @@ export class LeadsService {
       payload.net_monthly_income = dto.netMonthlyIncome;
       const employment = storedEmploymentType(dto.employmentType);
       if (employment) payload.employment_type = employment;
-      Object.assign(payload, this.loanProfileColumns(dto, null));
+      Object.assign(payload, this.loanProfileColumns(dto));
     }
     if (category === 'insurance' && (gates.insType || dto.insType)) {
       payload.ins_type = gates.insType || dto.insType;
@@ -1188,10 +1142,6 @@ export class LeadsService {
     }
 
     this.scheduleIpLocationFill(data.id != null ? String(data.id) : null, meta?.clientIp);
-    if (portalLoan.file) {
-      const fileErr = await this.attachCibilReport(data, portalLoan.file, true);
-      if (fileErr) throw new LeadRuleError(fileErr);
-    }
 
     if (data.id) {
       await this.panAudit.record({
@@ -1256,11 +1206,9 @@ export class LeadsService {
           netMonthlyIncome: dto.netMonthlyIncome,
           employmentType: dto.employmentType,
           cibilBand: dto.cibilBand,
+          vehicleCategory: dto.vehicleCategory,
           hasExistingEmi: dto.hasExistingEmi,
           totalMonthlyEmi: dto.totalMonthlyEmi,
-          cibilReportName: dto.cibilReportName,
-          cibilReportMime: dto.cibilReportMime,
-          cibilReportData: dto.cibilReportData,
           consentAccepted: true,
         },
         { agentId: uid },
@@ -1269,12 +1217,7 @@ export class LeadsService {
       if (err instanceof LeadRuleError) {
         return {
           ok: false,
-          field:
-            err.code === 'LOAN_NOT_ELIGIBLE'
-              ? undefined
-              : err.code === CODE_MOBILE_PAN_LIMIT_REACHED || err.code === CODE_PHONE_PRODUCT_BLOCKED
-                ? 'mobileNumber'
-                : 'pan',
+          field: leadRuleField(err),
           message: err.message,
           code: err.code,
         };
@@ -1554,13 +1497,43 @@ export class LeadsService {
       payload.employment_type = storedEmploymentType(dto.employmentType);
     }
     if (dto.cibilBand !== undefined) payload.cibil_band = storedCibilBand(dto.cibilBand);
+    if (dto.vehicleCategory !== undefined) {
+      payload.vehicle_category = dto.vehicleCategory
+        ? String(dto.vehicleCategory).trim().toLowerCase()
+        : null;
+    }
     if (dto.hasExistingEmi !== undefined) payload.has_existing_emi = dto.hasExistingEmi === true;
     if (dto.totalMonthlyEmi !== undefined || dto.hasExistingEmi === false) {
       payload.total_monthly_emi =
         dto.hasExistingEmi === false ? 0 : dto.totalMonthlyEmi ?? null;
     }
-    if (dto.cibilReportName !== undefined) {
-      payload.cibil_report_name = dto.cibilReportName?.trim() || null;
+    const profileCategory = String(payload.category ?? existing.category ?? '');
+    if (isVehicleLoanCategory(profileCategory)) {
+      const slug = await this.servicesService.resolveVehicleCategory(
+        dto.vehicleCategory !== undefined
+          ? dto.vehicleCategory
+          : String(existing.vehicle_category ?? ''),
+      );
+      if (!slug) throw new LeadRuleError('Select vehicle category.');
+      payload.vehicle_category = slug;
+      payload.employment_type = null;
+      payload.has_existing_emi = false;
+      payload.total_monthly_emi = 0;
+      const incomeErr = personalLoanEmploymentError({
+        category: profileCategory,
+        netMonthlyIncome: Number(payload.net_monthly_income ?? existing.net_monthly_income),
+      });
+      if (incomeErr) throw new LeadRuleError(incomeErr);
+      const blocked = loanNotEligibleMessage({
+        category: profileCategory,
+        netMonthlyIncome: Number(payload.net_monthly_income ?? existing.net_monthly_income),
+        cibilBand: String(payload.cibil_band ?? existing.cibil_band ?? ''),
+        hasExistingEmi: false,
+        totalMonthlyEmi: 0,
+      });
+      if (blocked) throw new LeadRuleError(blocked, 'LOAN_NOT_ELIGIBLE');
+    } else if (dto.category != null) {
+      payload.vehicle_category = null;
     }
     const hasPartner = Boolean(String(payload.agent_id ?? existing.agent_id ?? '').trim());
     const approved = isApprovedLeadStatus(payload.status ?? existing.status);

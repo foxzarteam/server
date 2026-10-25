@@ -1,13 +1,13 @@
 import {
-  CIBIL_REPORT_MAX_BYTES,
-  MSG_NET_INCOME_MIN,
+  incomeMinMessage,
+  isVehicleLoanCategory,
   netMonthlyIncomeTooLow,
+  selectableCibilBands,
   storedCibilBand,
 } from './loan-rules';
 
 export {
   CIBIL_BANDS,
-  CIBIL_REPORT_MAX_BYTES,
   MIN_NET_MONTHLY_INCOME,
   loanNotEligibleMessage,
   storedCibilBand,
@@ -36,15 +36,15 @@ export const STORED_EMPLOYMENT_TYPES = [
 
 export type StoredEmployment = (typeof STORED_EMPLOYMENT_TYPES)[number];
 
-const CIBIL_REPORT_MIME = new Set(['application/pdf', 'image/jpeg', 'image/png', 'image/webp']);
-
-/** Loan apply: income and employment type are both required. */
+/** Loan apply: income is required. Employment type is optional. */
 export function personalLoanEmploymentError(dto: {
+  category?: string | null;
   netMonthlyIncome?: number | null;
   employmentType?: string | null;
 }): string | null {
-  if (netMonthlyIncomeTooLow(dto.netMonthlyIncome)) return MSG_NET_INCOME_MIN;
-  if (!storedEmploymentType(dto.employmentType)) {
+  if (netMonthlyIncomeTooLow(dto.netMonthlyIncome, dto.category)) return incomeMinMessage(dto.category);
+  const employment = String(dto.employmentType ?? '').trim();
+  if (employment && !storedEmploymentType(employment)) {
     return 'Select salaried or self employee / business.';
   }
   return null;
@@ -71,11 +71,17 @@ export function kycEmploymentBucket(raw?: string | null): 'salaried' | 'self_emp
 
 /** CIBIL band and existing EMI. The report file itself is optional. */
 export function loanProfileError(dto: {
+  category?: string | null;
   cibilBand?: string | null;
   hasExistingEmi?: boolean | null;
   totalMonthlyEmi?: number | null;
 }): string | null {
-  if (!storedCibilBand(dto.cibilBand)) return 'Select your CIBIL score.';
+  const band = storedCibilBand(dto.cibilBand);
+  if (!band) return 'Select your CIBIL score.';
+  if (isVehicleLoanCategory(dto.category)) return null;
+  if (!selectableCibilBands(dto.category).includes(band)) {
+    return 'Select your CIBIL score.';
+  }
   if (dto.hasExistingEmi !== true && dto.hasExistingEmi !== false) {
     return 'Tell us if a loan EMI is already running.';
   }
@@ -86,28 +92,4 @@ export function loanProfileError(dto: {
   }
   if (!Number.isFinite(emi) || emi < 1) return 'Enter the total monthly EMI you pay.';
   return null;
-}
-
-export type CibilReportFile = { name: string; mime: string; bytes: Buffer };
-
-/** Optional CIBIL report. Empty means the applicant did not upload one. */
-export function readCibilReport(input: {
-  cibilReportName?: string | null;
-  cibilReportMime?: string | null;
-  cibilReportData?: string | null;
-}): { ok: true; file: CibilReportFile | null } | { ok: false; message: string } {
-  const data = String(input.cibilReportData ?? '').trim();
-  const name = String(input.cibilReportName ?? '').trim();
-  const mime = String(input.cibilReportMime ?? '').trim().toLowerCase();
-  if (!data && !name && !mime) return { ok: true, file: null };
-  if (!data || !name || !mime) return { ok: false, message: 'CIBIL report file is incomplete.' };
-  if (!CIBIL_REPORT_MIME.has(mime)) return { ok: false, message: 'CIBIL report must be a PDF or image.' };
-  const clean = data.replace(/^data:[^;]+;base64,/, '').replace(/\s/g, '');
-  if (!/^[A-Za-z0-9+/]+=*$/.test(clean)) return { ok: false, message: 'CIBIL report file is not valid.' };
-  const bytes = Buffer.from(clean, 'base64');
-  if (!bytes.length || bytes.length > CIBIL_REPORT_MAX_BYTES) {
-    return { ok: false, message: 'CIBIL report file is too large.' };
-  }
-  const safeName = name.replace(/[^\w.\- ()]/g, '').slice(0, 120) || 'cibil-report';
-  return { ok: true, file: { name: safeName, mime, bytes } };
 }

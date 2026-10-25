@@ -1,3 +1,5 @@
+import { isVehicleLoanCategory } from '../leads/loan-rules';
+
 const SITE = 'https://apnizaroorat.com';
 const LOAN_URL = `${SITE}/products/loans/`;
 const INSURANCE_URL = `${SITE}/products/insurance/`;
@@ -183,8 +185,18 @@ function kycDocsIntro(): string {
   return 'To complete your KYC, please share clear photos or PDFs of these documents:';
 }
 
-/** Salaried applicants. Default when employment is missing. */
-export function kycDocsRequestText(employment?: string | null): string {
+/** Salaried applicants. Default when employment is missing. Vehicle loans use their own list. */
+export function kycDocsRequestText(employment?: string | null, category?: string | null): string {
+  if (isVehicleLoanCategory(category)) {
+    return [
+      kycDocsIntro(),
+      '',
+      '1️⃣ PAN Card 🪪',
+      '2️⃣ Aadhaar Card 🆔',
+      '3️⃣ Passport-Size Photo 📸',
+      '4️⃣ Vehicle Quotation 🚗 OR RC (if you have) 📄',
+    ].join('\n');
+  }
   const kind = String(employment ?? '')
     .trim()
     .toLowerCase()

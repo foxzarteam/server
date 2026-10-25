@@ -5,6 +5,8 @@ export const TABLE_BANNERS = 'banners';
 export const TABLE_PRODUCTS = 'products';
 /** Insurance subtypes (life / health / motor / cyber / future rows). */
 export const TABLE_INSURANCE_TYPES = 'insurance_types';
+/** Vehicle loan subtypes (new car, taxi, tractor, and later rows). */
+export const TABLE_VEHICLE_CATEGORIES = 'vehicle_categories';
 export const TABLE_PARTNER = 'partner';
 export const TABLE_PAYMENT_ACCOUNTS = 'payment_accounts';
 export const TABLE_WALLET = 'wallet';

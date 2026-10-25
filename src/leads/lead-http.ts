@@ -1,7 +1,7 @@
 import { HttpException, HttpStatus } from '@nestjs/common';
 import { CODE_LOAN_AMOUNT_REQUIRED } from '../wallet/loan-amount';
 import { CODE_APPROVE_ADMIN_ONLY, WalletSyncError } from '../wallet/wallet-sync';
-import { LeadRuleError } from './mobile-pan-limit';
+import { LeadRuleError, leadRuleField } from './mobile-pan-limit';
 
 /** Map lead-rule / wallet failures to the same HTTP body both panel APIs already return. */
 export function throwLeadMutation(err: unknown): never {
@@ -24,7 +24,7 @@ export function throwLeadMutation(err: unknown): never {
           ? HttpStatus.BAD_REQUEST
           : HttpStatus.CONFLICT;
     throw new HttpException(
-      { success: false, message: err.message, code: err.code },
+      { success: false, message: err.message, code: err.code, field: leadRuleField(err) },
       status,
     );
   }

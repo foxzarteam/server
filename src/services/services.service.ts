@@ -2,10 +2,12 @@ import { BadRequestException, Inject, Injectable } from '@nestjs/common';
 import { SupabaseClient } from '@supabase/supabase-js';
 import {
   FALLBACK_INSURANCE_TYPES,
+  FALLBACK_VEHICLE_CATEGORIES,
   INS_TYPE_SLUG_PATTERN,
   type InsuranceTypePublic,
+  type VehicleCategoryPublic,
 } from '../catalog/catalog';
-import { TABLE_INSURANCE_TYPES, TABLE_PRODUCTS } from '../common/constants';
+import { TABLE_INSURANCE_TYPES, TABLE_PRODUCTS, TABLE_VEHICLE_CATEGORIES } from '../common/constants';
 import { SUPABASE_CLIENT } from '../config/supabase';
 import type { PublicCatalog, ServicePublic } from './services.dto';
 import { AdminUpdateServiceDto } from './services.dto';
@@ -98,6 +100,37 @@ export class ServicesService {
     return types.length > 0 ? types : FALLBACK_INSURANCE_TYPES.map((t) => ({ ...t }));
   }
 
+  private async fetchVehicleCategories(): Promise<VehicleCategoryPublic[]> {
+    const { data, error } = await this.supabase
+      .from(TABLE_VEHICLE_CATEGORIES)
+      .select('slug, label, image, sort_order, is_active')
+      .eq('is_active', true)
+      .order('sort_order', { ascending: true });
+
+    if (error || !data?.length) return FALLBACK_VEHICLE_CATEGORIES.map((row) => ({ ...row }));
+
+    const types: VehicleCategoryPublic[] = [];
+    for (const row of data) {
+      const value = String((row as { slug?: unknown }).slug ?? '')
+        .trim()
+        .toLowerCase();
+      const label = String((row as { label?: unknown }).label ?? '').trim();
+      const image = String((row as { image?: unknown }).image ?? '').trim();
+      if (!INS_TYPE_SLUG_PATTERN.test(value) || !label) continue;
+      types.push({ value, label, image });
+    }
+    return types.length > 0 ? types : FALLBACK_VEHICLE_CATEGORIES.map((row) => ({ ...row }));
+  }
+
+  async resolveVehicleCategory(slug?: string | null): Promise<string | null> {
+    const value = String(slug ?? '')
+      .trim()
+      .toLowerCase();
+    if (!INS_TYPE_SLUG_PATTERN.test(value)) return null;
+    const list = await this.fetchVehicleCategories();
+    return list.some((row) => row.value === value) ? value : null;
+  }
+
   /** Loan rows for the /products/loans tabs. Active flag does not hide them. */
   private async fetchLoanProducts(): Promise<ServicePublic[]> {
     const { data, error } = await this.table
@@ -115,12 +148,13 @@ export class ServicesService {
     if (this.catalogCache && Date.now() - this.catalogCache.at < CATALOG_TTL_MS) {
       return this.catalogCache.value;
     }
-    const [services, insuranceTypes, loanProducts] = await Promise.all([
+    const [services, insuranceTypes, vehicleCategories, loanProducts] = await Promise.all([
       this.getActivePublic(),
       this.fetchActiveInsuranceTypes(),
+      this.fetchVehicleCategories(),
       this.fetchLoanProducts(),
     ]);
-    const value = { services, insuranceTypes, loanProducts };
+    const value = { services, insuranceTypes, vehicleCategories, loanProducts };
     this.catalogCache = { at: Date.now(), value };
     return value;
   }

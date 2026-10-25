@@ -11,16 +11,18 @@ import {
   Matches,
   Min,
   MinLength,
+  ValidateBy,
   ValidateIf,
+  type ValidationArguments,
 } from 'class-validator';
 import { FALLBACK_INSURANCE_TYPES, INS_TYPE_SLUG_PATTERN } from '../catalog/catalog';
 import { isMaskedPan, PAN_FORMAT_REGEX } from '../security/pan-crypto';
 import {
   CIBIL_BANDS,
   LEAD_FULL_NAME_REGEX,
-  MIN_NET_MONTHLY_INCOME,
   STORED_EMPLOYMENT_TYPES,
 } from './personal-loan-employment';
+import { incomeFloor, incomeMinMessage, isVehicleLoanCategory } from './loan-rules';
 import { isStoredLoanCategory } from '../wallet/loan-amount';
 
 /** Matches active service slugs stored as lead category (e.g. personal-loan → personal_loan). */
@@ -42,6 +44,25 @@ export const LOAN_AMT_VALUES = [
 
 /** Fallback list when `insurance_types` is unavailable. New types come from DB. */
 export const INS_TYPE_VALUES = FALLBACK_INSURANCE_TYPES.map((t) => t.value);
+
+const VEHICLE_CATEGORY_SLUG = /^[a-z][a-z0-9_]{0,63}$/;
+
+function MinNetMonthlyIncome() {
+  return ValidateBy({
+    name: 'minNetMonthlyIncome',
+    validator: {
+      validate(value: unknown, args?: ValidationArguments) {
+        const n = typeof value === 'number' ? value : Number(value);
+        const category = (args?.object as { category?: string } | undefined)?.category;
+        return Number.isFinite(n) && n >= incomeFloor(category);
+      },
+      defaultMessage(args?: ValidationArguments) {
+        const category = (args?.object as { category?: string } | undefined)?.category;
+        return incomeMinMessage(category);
+      },
+    },
+  });
+}
 
 export const LEAD_STATUS_VALUES = [
   'pending',
@@ -109,8 +130,9 @@ export class CreateLeadDto {
   @Matches(INS_TYPE_SLUG_PATTERN, { message: 'Invalid insurance type' })
   insType?: string;
 
-  /** Required on a loan. Old rows may still be `salaried`. */
-  @ValidateIf((o) => isStoredLoanCategory(o.category))
+  /** Optional. The public form does not ask for employment type. */
+  @IsOptional()
+  @ValidateIf((o) => o.employmentType != null && o.employmentType !== '')
   @IsIn([...STORED_EMPLOYMENT_TYPES], {
     message: 'Select salaried or self employee / business.',
   })
@@ -118,14 +140,19 @@ export class CreateLeadDto {
 
   @ValidateIf((o) => isStoredLoanCategory(o.category))
   @IsNumber({}, { message: 'Net monthly income is required' })
-  @Min(MIN_NET_MONTHLY_INCOME, { message: 'Net monthly income must be at least ₹18,000' })
+  @MinNetMonthlyIncome()
   netMonthlyIncome?: number;
+
+  @ValidateIf((o) => isVehicleLoanCategory(o.category))
+  @IsString({ message: 'Select vehicle category.' })
+  @Matches(VEHICLE_CATEGORY_SLUG, { message: 'Select vehicle category.' })
+  vehicleCategory?: string;
 
   @ValidateIf((o) => isStoredLoanCategory(o.category))
   @IsIn([...CIBIL_BANDS], { message: 'Select your CIBIL score.' })
   cibilBand?: string;
 
-  @ValidateIf((o) => isStoredLoanCategory(o.category))
+  @ValidateIf((o) => isStoredLoanCategory(o.category) && !isVehicleLoanCategory(o.category))
   @Transform(({ value }) => {
     if (value === true || value === 'true') return true;
     if (value === false || value === 'false') return false;
@@ -134,25 +161,10 @@ export class CreateLeadDto {
   @IsBoolean({ message: 'Tell us if a loan EMI is already running.' })
   hasExistingEmi?: boolean;
 
-  @ValidateIf((o) => isStoredLoanCategory(o.category))
+  @ValidateIf((o) => isStoredLoanCategory(o.category) && !isVehicleLoanCategory(o.category))
   @IsNumber({}, { message: 'Enter the total monthly EMI you pay.' })
   @Min(0, { message: 'Total monthly EMI cannot be negative.' })
   totalMonthlyEmi?: number;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(120)
-  cibilReportName?: string;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(40)
-  cibilReportMime?: string;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(280_000_000)
-  cibilReportData?: string;
 
   @IsOptional()
   @IsString()
@@ -270,8 +282,14 @@ export class UpdateLeadDto {
   @IsOptional()
   @IsNumber()
   @ValidateIf((o) => o.netMonthlyIncome != null)
-  @Min(MIN_NET_MONTHLY_INCOME, { message: 'Net monthly income must be at least ₹18,000' })
+  @MinNetMonthlyIncome()
   netMonthlyIncome?: number | null;
+
+  @IsOptional()
+  @IsString()
+  @ValidateIf((o) => o.vehicleCategory != null && o.vehicleCategory !== '')
+  @Matches(VEHICLE_CATEGORY_SLUG, { message: 'Select vehicle category.' })
+  vehicleCategory?: string | null;
 
   @IsOptional()
   @ValidateIf((o) => o.cibilBand != null && o.cibilBand !== '')
@@ -292,11 +310,6 @@ export class UpdateLeadDto {
   @ValidateIf((o) => o.totalMonthlyEmi != null)
   @Min(0)
   totalMonthlyEmi?: number | null;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(120)
-  cibilReportName?: string | null;
 
   @IsOptional()
   @IsString()
@@ -378,7 +391,7 @@ export class AdminCreateLeadDto {
   @Matches(INS_TYPE_SLUG_PATTERN, { message: 'Invalid insurance type' })
   insType?: string;
 
-  @ValidateIf((o) => isStoredLoanCategory(o.category))
+  @ValidateIf((o) => isStoredLoanCategory(o.category) && !isVehicleLoanCategory(o.category))
   @IsIn([...STORED_EMPLOYMENT_TYPES], {
     message: 'Select salaried or self employee / business.',
   })
@@ -386,14 +399,19 @@ export class AdminCreateLeadDto {
 
   @ValidateIf((o) => isStoredLoanCategory(o.category))
   @IsNumber({}, { message: 'Net monthly income is required' })
-  @Min(MIN_NET_MONTHLY_INCOME, { message: 'Net monthly income must be at least ₹18,000' })
+  @MinNetMonthlyIncome()
   netMonthlyIncome?: number;
+
+  @ValidateIf((o) => isVehicleLoanCategory(o.category))
+  @IsString({ message: 'Select vehicle category.' })
+  @Matches(VEHICLE_CATEGORY_SLUG, { message: 'Select vehicle category.' })
+  vehicleCategory?: string;
 
   @ValidateIf((o) => isStoredLoanCategory(o.category))
   @IsIn([...CIBIL_BANDS], { message: 'Select your CIBIL score.' })
   cibilBand?: string;
 
-  @ValidateIf((o) => isStoredLoanCategory(o.category))
+  @ValidateIf((o) => isStoredLoanCategory(o.category) && !isVehicleLoanCategory(o.category))
   @Transform(({ value }) => {
     if (value === true || value === 'true') return true;
     if (value === false || value === 'false') return false;
@@ -402,25 +420,10 @@ export class AdminCreateLeadDto {
   @IsBoolean({ message: 'Tell us if a loan EMI is already running.' })
   hasExistingEmi?: boolean;
 
-  @ValidateIf((o) => isStoredLoanCategory(o.category))
+  @ValidateIf((o) => isStoredLoanCategory(o.category) && !isVehicleLoanCategory(o.category))
   @IsNumber({}, { message: 'Enter the total monthly EMI you pay.' })
   @Min(0, { message: 'Total monthly EMI cannot be negative.' })
   totalMonthlyEmi?: number;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(120)
-  cibilReportName?: string;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(40)
-  cibilReportMime?: string;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(280_000_000)
-  cibilReportData?: string;
 
   /** Ignored on admin/partner create. Those leads are stored with consent yes. */
   @IsOptional()

@@ -29,6 +29,25 @@ export class LeadRuleError extends Error {
   }
 }
 
+/** Which form field should show this rule error. Eligibility stays a popup. */
+export function leadRuleField(err: LeadRuleError): string | undefined {
+  if (err.code === 'LOAN_NOT_ELIGIBLE') return undefined;
+  if (err.code === CODE_MOBILE_PAN_LIMIT_REACHED || err.code === CODE_PHONE_PRODUCT_BLOCKED) {
+    return 'mobileNumber';
+  }
+  const message = err.message.toLowerCase();
+  if (message.includes('vehicle category')) return 'vehicleCategory';
+  if (message.includes('income')) return 'netMonthlyIncome';
+  if (message.includes('cibil')) return 'cibilBand';
+  if (message.includes('employment') || message.includes('salaried')) return 'employmentType';
+  if (message.includes('already running')) return 'hasExistingEmi';
+  if (message.includes('emi')) return 'totalMonthlyEmi';
+  if (message.includes('pincode')) return 'pincode';
+  if (message.includes('loan amount') || message.includes('required amount')) return 'requiredAmount';
+  if (message.includes('name')) return 'fullName';
+  return 'pan';
+}
+
 export type SlotClaimOk = { ok: true; reused: boolean; slot: number };
 export type SlotClaimBlocked = {
   ok: false;
