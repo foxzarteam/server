@@ -123,29 +123,98 @@ async function postGraphOnce(
   }
 }
 
-export async function fetchNamedTemplates(
+function digitsOnly(value: string): string {
+  return value.replace(/\D/g, '');
+}
+
+async function graphJson(
   token: string,
-  businessAccountId: string,
-  name: string,
-): Promise<{ ok: true; rows: unknown[] } | { ok: false; error: string }> {
-  const waba = businessAccountId.replace(/\D/g, '');
-  const templateName = name.trim();
-  if (!waba || !templateName) return { ok: false, error: 'WhatsApp business account ID is missing in Settings.' };
-  const url =
-    `https://graph.facebook.com/${GRAPH_VERSION}/${encodeURIComponent(waba)}/message_templates` +
-    `?name=${encodeURIComponent(templateName)}&fields=name,status,language,components&limit=20`;
+  url: string,
+): Promise<{ ok: true; body: Record<string, unknown> } | { ok: false; error: string }> {
   try {
     const res = await fetch(url, {
       headers: { Authorization: `Bearer ${token}` },
       signal: AbortSignal.timeout(GRAPH_SEND_MS),
     });
     if (!res.ok) return { ok: false, error: await metaErrorText(res) };
-    const data = (await res.json()) as { data?: unknown[] };
-    return { ok: true, rows: Array.isArray(data.data) ? data.data : [] };
+    const body = (await res.json()) as Record<string, unknown>;
+    return { ok: true, body };
   } catch (error) {
     const fail = error instanceof Error ? error.message : 'Could not load this WhatsApp template.';
     return { ok: false, error: fail.slice(0, 300) };
   }
+}
+
+function templateListUrl(wabaId: string, name?: string): string {
+  const base =
+    `https://graph.facebook.com/${GRAPH_VERSION}/${encodeURIComponent(wabaId)}/message_templates` +
+    '?fields=name,status,language,components&limit=100';
+  return name ? `${base}&name=${encodeURIComponent(name)}` : base;
+}
+
+async function readTemplatePage(token: string, url: string): Promise<unknown[]> {
+  const listed = await graphJson(token, url);
+  if (!listed.ok) return [];
+  return Array.isArray(listed.body.data) ? listed.body.data : [];
+}
+
+/** Business Manager id and the WhatsApp account id are different. Templates live on the WhatsApp account. */
+async function candidateWabaIds(token: string, businessAccountId: string, phoneNumberId: string): Promise<string[]> {
+  const ids: string[] = [];
+  const add = (value: unknown) => {
+    const id = digitsOnly(String(value ?? ''));
+    if (id && !ids.includes(id)) ids.push(id);
+  };
+  add(businessAccountId);
+  const phoneId = digitsOnly(phoneNumberId);
+  if (phoneId) {
+    const phone = await graphJson(
+      token,
+      `https://graph.facebook.com/${GRAPH_VERSION}/${encodeURIComponent(phoneId)}?fields=whatsapp_business_account`,
+    );
+    if (phone.ok) {
+      const account = phone.body.whatsapp_business_account;
+      if (account && typeof account === 'object') add((account as { id?: unknown }).id);
+    }
+  }
+  const businessId = digitsOnly(businessAccountId);
+  if (businessId) {
+    for (const edge of ['owned_whatsapp_business_accounts', 'client_whatsapp_business_accounts']) {
+      const listed = await graphJson(
+        token,
+        `https://graph.facebook.com/${GRAPH_VERSION}/${encodeURIComponent(businessId)}/${edge}?fields=id&limit=20`,
+      );
+      if (!listed.ok || !Array.isArray(listed.body.data)) continue;
+      for (const row of listed.body.data) {
+        if (row && typeof row === 'object') add((row as { id?: unknown }).id);
+      }
+    }
+  }
+  return ids;
+}
+
+export async function fetchNamedTemplates(
+  token: string,
+  businessAccountId: string,
+  name: string,
+  phoneNumberId = '',
+): Promise<{ ok: true; rows: unknown[] } | { ok: false; error: string }> {
+  const templateName = name.trim();
+  if (!templateName) return { ok: false, error: 'Choose a template from the list.' };
+  const ids = await candidateWabaIds(token, businessAccountId, phoneNumberId);
+  if (!ids.length) return { ok: false, error: 'WhatsApp business account ID is missing in Settings.' };
+  const rows: unknown[] = [];
+  const matches = () =>
+    rows.some((row) => String((row as { name?: unknown })?.name ?? '').trim().toLowerCase() === templateName.toLowerCase());
+  for (const id of ids) {
+    rows.push(...(await readTemplatePage(token, templateListUrl(id, templateName))));
+    if (matches()) return { ok: true, rows };
+  }
+  for (const id of ids) {
+    rows.push(...(await readTemplatePage(token, templateListUrl(id))));
+    if (matches()) break;
+  }
+  return { ok: true, rows };
 }
 
 export async function postGraphMessage(

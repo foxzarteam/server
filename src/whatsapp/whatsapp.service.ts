@@ -43,6 +43,7 @@ import {
   normalizeMetaTemplates,
   pickApprovedTemplate,
   templateLanguageOrder,
+  templatePersonName,
   type MetaTemplateDefinition,
 } from './whatsapp-admin-templates';
 import {
@@ -54,7 +55,7 @@ import {
   shouldApplyDelivery,
   WhatsappDeliveryUpdate,
 } from './whatsapp-inbound';
-import { kycBodyName, kycChatText, kycGraphPayload, KYC_START_BTN, KYC_STATUS_BTN, KYC_TEMPLATE_LANG } from './whatsapp-kyc';
+import { kycChatText, kycGraphPayload, KYC_START_BTN, KYC_STATUS_BTN, KYC_TEMPLATE_LANG } from './whatsapp-kyc';
 import { WhatsappSettings, WhatsappSettingsService } from './whatsapp-settings.service';
 import { whatsappSignatureOk } from './whatsapp-verify';
 import {
@@ -879,8 +880,14 @@ export class WhatsappService implements OnModuleInit {
     if (!/^[1-9][0-9]{7,14}$/.test(to)) {
       return { ok: false, error: 'This chat does not have a valid WhatsApp number.' };
     }
-    const template = await this.approvedAdminTemplate(token, settings.businessAccountId, option.metaName);
     const who = await this.templateCustomerName(row.phone, row.chat.profileName);
+    if (!who) {
+      return {
+        ok: false,
+        error: 'Is number par application ka naam nahi mila, aur WhatsApp profile name bhi nahi hai.',
+      };
+    }
+    const template = await this.approvedAdminTemplate(token, settings.businessAccountId, option.metaName, fromId);
     const languages = templateLanguageOrder(option.metaName, template.language);
     let built: { text: string; buttons: string[] } | null = null;
     let sent: { ok: boolean; error?: string; messageId?: string } = { ok: false, error: 'Could not send this template.' };
@@ -922,7 +929,7 @@ export class WhatsappService implements OnModuleInit {
 
   private bubbleButtons(item: ChatMessage): { buttons: string[] } | Record<string, never> {
     if (item.buttons?.length) return { buttons: item.buttons };
-    if (item.kind === 'kyc') return { buttons: [KYC_START_BTN, KYC_STATUS_BTN] };
+    if (item.kind === 'kyc' && item.id.startsWith('kyc:')) return { buttons: [KYC_START_BTN, KYC_STATUS_BTN] };
     if (item.kind === 'welcome') return { buttons: ['Loan', 'Insurance'] };
     return {};
   }
@@ -931,15 +938,12 @@ export class WhatsappService implements OnModuleInit {
     token: string,
     businessAccountId: string,
     metaName: string,
+    phoneNumberId: string,
   ): Promise<MetaTemplateDefinition> {
     const cached = this.adminTemplateCache.get(metaName);
     if (cached && cached.until > Date.now()) return cached.template;
-    const listed = businessAccountId
-      ? await fetchNamedTemplates(token, businessAccountId, metaName)
-      : { ok: false as const, error: '' };
-    const template = listed.ok
-      ? pickApprovedTemplate(normalizeMetaTemplates(listed.rows), metaName)
-      : null;
+    const listed = await fetchNamedTemplates(token, businessAccountId, metaName, phoneNumberId);
+    const template = listed.ok ? pickApprovedTemplate(normalizeMetaTemplates(listed.rows), metaName) : null;
     if (!template) return fallbackAdminTemplate(metaName);
     this.adminTemplateCache.set(metaName, { until: Date.now() + 10 * 60 * 1000, template });
     return template;
@@ -1017,8 +1021,7 @@ export class WhatsappService implements OnModuleInit {
   private async templateCustomerName(phone: string, profileName: string): Promise<string> {
     const rows = await this.leadRowsForPhone(phone, 'full_name, pan, mobile_number, updated_at');
     const application = (rows ?? []).find((row) => !isDraftLead(row));
-    const fromForm = String(application?.full_name ?? '').trim();
-    return kycBodyName(fromForm || profileName);
+    return templatePersonName(String(application?.full_name ?? ''), profileName);
   }
 
   /** Latest non-draft application name for each chat phone. Keyed by the enquiry phone. */

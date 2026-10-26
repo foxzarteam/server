@@ -215,9 +215,10 @@ export function extractInboundMessages(body: unknown): InboundWhatsappMessage[] 
           text = 'This file did not come through. Ask the customer to send it again as a photo or PDF.';
         }
 
-        const contact = contacts
-          .map(asRecord)
-          .find((row) => row && canonicalWhatsappPhone(String(row.wa_id ?? '')) === phone);
+        const contactRows = contacts.map(asRecord).filter((row): row is Record<string, unknown> => Boolean(row));
+        const contact =
+          contactRows.find((row) => canonicalWhatsappPhone(String(row.wa_id ?? '')) === phone) ||
+          contactRows.find((row) => String(asRecord(row.profile)?.name ?? '').trim());
         const profileName = String(asRecord(contact?.profile)?.name ?? '').trim().slice(0, 120);
 
         const metadata = asRecord(value.metadata);

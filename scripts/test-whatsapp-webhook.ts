@@ -5,7 +5,7 @@
 import assert from 'assert';
 import { createHmac } from 'crypto';
 import { graphMessageBody, isGraphTimeout, plainWhatsappSendError } from '../src/whatsapp/whatsapp-graph';
-import { buildAdminTemplateSend, fallbackAdminTemplate, findAdminWaTemplate, normalizeMetaTemplates, pickApprovedTemplate, templateCanBeSent } from '../src/whatsapp/whatsapp-admin-templates';
+import { buildAdminTemplateSend, fallbackAdminTemplate, findAdminWaTemplate, normalizeMetaTemplates, pickApprovedTemplate, templateCanBeSent, templatePersonName } from '../src/whatsapp/whatsapp-admin-templates';
 import { whatsappHubChallenge, whatsappSignatureOk } from '../src/whatsapp/whatsapp-verify';
 import { adminTargetPhone, canonicalWhatsappPhone, extractDeliveryUpdates, extractInboundMessages, shouldApplyDelivery } from '../src/whatsapp/whatsapp-inbound';
 import { decryptSettingsJson, encryptSettingsJson } from '../src/whatsapp/settings-crypto';
@@ -562,6 +562,10 @@ const active = pickApprovedTemplate(
 assert.strictEqual(active?.language, 'en');
 assert.strictEqual(fallbackAdminTemplate('application_kyc').language, 'en_GB');
 assert.strictEqual(fallbackAdminTemplate('vehicle_purchase_kyc').language, 'en');
+assert.strictEqual(templatePersonName('  Raju Patel ', 'WhatsApp user'), 'Raju Patel');
+assert.strictEqual(templatePersonName('', 'Gayathri'), 'Gayathri');
+assert.strictEqual(templatePersonName('Customer', 'Mikhail'), 'Mikhail');
+assert.strictEqual(templatePersonName('WhatsApp user', ''), '');
 const built = buildAdminTemplateSend(
   '919876543210',
   {

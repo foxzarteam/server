@@ -35,6 +35,18 @@ const BLOCKED_TEMPLATE_STATUS = new Set([
   'IN_APPEAL',
 ]);
 
+const FAKE_PERSON_NAME = /^(customer|whatsapp user|user|there|unknown)$/i;
+
+/** Application form name first. WhatsApp profile name only when the form has no real name. Never "Customer". */
+export function templatePersonName(formName: string, profileName: string): string {
+  const clean = (value: string) => value.trim().replace(/[\r\n\t]+/g, ' ').replace(/\s+/g, ' ').slice(0, 200);
+  const form = clean(formName);
+  if (form && !FAKE_PERSON_NAME.test(form)) return form;
+  const profile = clean(profileName);
+  if (profile && !FAKE_PERSON_NAME.test(profile)) return profile;
+  return '';
+}
+
 export function findAdminWaTemplate(id: string) {
   const key = id.trim();
   return ADMIN_WA_TEMPLATES.find((item) => item.id === key) ?? null;
