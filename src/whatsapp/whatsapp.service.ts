@@ -853,22 +853,50 @@ export class WhatsappService implements OnModuleInit {
     return data ? { ok: true, data } : { ok: false, error: 'Sent, but chat could not be reloaded.' };
   }
 
+  /** New number from the compose popup. The typed name is what {{1}} receives. */
+  async adminStartTemplate(
+    rawPhone: string,
+    rawName: string,
+    templateId: string,
+  ): Promise<{ ok: boolean; error?: string; data?: WhatsappEnquiryDetail }> {
+    const phone = adminTargetPhone(rawPhone);
+    if (!phone) return { ok: false, error: 'Enter a valid 10-digit Indian mobile number.' };
+    const option = findAdminWaTemplate(templateId);
+    if (!option) return { ok: false, error: 'Choose a template from the list.' };
+    const existing = await this.readByPhone(phone);
+    const who = templatePersonName(rawName, '') || (await this.templateCustomerName(phone, existing?.chat.profileName || ''));
+    if (!who) return { ok: false, error: 'Enter the customer name. It is filled into the template.' };
+    return this.deliverAdminTemplate(option, phone, who, existing?.chat.profileName || who, existing?.chat.waPhoneNumberId || '');
+  }
+
   /** Admin menu templates. Not once-per-phone: the admin chooses when to send again. */
   async adminSendTemplate(
     id: string,
     templateId: string,
+    rawName: string,
   ): Promise<{ ok: boolean; error?: string; data?: WhatsappEnquiryDetail }> {
     const option = findAdminWaTemplate(templateId);
     if (!option) return { ok: false, error: 'Choose a template from the list.' };
     const row = await this.getRowById(id);
     if (!row) return { ok: false, error: 'Chat not found.' };
+    const who = templatePersonName(rawName, '');
+    if (!who) return { ok: false, error: 'Enter the customer name.' };
+    return this.deliverAdminTemplate(option, row.phone, who, row.chat.profileName, row.chat.waPhoneNumberId);
+  }
 
+  private async deliverAdminTemplate(
+    option: NonNullable<ReturnType<typeof findAdminWaTemplate>>,
+    phone: string,
+    who: string,
+    profileName: string,
+    waPhoneNumberId: string,
+  ): Promise<{ ok: boolean; error?: string; data?: WhatsappEnquiryDetail }> {
     const settings = await this.settings.getEffective();
     const token = settings.accessToken.trim().replace(/^bearer\s+/i, '').trim();
     const configured = settings.phoneNumberId.replace(/\D/g, '');
-    const chatFrom = String(row.chat.waPhoneNumberId || '').replace(/\D/g, '');
+    const chatFrom = String(waPhoneNumberId || '').replace(/\D/g, '');
     const fromId = chatFrom.length >= 15 ? chatFrom : configured;
-    const to = canonicalWhatsappPhone(row.phone);
+    const to = canonicalWhatsappPhone(phone);
     if (!token || !fromId) {
       return {
         ok: false,
@@ -879,13 +907,6 @@ export class WhatsappService implements OnModuleInit {
     }
     if (!/^[1-9][0-9]{7,14}$/.test(to)) {
       return { ok: false, error: 'This chat does not have a valid WhatsApp number.' };
-    }
-    const who = await this.templateCustomerName(row.phone, row.chat.profileName);
-    if (!who) {
-      return {
-        ok: false,
-        error: 'Is number par application ka naam nahi mila, aur WhatsApp profile name bhi nahi hai.',
-      };
     }
     const template = await this.approvedAdminTemplate(token, settings.businessAccountId, option.metaName, fromId);
     const languages = templateLanguageOrder(option.metaName, template.language);
@@ -920,9 +941,10 @@ export class WhatsappService implements OnModuleInit {
       message.sendError = plainWhatsappSendError(sent.error);
     }
     await this.waitPersist(to, async () => {
-      await this.appendMessage(to, row.chat.profileName, message, row.chat.waPhoneNumberId);
+      await this.appendMessage(to, profileName, message, waPhoneNumberId || settings.phoneNumberId);
     });
-    const data = await this.getForAdmin(row.id);
+    const saved = await this.readByPhone(to);
+    const data = saved ? await this.getForAdmin(saved.id) : null;
     if (!sent.ok) return { ok: false, error: message.sendError || 'Could not send this template.', ...(data ? { data } : {}) };
     return data ? { ok: true, data } : { ok: false, error: 'Sent, but chat could not be reloaded.' };
   }

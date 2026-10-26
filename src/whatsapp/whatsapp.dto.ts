@@ -11,11 +11,32 @@ export class StartWhatsappChatDto {
   text!: string;
 }
 
+export class StartWhatsappTemplateDto {
+  @IsString()
+  @MaxLength(20)
+  phone!: string;
+
+  @IsString()
+  @MinLength(1)
+  @MaxLength(120)
+  name!: string;
+
+  @IsString()
+  @MinLength(1)
+  @MaxLength(80)
+  template!: string;
+}
+
 export class SendWhatsappTemplateDto {
   @IsString()
   @MinLength(1)
   @MaxLength(80)
   template!: string;
+
+  @IsString()
+  @MinLength(1)
+  @MaxLength(120)
+  name!: string;
 }
 
 export class UpdateWhatsappSettingsDto {

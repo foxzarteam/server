@@ -3,7 +3,7 @@ import type { RawBodyRequest } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import type { Request, Response } from 'express';
 import { AdminCrmGuard } from '../common/admin-crm.guard';
-import { SendWhatsappTemplateDto, StartWhatsappChatDto, UpdateWhatsappSettingsDto } from './whatsapp.dto';
+import { SendWhatsappTemplateDto, StartWhatsappChatDto, StartWhatsappTemplateDto, UpdateWhatsappSettingsDto } from './whatsapp.dto';
 import { WhatsappService } from './whatsapp.service';
 import { WhatsappSettingsService } from './whatsapp-settings.service';
 import { whatsappHubChallenge } from './whatsapp-verify';
@@ -68,6 +68,15 @@ export class WhatsappController {
     return { success: true, data: result.data };
   }
 
+  @Post('admin/enquiries/template')
+  @UseGuards(AdminCrmGuard)
+  @HttpCode(HttpStatus.OK)
+  async adminStartTemplate(@Body() dto: StartWhatsappTemplateDto) {
+    const result = await this.whatsapp.adminStartTemplate(dto.phone, dto.name, dto.template);
+    if (!result.ok) throw new BadRequestException(result.error || 'Could not send this template.');
+    return { success: true, data: result.data };
+  }
+
   @Get('admin/enquiries/:id')
   @UseGuards(AdminCrmGuard)
   @HttpCode(HttpStatus.OK)
@@ -113,7 +122,7 @@ export class WhatsappController {
   @UseGuards(AdminCrmGuard)
   @HttpCode(HttpStatus.OK)
   async adminTemplate(@Param('id') id: string, @Body() dto: SendWhatsappTemplateDto) {
-    const result = await this.whatsapp.adminSendTemplate(id, dto.template);
+    const result = await this.whatsapp.adminSendTemplate(id, dto.template, dto.name);
     if (!result.ok) throw new BadRequestException(result.error || 'Could not send this template.');
     return { success: true, data: result.data };
   }
