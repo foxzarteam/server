@@ -581,6 +581,26 @@ const built = buildAdminTemplateSend(
 assert.ok(!('error' in built));
 if (!('error' in built)) {
   assert.strictEqual(built.text, 'Dear Raju Patel, complete your personal loan KYC.');
+const fullBody = buildAdminTemplateSend(
+  '919876543210',
+  {
+    name: 'vehicle_refinance_kyc',
+    language: 'en',
+    components: [
+      {
+        type: 'BODY',
+        text: 'Namaste {{1}} ji,\n\nAapke Vehicle Loan ka KYC verification complete karne ke liye, kripya in 3 documents ki photo yahin bhej dijiye:\n\n1️⃣ Aadhaar Card (Front aur Back)\n2️⃣ PAN Card\n3️⃣ Gaadi ki RC\n\nDocuments milte hi hum aage ka process start kar denge.\n\nTeam\nApni Zaroorat',
+      },
+    ],
+  },
+  'Golu',
+);
+assert.ok(!('error' in fullBody));
+if (!('error' in fullBody)) {
+  assert.ok(fullBody.text.includes('Namaste Golu ji,'));
+  assert.ok(fullBody.text.includes('1️⃣ Aadhaar Card (Front aur Back)'));
+  assert.ok(fullBody.text.includes('3️⃣ Gaadi ki RC'));
+}
   assert.deepStrictEqual(built.buttons, ['Complete KYC']);
   const template = built.payload.template as { name: string; components: { parameters: { text: string }[] }[] };
   assert.strictEqual(template.name, 'personal_loan_kyc');

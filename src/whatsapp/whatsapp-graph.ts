@@ -152,10 +152,43 @@ function templateListUrl(wabaId: string, name?: string): string {
   return name ? `${base}&name=${encodeURIComponent(name)}` : base;
 }
 
-async function readTemplatePage(token: string, url: string): Promise<unknown[]> {
-  const listed = await graphJson(token, url);
+async function readTemplatePages(token: string, firstUrl: string): Promise<unknown[]> {
+  const rows: unknown[] = [];
+  let url = firstUrl;
+  for (let page = 0; page < 5 && url; page += 1) {
+    let listed = await graphJson(token, url);
+    if (!listed.ok && url.includes('fields=')) {
+      listed = await graphJson(token, url.replace(/([?&])fields=[^&]+&?/, '$1').replace(/[?&]$/, ''));
+    }
+    if (!listed.ok) break;
+    if (Array.isArray(listed.body.data)) rows.push(...listed.body.data);
+    const paging = listed.body.paging;
+    const next = paging && typeof paging === 'object' ? String((paging as { next?: unknown }).next ?? '') : '';
+    if (!next || url.includes('name=')) break;
+    url = next;
+  }
+  return rows;
+}
+
+/** The token itself knows the WhatsApp account id, even when Settings has the Business Manager id. */
+async function wabaIdsFromToken(token: string): Promise<string[]> {
+  const listed = await graphJson(
+    token,
+    `https://graph.facebook.com/${GRAPH_VERSION}/debug_token?input_token=${encodeURIComponent(token)}`,
+  );
   if (!listed.ok) return [];
-  return Array.isArray(listed.body.data) ? listed.body.data : [];
+  const data = listed.body.data;
+  if (!data || typeof data !== 'object') return [];
+  const scopes = (data as { granular_scopes?: { scope?: string; target_ids?: unknown[] }[] }).granular_scopes;
+  const ids: string[] = [];
+  for (const scope of scopes ?? []) {
+    if (!/whatsapp_business/i.test(String(scope.scope ?? ''))) continue;
+    for (const raw of scope.target_ids ?? []) {
+      const id = digitsOnly(String(raw ?? ''));
+      if (id && !ids.includes(id)) ids.push(id);
+    }
+  }
+  return ids;
 }
 
 /** Business Manager id and the WhatsApp account id are different. Templates live on the WhatsApp account. */
@@ -165,6 +198,7 @@ async function candidateWabaIds(token: string, businessAccountId: string, phoneN
     const id = digitsOnly(String(value ?? ''));
     if (id && !ids.includes(id)) ids.push(id);
   };
+  for (const id of await wabaIdsFromToken(token)) add(id);
   add(businessAccountId);
   const phoneId = digitsOnly(phoneNumberId);
   if (phoneId) {
@@ -207,11 +241,11 @@ export async function fetchNamedTemplates(
   const matches = () =>
     rows.some((row) => String((row as { name?: unknown })?.name ?? '').trim().toLowerCase() === templateName.toLowerCase());
   for (const id of ids) {
-    rows.push(...(await readTemplatePage(token, templateListUrl(id, templateName))));
+    rows.push(...(await readTemplatePages(token, templateListUrl(id, templateName))));
     if (matches()) return { ok: true, rows };
   }
   for (const id of ids) {
-    rows.push(...(await readTemplatePage(token, templateListUrl(id))));
+    rows.push(...(await readTemplatePages(token, templateListUrl(id))));
     if (matches()) break;
   }
   return { ok: true, rows };
