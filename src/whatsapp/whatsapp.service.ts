@@ -37,6 +37,7 @@ import {
 } from './whatsapp-graph';
 import {
   buildAdminTemplateSend,
+  adminBubbleText,
   findAdminWaTemplate,
   resolveAdminTemplate,
   isTemplateLanguageMiss,
@@ -285,7 +286,7 @@ export class WhatsappService implements OnModuleInit {
         phone: row.phone,
         profileName: adminCustomerName(chat.profileName, applicationNames.get(row.phone) || ''),
         lastMessage:
-          last?.text?.trim() ||
+          (last ? adminBubbleText(last.id, last.text).trim() : '') ||
           (last?.waType === 'image' ? 'Photo' : last?.filename || (last?.waType === 'document' ? 'File' : last?.waType) || ''),
         lastChatAt: row.last_chat_at,
         createdAt: row.created_at,
@@ -348,7 +349,7 @@ export class WhatsappService implements OnModuleInit {
       messages: chat.messages.map((item) => ({
         id: item.id,
         role: item.role,
-        text: item.text,
+        text: adminBubbleText(item.id, item.text),
         at: item.at,
         ...(item.sendError ? { sendError: item.sendError } : {}),
         ...(item.sent ? { sent: true } : {}),

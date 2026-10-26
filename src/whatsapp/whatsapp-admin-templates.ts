@@ -197,6 +197,30 @@ export function fallbackAdminTemplate(metaName: string): MetaTemplateDefinition 
   return resolveAdminTemplate(metaName, null);
 }
 
+function nameFromShortTemplate(stored: string): string {
+  const namaste = stored.match(/^Namaste\s+(.+?)\s+ji[,.]?$/i);
+  if (namaste?.[1]) return namaste[1].trim();
+  const dear = stored.match(/^Dear\s+(.+?)\.?$/i);
+  if (dear?.[1]) return dear[1].trim();
+  return '';
+}
+
+/**
+ * Older sends stored only "Namaste {name} ji" because the template wording was not loaded.
+ * The message id still says which template it was, so the admin can see the full text.
+ */
+export function adminBubbleText(messageId: string, storedText: string): string {
+  const stored = String(storedText ?? '');
+  const templateId = /^tpl:([a-z0-9_]+):/i.exec(messageId)?.[1] ?? '';
+  const known = templateId ? knownAdminTemplate(templateId) : null;
+  const body = bodyText(known);
+  const name = nameFromShortTemplate(stored.trim());
+  if (!known || !body || !name) return stored;
+  const filled = fill(body, name).trim();
+  if (stored.trim().length >= filled.length) return stored;
+  return filled;
+}
+
 export function templateLanguageOrder(metaName: string, listed?: string): string[] {
   const preferred = metaName === 'application_kyc' ? ['en_GB', 'en', 'en_US'] : ['en', 'en_US', 'en_GB', 'en_IN'];
   const first = String(listed ?? '').trim();

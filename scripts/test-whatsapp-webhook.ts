@@ -5,7 +5,7 @@
 import assert from 'assert';
 import { createHmac } from 'crypto';
 import { graphMessageBody, isGraphTimeout, plainWhatsappSendError } from '../src/whatsapp/whatsapp-graph';
-import { buildAdminTemplateSend, fallbackAdminTemplate, findAdminWaTemplate, normalizeMetaTemplates, pickApprovedTemplate, templateCanBeSent, templatePersonName } from '../src/whatsapp/whatsapp-admin-templates';
+import { adminBubbleText, buildAdminTemplateSend, fallbackAdminTemplate, findAdminWaTemplate, normalizeMetaTemplates, pickApprovedTemplate, templateCanBeSent, templatePersonName } from '../src/whatsapp/whatsapp-admin-templates';
 import { whatsappHubChallenge, whatsappSignatureOk } from '../src/whatsapp/whatsapp-verify';
 import { adminTargetPhone, canonicalWhatsappPhone, extractDeliveryUpdates, extractInboundMessages, shouldApplyDelivery } from '../src/whatsapp/whatsapp-inbound';
 import { decryptSettingsJson, encryptSettingsJson } from '../src/whatsapp/settings-crypto';
@@ -571,6 +571,10 @@ if (!('error' in rcBody)) {
   assert.ok(rcBody.text.includes('Team'));
 }
 const docsPreview = buildAdminTemplateSend('919352984119', fallbackAdminTemplate('document_pending_reminder'), 'Customer');
+const expanded = adminBubbleText('tpl:vehicle_refinance_kyc:1:ab', 'Namaste fyy ji');
+assert.ok(expanded.includes('Namaste fyy ji,'));
+assert.ok(expanded.includes('3️⃣ Gaadi ki RC'));
+assert.strictEqual(adminBubbleText('tpl:vehicle_purchase_kyc:1:ab', 'Namaste fyy ji'), 'Namaste fyy ji');
 assert.ok(!('error' in docsPreview) && docsPreview.text.includes('documents abhi tak receive nahi hue hain'));
 assert.strictEqual(templatePersonName('  Raju Patel ', 'WhatsApp user'), 'Raju Patel');
 assert.strictEqual(templatePersonName('', 'Gayathri'), 'Gayathri');
