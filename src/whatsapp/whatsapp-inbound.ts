@@ -244,3 +244,54 @@ export function extractInboundMessages(body: unknown): InboundWhatsappMessage[] 
     return !out.some((other) => other.phone === item.phone && other.mediaId);
   });
 }
+
+export type WhatsappDeliveryStatus = 'sent' | 'delivered' | 'read' | 'failed';
+
+export type WhatsappDeliveryUpdate = {
+  phone: string;
+  waMessageId: string;
+  status: WhatsappDeliveryStatus;
+  error?: string;
+};
+
+const DELIVERY_RANK: Record<string, number> = { sent: 1, delivered: 2, read: 3 };
+
+/** A later receipt can move forward. A failure does not wipe a message that already reached the phone. */
+export function shouldApplyDelivery(current: string | undefined, next: string): boolean {
+  if (next === 'failed') return current !== 'delivered' && current !== 'read';
+  return (DELIVERY_RANK[next] ?? 0) > (DELIVERY_RANK[current ?? ''] ?? 0);
+}
+
+/** Meta tells us when a message reached the phone, was read, or failed. */
+export function extractDeliveryUpdates(body: unknown): WhatsappDeliveryUpdate[] {
+  const root = asRecord(body);
+  if (!root) return [];
+  const entries = Array.isArray(root.entry) ? root.entry : [];
+  const out: WhatsappDeliveryUpdate[] = [];
+  for (const entry of entries) {
+    const changes = Array.isArray(asRecord(entry)?.changes) ? (asRecord(entry)?.changes as unknown[]) : [];
+    for (const change of changes) {
+      const value = asRecord(asRecord(change)?.value);
+      const statuses = Array.isArray(value?.statuses) ? value.statuses : [];
+      for (const raw of statuses) {
+        const status = asRecord(raw);
+        const kind = String(status?.status ?? '').toLowerCase();
+        if (kind !== 'sent' && kind !== 'delivered' && kind !== 'read' && kind !== 'failed') continue;
+        const phone = canonicalWhatsappPhone(String(status?.recipient_id ?? ''));
+        const waMessageId = String(status?.id ?? '').trim().slice(0, 200);
+        if (!/^[0-9]{8,15}$/.test(phone) || waMessageId.length < 8) continue;
+        if (kind === 'failed') {
+          const errors = Array.isArray(status?.errors) ? status.errors : [];
+          const first = asRecord(errors[0]);
+          const code = String(first?.code ?? '').trim();
+          const message = String(first?.message ?? first?.title ?? '').trim();
+          const error = [code, message].filter(Boolean).join(': ') || 'WhatsApp could not deliver this message.';
+          out.push({ phone, waMessageId, status: 'failed', error: error.slice(0, 500) });
+          continue;
+        }
+        out.push({ phone, waMessageId, status: kind });
+      }
+    }
+  }
+  return out;
+}

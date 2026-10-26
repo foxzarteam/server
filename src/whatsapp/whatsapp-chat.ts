@@ -33,10 +33,14 @@ export type ChatMessage = {
   sending?: boolean;
   sendingAt?: string;
   sendError?: string;
+  /** WhatsApp receipt: accepted, on the phone, read, or failed. */
+  delivery?: 'sent' | 'delivered' | 'read' | 'failed';
   replyBy?: 'template' | 'admin';
   kind?: 'welcome' | 'personal_loan' | 'insurance' | 'status' | 'admin' | 'thanks' | 'kyc' | 'kyc_docs' | 'under_review' | 'rejected';
   waType?: 'text' | 'interactive' | 'image' | 'document' | 'audio' | 'video';
   mediaId?: string;
+  /** Meta message id, so a later delivery failure can be attached to this bubble. */
+  waMessageId?: string;
   mediaUrl?: string;
   filename?: string;
   mime?: string;
@@ -95,6 +99,7 @@ export type WhatsappEnquiryDetail = {
     text: string;
     at: string;
     sendError?: string;
+    delivery?: 'sent' | 'delivered' | 'read' | 'failed';
     replyBy?: string;
     kind?: string;
     waType?: string;
@@ -201,10 +206,16 @@ export function asChat(raw: unknown): ChatDoc {
       ...(row.sending ? { sending: true } : {}),
       ...(row.sendingAt ? { sendingAt: String(row.sendingAt) } : {}),
       ...(row.sendError ? { sendError: String(row.sendError).slice(0, 500) } : {}),
+      ...(row.delivery === 'sent' || row.delivery === 'delivered' || row.delivery === 'read' || row.delivery === 'failed'
+        ? { delivery: row.delivery }
+        : {}),
       ...(replyBy ? { replyBy } : {}),
       ...(kind ? { kind } : {}),
       ...(waType ? { waType } : {}),
       ...(row.mediaId ? { mediaId: String(row.mediaId).slice(0, 200) } : {}),
+      ...(row.waMessageId && /^[\w.-]{8,200}$/.test(String(row.waMessageId))
+        ? { waMessageId: String(row.waMessageId).slice(0, 200) }
+        : {}),
       ...(row.mediaUrl && /^https:\/\//i.test(String(row.mediaUrl))
         ? { mediaUrl: String(row.mediaUrl).slice(0, 500) }
         : {}),

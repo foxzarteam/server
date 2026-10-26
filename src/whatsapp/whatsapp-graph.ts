@@ -43,6 +43,21 @@ export async function metaErrorText(res: Response): Promise<string> {
   return text.slice(0, 500);
 }
 
+/** Admin-facing reason. Meta accepts a test number and rejects everyone else while the app is not Live. */
+export function plainWhatsappSendError(error?: string): string {
+  const text = String(error ?? '').trim();
+  if (/131030|not in allowed list|allowed list/i.test(text)) {
+    return 'WhatsApp is still in test mode, so only numbers added in Meta can receive messages. Switch the app to Live, or add this customer as a test number.';
+  }
+  if (/131047|re-engagement|more than 24 hours|24 hours/i.test(text)) {
+    return 'This customer has not messaged in the last 24 hours, so WhatsApp blocked the reply. Ask them to send a new message, then reply again.';
+  }
+  if (/131026|undeliverable|not a whatsapp/i.test(text)) {
+    return 'WhatsApp could not deliver this message. Check that the number is on WhatsApp.';
+  }
+  return (text || 'WhatsApp send failed').slice(0, 500);
+}
+
 export function graphMessageBody(phone: string, message: ChatMessage): Record<string, unknown> | null {
   const base = {
     messaging_product: 'whatsapp',
@@ -81,7 +96,7 @@ async function postGraphOnce(
   token: string,
   fromId: string,
   payload: Record<string, unknown>,
-): Promise<{ ok: boolean; error?: string; status?: number }> {
+): Promise<{ ok: boolean; error?: string; status?: number; messageId?: string }> {
   const url = `https://graph.facebook.com/${GRAPH_VERSION}/${encodeURIComponent(fromId)}/messages`;
   try {
     const res = await fetch(url, {
@@ -94,7 +109,14 @@ async function postGraphOnce(
       signal: AbortSignal.timeout(GRAPH_SEND_MS),
     });
     if (!res.ok) return { ok: false, status: res.status, error: await metaErrorText(res) };
-    return { ok: true };
+    let messageId = '';
+    try {
+      const data = (await res.json()) as { messages?: { id?: string }[] };
+      messageId = String(data.messages?.[0]?.id ?? '').trim().slice(0, 200);
+    } catch {
+      messageId = '';
+    }
+    return { ok: true, ...(messageId ? { messageId } : {}) };
   } catch (error) {
     const fail = error instanceof Error ? error.message : 'WhatsApp send failed';
     return { ok: false, error: fail.slice(0, 300) };
@@ -105,7 +127,7 @@ export async function postGraphMessage(
   token: string,
   fromId: string,
   payload: Record<string, unknown>,
-): Promise<{ ok: boolean; error?: string }> {
+): Promise<{ ok: boolean; error?: string; messageId?: string }> {
   let sent = await postGraphOnce(token, fromId, payload);
   for (let attempt = 0; !sent.ok && attempt < GRAPH_RETRY_MS.length; attempt += 1) {
     if (!isRetryableGraphError(sent.error, sent.status)) break;
@@ -113,5 +135,5 @@ export async function postGraphMessage(
     sent = await postGraphOnce(token, fromId, payload);
   }
   if (!sent.ok) console.error('WhatsappService.sendWhatsapp', sent.error);
-  return { ok: sent.ok, error: sent.error };
+  return { ok: sent.ok, error: sent.error, ...(sent.messageId ? { messageId: sent.messageId } : {}) };
 }

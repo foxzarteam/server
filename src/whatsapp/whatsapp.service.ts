@@ -31,9 +31,18 @@ import {
   graphMessageBody,
   graphWaType,
   metaErrorText,
+  plainWhatsappSendError,
   postGraphMessage,
 } from './whatsapp-graph';
-import { adminTargetPhone, canonicalWhatsappPhone, extractInboundMessages, InboundWhatsappMessage } from './whatsapp-inbound';
+import {
+  adminTargetPhone,
+  canonicalWhatsappPhone,
+  extractDeliveryUpdates,
+  extractInboundMessages,
+  InboundWhatsappMessage,
+  shouldApplyDelivery,
+  WhatsappDeliveryUpdate,
+} from './whatsapp-inbound';
 import { kycChatText, kycGraphPayload, KYC_START_BTN, KYC_STATUS_BTN, KYC_TEMPLATE_LANG } from './whatsapp-kyc';
 import { WhatsappSettings, WhatsappSettingsService } from './whatsapp-settings.service';
 import { whatsappSignatureOk } from './whatsapp-verify';
@@ -159,7 +168,26 @@ export class WhatsappService implements OnModuleInit {
 
     const inbound = extractInboundMessages(payload);
     this.dispatchInbound(settings, inbound);
+    const failed = extractDeliveryUpdates(payload);
+    if (failed.length) {
+      void this.applyDeliveryUpdates(failed).catch((error) => {
+        console.error('WhatsappService.applyDeliveryUpdates', error);
+      });
+    }
     return 'ok';
+  }
+
+  /** A message Meta accepted can still fail on the phone. Show that on the same bubble. */
+  private async applyDeliveryUpdates(updates: WhatsappDeliveryUpdate[]): Promise<void> {
+    for (const update of updates) {
+      const phone = canonicalWhatsappPhone(update.phone);
+      await this.waitPersist(phone, async () => {
+        const current = await this.readByPhone(phone);
+        const target = current?.chat.messages.find((item) => item.waMessageId === update.waMessageId);
+        if (!target || !shouldApplyDelivery(target.delivery, update.status)) return;
+        await this.noteDelivery(phone, target.id, update.status, update.error);
+      });
+    }
   }
 
   private dispatchInbound(settings: WhatsappSettings, inbound: InboundWhatsappMessage[]) {
@@ -303,6 +331,7 @@ export class WhatsappService implements OnModuleInit {
         text: item.text,
         at: item.at,
         ...(item.sendError ? { sendError: item.sendError } : {}),
+        ...(item.delivery ? { delivery: item.delivery } : {}),
         ...(item.replyBy ? { replyBy: item.replyBy } : {}),
         ...(item.kind ? { kind: item.kind } : {}),
         ...(item.waType ? { waType: item.waType } : {}),
@@ -789,8 +818,9 @@ export class WhatsappService implements OnModuleInit {
     } else if (!caption) {
       return { ok: false, error: 'Type a message or attach a file.' };
     }
-    await this.storeAndSend(settings, row, row.chat.profileName, message);
+    const sent = await this.storeAndSend(settings, row, row.chat.profileName, message);
     const data = await this.getForAdmin(row.id);
+    if (!sent.ok) return { ok: false, error: sent.error || 'Could not send this message.', ...(data ? { data } : {}) };
     return data ? { ok: true, data } : { ok: false, error: 'Sent, but chat could not be reloaded.' };
   }
 
@@ -829,22 +859,24 @@ export class WhatsappService implements OnModuleInit {
     row: EnquiryRow,
     profileName: string,
     message: ChatMessage,
-  ) {
+  ): Promise<{ ok: boolean; error?: string }> {
     const already = row.chat.messages.some((item) => item.id === message.id);
     if (already) {
       const saved = row.chat.messages.find((item) => item.id === message.id) || message;
       await this.deliver(settings, row.phone, saved);
-      return;
+      return saved.sendError ? { ok: false, error: saved.sendError } : { ok: true };
     }
     const result = await this.sendWhatsapp(settings, row.phone, message, row.chat.waPhoneNumberId);
     if (result.ok) {
       message.sent = true;
     } else if (result.error) {
       message.sendError = result.error;
+      message.delivery = 'failed';
     }
     await this.waitPersist(row.phone, async () => {
       await this.appendMessage(row.phone, profileName, message, row.chat.waPhoneNumberId);
     });
+    return result.ok ? { ok: true } : { ok: false, error: message.sendError || result.error };
   }
 
   /** Only one worker sends a given reply. A stale claim can be taken again after a crash. */
@@ -1159,7 +1191,10 @@ export class WhatsappService implements OnModuleInit {
     waPhoneNumberId = '',
   ): Promise<{ ok: boolean; error?: string }> {
     const token = settings.accessToken.trim().replace(/^bearer\s+/i, '').trim();
-    const fromId = (waPhoneNumberId || settings.phoneNumberId).replace(/\D/g, '');
+    const configured = settings.phoneNumberId.replace(/\D/g, '');
+    const chatFrom = String(waPhoneNumberId || '').replace(/\D/g, '');
+    const fromId = chatFrom.length >= 15 ? chatFrom : configured;
+    const to = canonicalWhatsappPhone(phone);
     if (!token || !fromId) {
       const error = !token
         ? 'WhatsApp access token is missing in Settings.'
@@ -1167,13 +1202,18 @@ export class WhatsappService implements OnModuleInit {
       console.error('WhatsappService.sendWhatsapp', error);
       return { ok: false, error };
     }
+    if (!/^[1-9][0-9]{7,14}$/.test(to)) {
+      return { ok: false, error: 'This chat does not have a valid WhatsApp number.' };
+    }
     const needsImage =
       message.waType === 'image' || message.kind === 'personal_loan' || message.kind === 'insurance';
     const outbound = needsImage ? this.withTemplateImage(settings, fromId, message) : message;
-    const payload = graphMessageBody(phone, outbound);
+    const payload = graphMessageBody(to, outbound);
     if (!payload) return { ok: false, error: 'Nothing to send.' };
     const sent = await postGraphMessage(token, fromId, payload);
     if (sent.ok) {
+      message.delivery = 'sent';
+      if (sent.messageId) message.waMessageId = sent.messageId;
       if (outbound.mediaId) message.mediaId = outbound.mediaId;
       if (outbound.waType) message.waType = outbound.waType;
       if (outbound.filename) message.filename = outbound.filename;
@@ -1181,10 +1221,12 @@ export class WhatsappService implements OnModuleInit {
       return { ok: true };
     }
     if (message.kind === 'personal_loan' || message.kind === 'insurance') {
-      const textPayload = graphMessageBody(phone, { ...message, waType: 'text' });
+      const textPayload = graphMessageBody(to, { ...message, waType: 'text' });
       if (textPayload) {
         const textSent = await postGraphMessage(token, fromId, textPayload);
         if (textSent.ok) {
+          message.delivery = 'sent';
+          if (textSent.messageId) message.waMessageId = textSent.messageId;
           message.waType = 'text';
           delete message.mediaId;
           delete message.mediaUrl;
@@ -1194,7 +1236,7 @@ export class WhatsappService implements OnModuleInit {
         }
       }
     }
-    return sent;
+    return { ok: false, error: plainWhatsappSendError(sent.error) };
   }
 
   private cachedMediaId(fromId: string, fileName: string): string {
@@ -1476,13 +1518,45 @@ export class WhatsappService implements OnModuleInit {
     );
   }
 
+  private noteDelivery(
+    phone: string,
+    messageId: string,
+    status: 'sent' | 'delivered' | 'read' | 'failed',
+    error?: string,
+  ) {
+    const sendError = status === 'failed' ? plainWhatsappSendError(error).slice(0, 500) : '';
+    return this.patchMessage(
+      phone,
+      messageId,
+      (message) => {
+        if (status === 'failed') {
+          const next = { ...message, delivery: status, sendError, sent: false };
+          delete next.sending;
+          delete next.sendingAt;
+          return next;
+        }
+        const next = { ...message, delivery: status, sent: true };
+        delete next.sendError;
+        delete next.sending;
+        delete next.sendingAt;
+        return next;
+      },
+      (message) => shouldApplyDelivery(message.delivery, status),
+    );
+  }
+
   private noteSendError(phone: string, messageId: string, error: string) {
     const sendError = error.slice(0, 500);
     return this.patchMessage(
       phone,
       messageId,
-      (message) => ({ ...message, sendError }),
-      (message) => !message.sent,
+      (message) => {
+        const next = { ...message, sendError, sent: false };
+        delete next.sending;
+        delete next.sendingAt;
+        return next;
+      },
+      (message) => message.sent !== false || message.sendError !== sendError,
     );
   }
 

@@ -4,9 +4,9 @@
  */
 import assert from 'assert';
 import { createHmac } from 'crypto';
-import { graphMessageBody, isGraphTimeout } from '../src/whatsapp/whatsapp-graph';
+import { graphMessageBody, isGraphTimeout, plainWhatsappSendError } from '../src/whatsapp/whatsapp-graph';
 import { whatsappHubChallenge, whatsappSignatureOk } from '../src/whatsapp/whatsapp-verify';
-import { adminTargetPhone, canonicalWhatsappPhone, extractInboundMessages } from '../src/whatsapp/whatsapp-inbound';
+import { adminTargetPhone, canonicalWhatsappPhone, extractDeliveryUpdates, extractInboundMessages, shouldApplyDelivery } from '../src/whatsapp/whatsapp-inbound';
 import { decryptSettingsJson, encryptSettingsJson } from '../src/whatsapp/settings-crypto';
 import { adminCustomerName, asChat, unreadCustomerCount } from '../src/whatsapp/whatsapp-chat';
 import { kycBodyName, kycChatText, kycGraphPayload, kycProductName, KYC_START_BTN, KYC_TEMPLATE, KYC_TEMPLATE_LANG } from '../src/whatsapp/whatsapp-kyc';
@@ -115,6 +115,34 @@ assert.strictEqual(inbound[0].buttonId, '');
 assert.strictEqual(inbound[0].profileName, 'Riya');
 assert.strictEqual(inbound[0].phoneNumberId, '');
 assert.deepStrictEqual(extractInboundMessages({ object: 'whatsapp_business_account', entry: [{ changes: [{ value: { statuses: [{ id: '1' }] } }] }] }), []);
+assert.deepStrictEqual(
+  extractDeliveryUpdates({
+    entry: [{
+      changes: [{
+        value: {
+          statuses: [{
+            id: 'wamid.HBgMOTE5MzUyOTg0MTE5',
+            status: 'failed',
+            recipient_id: '919999999999',
+            errors: [{ code: 131030, title: 'Recipient not in allowed list' }],
+          }],
+        },
+      }],
+    }],
+  }),
+  [{
+    phone: '919999999999',
+    waMessageId: 'wamid.HBgMOTE5MzUyOTg0MTE5',
+    status: 'failed',
+    error: '131030: Recipient not in allowed list',
+  }],
+);
+assert.strictEqual(shouldApplyDelivery('sent', 'delivered'), true);
+assert.strictEqual(shouldApplyDelivery('delivered', 'sent'), false);
+assert.strictEqual(shouldApplyDelivery('delivered', 'failed'), false);
+assert.strictEqual(shouldApplyDelivery('sent', 'failed'), true);
+assert.ok(/test mode/i.test(plainWhatsappSendError('131030: Recipient phone number not in allowed list')));
+assert.ok(/24 hours/i.test(plainWhatsappSendError('131047: Re-engagement message')));
 
 const sealed = encryptSettingsJson({ accessToken: 'secret-token' });
 assert.notStrictEqual(sealed, 'secret-token');
