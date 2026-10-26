@@ -37,8 +37,8 @@ import {
 } from './whatsapp-graph';
 import {
   buildAdminTemplateSend,
-  fallbackAdminTemplate,
   findAdminWaTemplate,
+  resolveAdminTemplate,
   isTemplateLanguageMiss,
   normalizeMetaTemplates,
   pickApprovedTemplate,
@@ -965,9 +965,12 @@ export class WhatsappService implements OnModuleInit {
     const cached = this.adminTemplateCache.get(metaName);
     if (cached && cached.until > Date.now()) return cached.template;
     const listed = await fetchNamedTemplates(token, businessAccountId, metaName, phoneNumberId);
-    const template = listed.ok ? pickApprovedTemplate(normalizeMetaTemplates(listed.rows), metaName) : null;
-    if (!template) return fallbackAdminTemplate(metaName);
-    this.adminTemplateCache.set(metaName, { until: Date.now() + 10 * 60 * 1000, template });
+    const fetched = listed.ok ? pickApprovedTemplate(normalizeMetaTemplates(listed.rows), metaName) : null;
+    const template = resolveAdminTemplate(metaName, fetched);
+    const savedBody = template.components?.find((item) => String(item.type ?? '').toUpperCase() === 'BODY')?.text ?? '';
+    if (savedBody.includes('\n') || savedBody.length > 80) {
+      this.adminTemplateCache.set(metaName, { until: Date.now() + 10 * 60 * 1000, template });
+    }
     return template;
   }
 

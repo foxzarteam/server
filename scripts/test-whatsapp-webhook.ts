@@ -562,6 +562,16 @@ const active = pickApprovedTemplate(
 assert.strictEqual(active?.language, 'en');
 assert.strictEqual(fallbackAdminTemplate('application_kyc').language, 'en_GB');
 assert.strictEqual(fallbackAdminTemplate('vehicle_purchase_kyc').language, 'en');
+const rcPreview = fallbackAdminTemplate('vehicle_refinance_kyc');
+const rcBody = buildAdminTemplateSend('919352984119', rcPreview, 'Golu');
+assert.ok(!('error' in rcBody));
+if (!('error' in rcBody)) {
+  assert.ok(rcBody.text.includes('Namaste Golu ji,'));
+  assert.ok(rcBody.text.includes('3️⃣ Gaadi ki RC'));
+  assert.ok(rcBody.text.includes('Team'));
+}
+const docsPreview = buildAdminTemplateSend('919352984119', fallbackAdminTemplate('document_pending_reminder'), 'Customer');
+assert.ok(!('error' in docsPreview) && docsPreview.text.includes('documents abhi tak receive nahi hue hain'));
 assert.strictEqual(templatePersonName('  Raju Patel ', 'WhatsApp user'), 'Raju Patel');
 assert.strictEqual(templatePersonName('', 'Gayathri'), 'Gayathri');
 assert.strictEqual(templatePersonName('Customer', 'Mikhail'), 'Mikhail');
