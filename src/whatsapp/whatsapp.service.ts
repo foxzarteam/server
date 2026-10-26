@@ -37,8 +37,12 @@ import {
 } from './whatsapp-graph';
 import {
   buildAdminTemplateSend,
+  fallbackAdminTemplate,
   findAdminWaTemplate,
+  isTemplateLanguageMiss,
+  normalizeMetaTemplates,
   pickApprovedTemplate,
+  templateLanguageOrder,
   type MetaTemplateDefinition,
 } from './whatsapp-admin-templates';
 import {
@@ -875,16 +879,19 @@ export class WhatsappService implements OnModuleInit {
     if (!/^[1-9][0-9]{7,14}$/.test(to)) {
       return { ok: false, error: 'This chat does not have a valid WhatsApp number.' };
     }
-    if (!settings.businessAccountId) {
-      return { ok: false, error: 'WhatsApp business account ID is missing in Settings.' };
-    }
-
     const template = await this.approvedAdminTemplate(token, settings.businessAccountId, option.metaName);
-    if (!template.ok) return { ok: false, error: template.error };
-
     const who = await this.templateCustomerName(row.phone, row.chat.profileName);
-    const built = buildAdminTemplateSend(to, template.template, who);
-    if ('error' in built) return { ok: false, error: built.error };
+    const languages = templateLanguageOrder(option.metaName, template.language);
+    let built: { text: string; buttons: string[] } | null = null;
+    let sent: { ok: boolean; error?: string; messageId?: string } = { ok: false, error: 'Could not send this template.' };
+    for (const language of languages) {
+      const attempt = buildAdminTemplateSend(to, { ...template, language }, who);
+      if ('error' in attempt) return { ok: false, error: attempt.error };
+      sent = await postGraphMessage(token, fromId, attempt.payload);
+      built = attempt;
+      if (sent.ok || !isTemplateLanguageMiss(sent.error)) break;
+    }
+    if (!built) return { ok: false, error: sent.error || 'Could not send this template.' };
 
     const message: ChatMessage = {
       id: `tpl:${option.id}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`,
@@ -896,7 +903,6 @@ export class WhatsappService implements OnModuleInit {
       waType: 'text',
       ...(built.buttons.length ? { buttons: built.buttons } : {}),
     };
-    const sent = await postGraphMessage(token, fromId, built.payload);
     if (sent.ok) {
       message.sent = true;
       message.delivery = 'sent';
@@ -925,17 +931,18 @@ export class WhatsappService implements OnModuleInit {
     token: string,
     businessAccountId: string,
     metaName: string,
-  ): Promise<{ ok: true; template: MetaTemplateDefinition } | { ok: false; error: string }> {
+  ): Promise<MetaTemplateDefinition> {
     const cached = this.adminTemplateCache.get(metaName);
-    if (cached && cached.until > Date.now()) return { ok: true, template: cached.template };
-    const listed = await fetchNamedTemplates(token, businessAccountId, metaName);
-    if (!listed.ok) return { ok: false, error: plainWhatsappSendError(listed.error) };
-    const template = pickApprovedTemplate(listed.rows as MetaTemplateDefinition[], metaName);
-    if (!template) {
-      return { ok: false, error: 'This template is not approved on WhatsApp yet.' };
-    }
+    if (cached && cached.until > Date.now()) return cached.template;
+    const listed = businessAccountId
+      ? await fetchNamedTemplates(token, businessAccountId, metaName)
+      : { ok: false as const, error: '' };
+    const template = listed.ok
+      ? pickApprovedTemplate(normalizeMetaTemplates(listed.rows), metaName)
+      : null;
+    if (!template) return fallbackAdminTemplate(metaName);
     this.adminTemplateCache.set(metaName, { until: Date.now() + 10 * 60 * 1000, template });
-    return { ok: true, template };
+    return template;
   }
 
   private async getRowById(id: string): Promise<EnquiryRow | null> {

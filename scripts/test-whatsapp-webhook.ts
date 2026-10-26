@@ -5,7 +5,7 @@
 import assert from 'assert';
 import { createHmac } from 'crypto';
 import { graphMessageBody, isGraphTimeout, plainWhatsappSendError } from '../src/whatsapp/whatsapp-graph';
-import { buildAdminTemplateSend, findAdminWaTemplate, pickApprovedTemplate } from '../src/whatsapp/whatsapp-admin-templates';
+import { buildAdminTemplateSend, fallbackAdminTemplate, findAdminWaTemplate, normalizeMetaTemplates, pickApprovedTemplate, templateCanBeSent } from '../src/whatsapp/whatsapp-admin-templates';
 import { whatsappHubChallenge, whatsappSignatureOk } from '../src/whatsapp/whatsapp-verify';
 import { adminTargetPhone, canonicalWhatsappPhone, extractDeliveryUpdates, extractInboundMessages, shouldApplyDelivery } from '../src/whatsapp/whatsapp-inbound';
 import { decryptSettingsJson, encryptSettingsJson } from '../src/whatsapp/settings-crypto';
@@ -551,7 +551,17 @@ const approved = pickApprovedTemplate(
   ],
   'personal_loan_kyc',
 );
-assert.strictEqual(approved?.language, 'en_GB');
+assert.strictEqual(approved?.language, 'en');
+assert.strictEqual(templateCanBeSent('ACTIVE'), true);
+assert.strictEqual(templateCanBeSent(''), true);
+assert.strictEqual(templateCanBeSent('PENDING'), false);
+const active = pickApprovedTemplate(
+  normalizeMetaTemplates([{ name: 'vehicle_purchase_kyc', status: 'ACTIVE', language: { code: 'en' }, components: [] }]),
+  'vehicle_purchase_kyc',
+);
+assert.strictEqual(active?.language, 'en');
+assert.strictEqual(fallbackAdminTemplate('application_kyc').language, 'en_GB');
+assert.strictEqual(fallbackAdminTemplate('vehicle_purchase_kyc').language, 'en');
 const built = buildAdminTemplateSend(
   '919876543210',
   {

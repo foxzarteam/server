@@ -24,25 +24,105 @@ export type MetaTemplateDefinition = {
   components?: MetaTemplateComponent[];
 };
 
-const LANG_PREFER = ['en_GB', 'en', 'en_US', 'en_IN'];
+const LANG_PREFER = ['en', 'en_GB', 'en_US', 'en_IN'];
+const BLOCKED_TEMPLATE_STATUS = new Set([
+  'PENDING',
+  'REJECTED',
+  'DISABLED',
+  'PAUSED',
+  'PENDING_DELETION',
+  'DELETED',
+  'IN_APPEAL',
+]);
 
 export function findAdminWaTemplate(id: string) {
   const key = id.trim();
   return ADMIN_WA_TEMPLATES.find((item) => item.id === key) ?? null;
 }
 
+function templateLanguage(raw: unknown): string {
+  if (typeof raw === 'string') return raw.trim();
+  if (raw && typeof raw === 'object' && 'code' in raw) return String((raw as { code?: unknown }).code ?? '').trim();
+  return '';
+}
+
+/** Manager shows these as Active. The list API sometimes omits status or says ACTIVE instead of APPROVED. */
+export function templateCanBeSent(status: string | undefined): boolean {
+  const value = String(status ?? '').trim().toUpperCase();
+  if (!value || value === 'APPROVED' || value === 'ACTIVE' || value.startsWith('ACTIVE')) return true;
+  return !BLOCKED_TEMPLATE_STATUS.has(value);
+}
+
+export function normalizeMetaTemplates(rows: unknown[]): MetaTemplateDefinition[] {
+  const out: MetaTemplateDefinition[] = [];
+  for (const raw of rows) {
+    if (!raw || typeof raw !== 'object') continue;
+    const row = raw as Record<string, unknown>;
+    const name = String(row.name ?? '').trim();
+    if (!name) continue;
+    out.push({
+      name,
+      status: String(row.status ?? '').trim(),
+      language: templateLanguage(row.language),
+      components: Array.isArray(row.components) ? (row.components as MetaTemplateComponent[]) : [],
+    });
+  }
+  return out;
+}
+
 export function pickApprovedTemplate(
   rows: MetaTemplateDefinition[],
   metaName: string,
 ): MetaTemplateDefinition | null {
+  const want = metaName.trim().toLowerCase();
   const approved = rows.filter(
-    (row) => row.name === metaName && String(row.status ?? '').toUpperCase() === 'APPROVED',
+    (row) => (row.name ?? '').trim().toLowerCase() === want && templateCanBeSent(row.status),
   );
   for (const code of LANG_PREFER) {
     const hit = approved.find((row) => row.language === code);
     if (hit) return hit;
   }
   return approved[0] ?? null;
+}
+
+/** Used when the template list does not come back. Sending still uses the approved name. */
+export function fallbackAdminTemplate(metaName: string): MetaTemplateDefinition {
+  if (metaName === 'application_kyc') {
+    return {
+      name: metaName,
+      status: 'APPROVED',
+      language: 'en_GB',
+      components: [
+        {
+          type: 'BODY',
+          text: 'Dear {{1}}. Your account application is in progress. KYC verification is pending. Complete it in just 2 mins',
+        },
+        {
+          type: 'BUTTONS',
+          buttons: [
+            { type: 'QUICK_REPLY', text: 'Complete KYC' },
+            { type: 'QUICK_REPLY', text: 'Check Application Status' },
+          ],
+        },
+      ],
+    };
+  }
+  return {
+    name: metaName,
+    status: 'APPROVED',
+    language: 'en',
+    components: [{ type: 'BODY', text: 'Namaste {{1}} ji' }],
+  };
+}
+
+export function templateLanguageOrder(metaName: string, listed?: string): string[] {
+  const preferred = metaName === 'application_kyc' ? ['en_GB', 'en', 'en_US'] : ['en', 'en_US', 'en_GB', 'en_IN'];
+  const first = String(listed ?? '').trim();
+  return [...new Set(first ? [first, ...preferred] : preferred)];
+}
+
+export function isTemplateLanguageMiss(error?: string): boolean {
+  return /132001|does not exist in the translation|template name .* does not exist/i.test(error || '');
 }
 
 function placeholderCount(text: string): number | null {
