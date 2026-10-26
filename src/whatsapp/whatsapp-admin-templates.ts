@@ -10,9 +10,14 @@ export const ADMIN_WA_TEMPLATES = [
 
 export type AdminWaTemplateId = (typeof ADMIN_WA_TEMPLATES)[number]['id'];
 
-/** Meta template node id. The account list in Settings does not contain these templates. */
-const TEMPLATE_META_IDS: Partial<Record<AdminWaTemplateId, string>> = {
+/** Meta template node id. Message text is read from this id, not stored in code. */
+const TEMPLATE_META_IDS: Record<AdminWaTemplateId, string> = {
+  application_kyc: '2014497809484610',
+  vehicle_refinance_kyc: '1701000475154093',
   vehicle_purchase_kyc: '2020701738620974',
+  personal_loan_kyc: '29218275084524752',
+  document_pending_reminder: '2268054780795382',
+  call_not_answered_followup: '1429874262035888',
 };
 
 export function templateMetaId(metaName: string): string {
@@ -106,136 +111,6 @@ export function pickApprovedTemplate(
   return approved[0] ?? null;
 }
 
-function bodyText(template: MetaTemplateDefinition | null | undefined): string {
-  const body = template?.components?.find((item) => String(item.type ?? '').toUpperCase() === 'BODY');
-  return String(body?.text ?? '');
-}
-
-/** Same wording the customer sees. Used when Meta's template list does not return the body. */
-const KNOWN_TEMPLATE_BODIES: Record<string, { language: string; text: string; buttons?: MetaTemplateButton[] }> = {
-  application_kyc: {
-    language: 'en_GB',
-    text: 'Dear {{1}}. Your account application is in progress. KYC verification is pending. Complete it in just 2 mins',
-    buttons: [
-      { type: 'QUICK_REPLY', text: 'Complete KYC' },
-      { type: 'QUICK_REPLY', text: 'Check Application Status' },
-    ],
-  },
-  document_pending_reminder: {
-    language: 'en',
-    text: [
-      'Namaste {{1}} ji,',
-      '',
-      'Hamari aapke loan ke silsile mein baat hui thi par aapke documents abhi tak receive nahi hue hain.',
-      '',
-      'Apna KYC documents yahin bhej dein taaki hum aapki file process karwa sakein.',
-      '',
-      'Team Apni Zaroorat',
-    ].join('\n'),
-  },
-  vehicle_refinance_kyc: {
-    language: 'en',
-    text: [
-      'Namaste {{1}} ji,',
-      '',
-      'Aapke Vehicle Loan ka KYC verification complete karne ke liye, kripya in 3 documents ki photo yahin bhej dijiye:',
-      '',
-      '1️⃣ Aadhaar Card (Front aur Back)',
-      '2️⃣ PAN Card',
-      '3️⃣ Gaadi ki RC',
-      '',
-      'Documents milte hi hum aage ka process start kar denge.',
-      '',
-      'Team',
-      'Apni Zaroorat',
-    ].join('\n'),
-  },
-  vehicle_purchase_kyc: {
-    language: 'en',
-    text: [
-      'Namaste {{1}} ji,',
-      '',
-      'Aapki  loan ka KYC verification complete karne ke liye, kripya niche diye gaye documents yahin bhej dijiye:',
-      '',
-      '1️⃣ Aadhaar Card aur PAN Card',
-      '2️⃣ Gaadi ka Quotation ',
-      '3️⃣ 6 Mahine ka Bank Statement',
-      '4️⃣ 3 Mahine ki Salary Slip ya ITR',
-      '',
-      'Documents milte hi hum process aage badha denge.',
-      '',
-      'Team ',
-      'Apni Zaroorat',
-    ].join('\n'),
-  },
-  call_not_answered_followup: {
-    language: 'en',
-    text: [
-      'Namaste {{1}} ji,',
-      '',
-      'Aapke loan application ke silsile mein hamari team ne aapko call kiya tha, par aapse baat nahi ho payi.',
-      '',
-      'Kripya is message par reply karein ya jab bhi free hon humein call karein taaki hum aapka KYC process complete karwa sakein.',
-      '',
-      'Team Apni Zaroorat',
-    ].join('\n'),
-  },
-  personal_loan_kyc: {
-    language: 'en',
-    text: [
-      'Namaste {{1}} ji,',
-      '',
-      'Aapke Personal Loan ka KYC verification complete karne ke liye, apne basic documents yahin share karein:',
-      '',
-      '🪪 Aadhaar Card (Front aur Back)',
-      '💳 PAN Card',
-      '📄 3 Mahine ki Salary Slip',
-      '🏦 6 Mahine ka Bank Statement (PDF)',
-      '',
-      'Documents aate hi hum KYC verification shuru kar denge.',
-      '',
-      'Team Apni Zaroorat',
-    ].join('\n'),
-  },
-};
-
-function knownAdminTemplate(metaName: string): MetaTemplateDefinition | null {
-  const known = KNOWN_TEMPLATE_BODIES[metaName];
-  if (!known) return null;
-  return {
-    name: metaName,
-    status: 'APPROVED',
-    language: known.language,
-    components: [
-      { type: 'BODY', text: known.text },
-      ...(known.buttons?.length ? [{ type: 'BUTTONS', buttons: known.buttons }] : []),
-    ],
-  };
-}
-
-/** Prefer Meta's own wording when it is the full message. Otherwise use the saved full text, not only the first line. */
-export function resolveAdminTemplate(
-  metaName: string,
-  fetched: MetaTemplateDefinition | null,
-): MetaTemplateDefinition {
-  const known = knownAdminTemplate(metaName);
-  const fetchedBody = bodyText(fetched).trim();
-  const knownBody = bodyText(known).trim();
-  if (fetched && fetchedBody.length >= knownBody.length && fetchedBody.length > 0) return fetched;
-  if (known) return { ...known, language: fetched?.language || known.language };
-  return {
-    name: metaName,
-    status: 'APPROVED',
-    language: metaName === 'application_kyc' ? 'en_GB' : 'en',
-    components: [{ type: 'BODY', text: 'Namaste {{1}} ji' }],
-  };
-}
-
-/** Used when the template list does not come back. Sending still uses the approved name. */
-export function fallbackAdminTemplate(metaName: string): MetaTemplateDefinition {
-  return resolveAdminTemplate(metaName, null);
-}
-
 function nameFromShortTemplate(stored: string): string {
   const namaste = stored.match(/^Namaste\s+(.+?)\s+ji[,.]?$/i);
   if (namaste?.[1]) return namaste[1].trim();
@@ -244,20 +119,27 @@ function nameFromShortTemplate(stored: string): string {
   return '';
 }
 
-/**
- * Older sends stored only "Namaste {name} ji" because the template wording was not loaded.
- * The message id still says which template it was, so the admin can see the full text.
- */
-export function adminBubbleText(messageId: string, storedText: string): string {
-  const stored = String(storedText ?? '');
+/** Template name when this bubble is only the old one-line greeting and Meta can fill the rest. */
+export function liveTemplateKey(messageId: string, storedText: string): string {
   const templateId = /^tpl:([a-z0-9_]+):/i.exec(messageId)?.[1] ?? '';
-  const known = templateId ? knownAdminTemplate(templateId) : null;
-  const body = bodyText(known);
+  if (!templateId || !templateMetaId(templateId) || !nameFromShortTemplate(String(storedText ?? '').trim())) return '';
+  return templateId;
+}
+
+/** Fill a short saved greeting with the body Meta returned for that template. */
+export function adminBubbleText(
+  messageId: string,
+  storedText: string,
+  template: MetaTemplateDefinition | null,
+): string {
+  const stored = String(storedText ?? '');
+  const templateId = liveTemplateKey(messageId, stored);
+  if (!templateId || !template || (template.name ?? '').trim() !== templateId) return stored;
   const name = nameFromShortTemplate(stored.trim());
-  if (!known || !body || !name) return stored;
-  const filled = fill(body, name).trim();
-  if (stored.trim().length >= filled.length) return stored;
-  return filled;
+  if (!name) return stored;
+  const built = buildAdminTemplateSend('1000000000', template, name);
+  if ('error' in built || stored.trim().length >= built.text.length) return stored;
+  return built.text;
 }
 
 export function templateLanguageOrder(metaName: string, listed?: string): string[] {

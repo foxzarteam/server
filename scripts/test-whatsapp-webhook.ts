@@ -5,7 +5,7 @@
 import assert from 'assert';
 import { createHmac } from 'crypto';
 import { graphMessageBody, isGraphTimeout, plainWhatsappSendError } from '../src/whatsapp/whatsapp-graph';
-import { adminBubbleText, buildAdminTemplateSend, fallbackAdminTemplate, findAdminWaTemplate, normalizeMetaTemplates, pickApprovedTemplate, templateCanBeSent, templatePersonName } from '../src/whatsapp/whatsapp-admin-templates';
+import { adminBubbleText, buildAdminTemplateSend, findAdminWaTemplate, liveTemplateKey, normalizeMetaTemplates, pickApprovedTemplate, templateCanBeSent, templateMetaId, templatePersonName } from '../src/whatsapp/whatsapp-admin-templates';
 import { whatsappHubChallenge, whatsappSignatureOk } from '../src/whatsapp/whatsapp-verify';
 import { adminTargetPhone, canonicalWhatsappPhone, extractDeliveryUpdates, extractInboundMessages, shouldApplyDelivery } from '../src/whatsapp/whatsapp-inbound';
 import { decryptSettingsJson, encryptSettingsJson } from '../src/whatsapp/settings-crypto';
@@ -560,26 +560,19 @@ const active = pickApprovedTemplate(
   'vehicle_purchase_kyc',
 );
 assert.strictEqual(active?.language, 'en');
-assert.strictEqual(fallbackAdminTemplate('application_kyc').language, 'en_GB');
-assert.strictEqual(fallbackAdminTemplate('vehicle_purchase_kyc').language, 'en');
-const rcPreview = fallbackAdminTemplate('vehicle_refinance_kyc');
-const rcBody = buildAdminTemplateSend('919352984119', rcPreview, 'Golu');
-assert.ok(!('error' in rcBody));
-if (!('error' in rcBody)) {
-  assert.ok(rcBody.text.includes('Namaste Golu ji,'));
-  assert.ok(rcBody.text.includes('3️⃣ Gaadi ki RC'));
-  assert.ok(rcBody.text.includes('Team'));
-}
-const docsPreview = buildAdminTemplateSend('919352984119', fallbackAdminTemplate('document_pending_reminder'), 'Customer');
-const expanded = adminBubbleText('tpl:vehicle_refinance_kyc:1:ab', 'Namaste fyy ji');
+assert.strictEqual(templateMetaId('application_kyc'), '2014497809484610');
+assert.strictEqual(templateMetaId('vehicle_purchase_kyc'), '2020701738620974');
+assert.strictEqual(templateMetaId('call_not_answered_followup'), '1429874262035888');
+assert.strictEqual(liveTemplateKey('tpl:vehicle_refinance_kyc:1:ab', 'Namaste fyy ji'), 'vehicle_refinance_kyc');
+assert.strictEqual(liveTemplateKey('tpl:vehicle_refinance_kyc:1:ab', 'Namaste fyy ji,\n\nfull'), '');
+const expanded = adminBubbleText('tpl:vehicle_refinance_kyc:1:ab', 'Namaste fyy ji', {
+  name: 'vehicle_refinance_kyc',
+  language: 'en',
+  components: [{ type: 'BODY', text: 'Namaste {{1}} ji,\n\nSecond line from Meta' }],
+});
 assert.ok(expanded.includes('Namaste fyy ji,'));
-assert.ok(expanded.includes('3️⃣ Gaadi ki RC'));
-const purchase = adminBubbleText('tpl:vehicle_purchase_kyc:1:ab', 'Namaste fyy ji');
-assert.ok(purchase.includes('2️⃣ Gaadi ka Quotation'));
-const missedCall = adminBubbleText('tpl:call_not_answered_followup:1:ab', 'Namaste samu ji');
-assert.ok(missedCall.includes('Namaste samu ji,'));
-assert.ok(missedCall.includes('aapse baat nahi ho payi'));
-assert.ok(!('error' in docsPreview) && docsPreview.text.includes('documents abhi tak receive nahi hue hain'));
+assert.ok(expanded.includes('Second line from Meta'));
+assert.strictEqual(adminBubbleText('tpl:vehicle_refinance_kyc:1:ab', 'Namaste fyy ji', null), 'Namaste fyy ji');
 assert.strictEqual(templatePersonName('  Raju Patel ', 'WhatsApp user'), 'Raju Patel');
 assert.strictEqual(templatePersonName('', 'Gayathri'), 'Gayathri');
 assert.strictEqual(templatePersonName('Customer', 'Mikhail'), 'Mikhail');

@@ -30,7 +30,6 @@ import {
   GRAPH_VERSION,
   graphMessageBody,
   graphWaType,
-  fetchNamedTemplates,
   fetchTemplateById,
   metaErrorText,
   plainWhatsappSendError,
@@ -40,7 +39,7 @@ import {
   buildAdminTemplateSend,
   adminBubbleText,
   findAdminWaTemplate,
-  resolveAdminTemplate,
+  liveTemplateKey,
   isTemplateLanguageMiss,
   normalizeMetaTemplates,
   pickApprovedTemplate,
@@ -276,19 +275,20 @@ export class WhatsappService implements OnModuleInit {
 
     const rows = (data as EnquiryRow[]) ?? [];
     const applicationNames = await this.applicationNames(rows.map((row) => row.phone));
+    const opened = rows.map((row) => ({ row, chat: asChat(row.chat) }));
+    const templates = await this.liveTemplates(opened.map((item) => item.chat.messages.at(-1)).filter((item) => item != null));
     return {
       total: count ?? rows.length,
       page: safePage,
       pageSize,
-      rows: rows.map((row) => {
-      const chat = asChat(row.chat);
+      rows: opened.map(({ row, chat }) => {
       const last = chat.messages[chat.messages.length - 1];
       return {
         id: row.id,
         phone: row.phone,
         profileName: adminCustomerName(chat.profileName, applicationNames.get(row.phone) || ''),
         lastMessage:
-          (last ? adminBubbleText(last.id, last.text).trim() : '') ||
+          (last ? adminBubbleText(last.id, last.text, templates.get(liveTemplateKey(last.id, last.text)) ?? null).trim() : '') ||
           (last?.waType === 'image' ? 'Photo' : last?.filename || (last?.waType === 'document' ? 'File' : last?.waType) || ''),
         lastChatAt: row.last_chat_at,
         createdAt: row.created_at,
@@ -341,6 +341,7 @@ export class WhatsappService implements OnModuleInit {
     const row = data as EnquiryRow;
     const chat = asChat(row.chat);
     const applicationNames = await this.applicationNames([row.phone]);
+    const templates = await this.liveTemplates(chat.messages);
     void this.markAdminRead(row.id);
     return {
       id: row.id,
@@ -351,7 +352,7 @@ export class WhatsappService implements OnModuleInit {
       messages: chat.messages.map((item) => ({
         id: item.id,
         role: item.role,
-        text: adminBubbleText(item.id, item.text),
+        text: adminBubbleText(item.id, item.text, templates.get(liveTemplateKey(item.id, item.text)) ?? null),
         at: item.at,
         ...(item.sendError ? { sendError: item.sendError } : {}),
         ...(item.sent ? { sent: true } : {}),
@@ -911,7 +912,8 @@ export class WhatsappService implements OnModuleInit {
     if (!/^[1-9][0-9]{7,14}$/.test(to)) {
       return { ok: false, error: 'This chat does not have a valid WhatsApp number.' };
     }
-    const template = await this.approvedAdminTemplate(token, settings.businessAccountId, option.metaName, fromId);
+    const template = await this.approvedAdminTemplate(token, option.metaName);
+    if (!template) return { ok: false, error: 'WhatsApp did not return this template text. Try again.' };
     const languages = templateLanguageOrder(option.metaName, template.language);
     let built: { text: string; buttons: string[] } | null = null;
     let sent: { ok: boolean; error?: string; messageId?: string } = { ok: false, error: 'Could not send this template.' };
@@ -959,25 +961,30 @@ export class WhatsappService implements OnModuleInit {
     return {};
   }
 
-  private async approvedAdminTemplate(
-    token: string,
-    businessAccountId: string,
-    metaName: string,
-    phoneNumberId: string,
-  ): Promise<MetaTemplateDefinition> {
+  private async liveTemplates(
+    messages: { id: string; text: string }[],
+  ): Promise<Map<string, MetaTemplateDefinition>> {
+    const names = [...new Set(messages.map((item) => liveTemplateKey(item.id, item.text)).filter(Boolean))];
+    const found = new Map<string, MetaTemplateDefinition>();
+    if (!names.length) return found;
+    const settings = await this.settings.getEffective();
+    const token = settings.accessToken.trim().replace(/^bearer\s+/i, '').trim();
+    if (!token) return found;
+    for (const name of names) {
+      const template = await this.approvedAdminTemplate(token, name);
+      if (template) found.set(name, template);
+    }
+    return found;
+  }
+
+  private async approvedAdminTemplate(token: string, metaName: string): Promise<MetaTemplateDefinition | null> {
     const cached = this.adminTemplateCache.get(metaName);
     if (cached && cached.until > Date.now()) return cached.template;
-    const byId = await fetchTemplateById(token, templateMetaId(metaName));
-    let fetched = byId ? pickApprovedTemplate(normalizeMetaTemplates([byId]), metaName) : null;
-    if (!fetched) {
-      const listed = await fetchNamedTemplates(token, businessAccountId, metaName, phoneNumberId);
-      fetched = listed.ok ? pickApprovedTemplate(normalizeMetaTemplates(listed.rows), metaName) : null;
-    }
-    const template = resolveAdminTemplate(metaName, fetched);
-    const savedBody = template.components?.find((item) => String(item.type ?? '').toUpperCase() === 'BODY')?.text ?? '';
-    if (savedBody.includes('\n') || savedBody.length > 80) {
-      this.adminTemplateCache.set(metaName, { until: Date.now() + 10 * 60 * 1000, template });
-    }
+    const row = await fetchTemplateById(token, templateMetaId(metaName));
+    const template = row ? pickApprovedTemplate(normalizeMetaTemplates([row]), metaName) : null;
+    const savedBody = template?.components?.find((item) => String(item.type ?? '').toUpperCase() === 'BODY')?.text ?? '';
+    if (!template || !savedBody.trim()) return null;
+    this.adminTemplateCache.set(metaName, { until: Date.now() + 10 * 60 * 1000, template });
     return template;
   }
 
