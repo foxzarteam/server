@@ -181,12 +181,19 @@ export class WhatsappService implements OnModuleInit {
   private async applyDeliveryUpdates(updates: WhatsappDeliveryUpdate[]): Promise<void> {
     for (const update of updates) {
       const phone = canonicalWhatsappPhone(update.phone);
-      await this.waitPersist(phone, async () => {
-        const current = await this.readByPhone(phone);
-        const target = current?.chat.messages.find((item) => item.waMessageId === update.waMessageId);
-        if (!target || !shouldApplyDelivery(target.delivery, update.status)) return;
-        await this.noteDelivery(phone, target.id, update.status, update.error);
-      });
+      for (let attempt = 0; attempt < 8; attempt += 1) {
+        let applied = false;
+        await this.waitPersist(phone, async () => {
+          const current = await this.readByPhone(phone);
+          const target = current?.chat.messages.find((item) => item.waMessageId === update.waMessageId);
+          if (!target) return;
+          applied = true;
+          if (!shouldApplyDelivery(target.delivery, update.status)) return;
+          await this.noteDelivery(phone, target.id, update.status, update.error);
+        });
+        if (applied) break;
+        await new Promise((resolve) => setTimeout(resolve, 400));
+      }
     }
   }
 

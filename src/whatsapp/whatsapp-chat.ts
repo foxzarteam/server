@@ -213,7 +213,7 @@ export function asChat(raw: unknown): ChatDoc {
       ...(kind ? { kind } : {}),
       ...(waType ? { waType } : {}),
       ...(row.mediaId ? { mediaId: String(row.mediaId).slice(0, 200) } : {}),
-      ...(row.waMessageId && /^[\w.-]{8,200}$/.test(String(row.waMessageId))
+      ...(row.waMessageId && /^[\w.+=/-]{8,200}$/.test(String(row.waMessageId))
         ? { waMessageId: String(row.waMessageId).slice(0, 200) }
         : {}),
       ...(row.mediaUrl && /^https:\/\//i.test(String(row.mediaUrl))

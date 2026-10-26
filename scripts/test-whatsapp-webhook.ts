@@ -141,6 +141,12 @@ assert.strictEqual(shouldApplyDelivery('sent', 'delivered'), true);
 assert.strictEqual(shouldApplyDelivery('delivered', 'sent'), false);
 assert.strictEqual(shouldApplyDelivery('delivered', 'failed'), false);
 assert.strictEqual(shouldApplyDelivery('sent', 'failed'), true);
+assert.strictEqual(
+  asChat({
+    messages: [{ id: 'a1', role: 'assistant', text: 'hi', waMessageId: 'wamid.abc+def/ghi=' }],
+  }).messages[0].waMessageId,
+  'wamid.abc+def/ghi=',
+);
 assert.ok(/test mode/i.test(plainWhatsappSendError('131030: Recipient phone number not in allowed list')));
 assert.ok(/24 hours/i.test(plainWhatsappSendError('131047: Re-engagement message')));
 
