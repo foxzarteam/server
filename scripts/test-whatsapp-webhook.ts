@@ -574,7 +574,11 @@ const docsPreview = buildAdminTemplateSend('919352984119', fallbackAdminTemplate
 const expanded = adminBubbleText('tpl:vehicle_refinance_kyc:1:ab', 'Namaste fyy ji');
 assert.ok(expanded.includes('Namaste fyy ji,'));
 assert.ok(expanded.includes('3️⃣ Gaadi ki RC'));
-assert.strictEqual(adminBubbleText('tpl:vehicle_purchase_kyc:1:ab', 'Namaste fyy ji'), 'Namaste fyy ji');
+const purchase = adminBubbleText('tpl:vehicle_purchase_kyc:1:ab', 'Namaste fyy ji');
+assert.ok(purchase.includes('2️⃣ Gaadi ka Quotation'));
+const missedCall = adminBubbleText('tpl:call_not_answered_followup:1:ab', 'Namaste samu ji');
+assert.ok(missedCall.includes('Namaste samu ji,'));
+assert.ok(missedCall.includes('aapse baat nahi ho payi'));
 assert.ok(!('error' in docsPreview) && docsPreview.text.includes('documents abhi tak receive nahi hue hain'));
 assert.strictEqual(templatePersonName('  Raju Patel ', 'WhatsApp user'), 'Raju Patel');
 assert.strictEqual(templatePersonName('', 'Gayathri'), 'Gayathri');

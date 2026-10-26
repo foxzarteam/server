@@ -31,6 +31,7 @@ import {
   graphMessageBody,
   graphWaType,
   fetchNamedTemplates,
+  fetchTemplateById,
   metaErrorText,
   plainWhatsappSendError,
   postGraphMessage,
@@ -44,6 +45,7 @@ import {
   normalizeMetaTemplates,
   pickApprovedTemplate,
   templateLanguageOrder,
+  templateMetaId,
   templatePersonName,
   type MetaTemplateDefinition,
 } from './whatsapp-admin-templates';
@@ -965,8 +967,12 @@ export class WhatsappService implements OnModuleInit {
   ): Promise<MetaTemplateDefinition> {
     const cached = this.adminTemplateCache.get(metaName);
     if (cached && cached.until > Date.now()) return cached.template;
-    const listed = await fetchNamedTemplates(token, businessAccountId, metaName, phoneNumberId);
-    const fetched = listed.ok ? pickApprovedTemplate(normalizeMetaTemplates(listed.rows), metaName) : null;
+    const byId = await fetchTemplateById(token, templateMetaId(metaName));
+    let fetched = byId ? pickApprovedTemplate(normalizeMetaTemplates([byId]), metaName) : null;
+    if (!fetched) {
+      const listed = await fetchNamedTemplates(token, businessAccountId, metaName, phoneNumberId);
+      fetched = listed.ok ? pickApprovedTemplate(normalizeMetaTemplates(listed.rows), metaName) : null;
+    }
     const template = resolveAdminTemplate(metaName, fetched);
     const savedBody = template.components?.find((item) => String(item.type ?? '').toUpperCase() === 'BODY')?.text ?? '';
     if (savedBody.includes('\n') || savedBody.length > 80) {

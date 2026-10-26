@@ -227,6 +227,18 @@ async function candidateWabaIds(token: string, businessAccountId: string, phoneN
   return ids;
 }
 
+/** One template node. Works when the account list is a different WhatsApp account. */
+export async function fetchTemplateById(token: string, templateId: string): Promise<unknown | null> {
+  const id = digitsOnly(templateId);
+  if (!id) return null;
+  const listed = await graphJson(
+    token,
+    `https://graph.facebook.com/${GRAPH_VERSION}/${encodeURIComponent(id)}?fields=name,status,language,components`,
+  );
+  if (!listed.ok || !listed.body.name) return null;
+  return listed.body;
+}
+
 export async function fetchNamedTemplates(
   token: string,
   businessAccountId: string,

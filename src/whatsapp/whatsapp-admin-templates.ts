@@ -10,6 +10,15 @@ export const ADMIN_WA_TEMPLATES = [
 
 export type AdminWaTemplateId = (typeof ADMIN_WA_TEMPLATES)[number]['id'];
 
+/** Meta template node id. The account list in Settings does not contain these templates. */
+const TEMPLATE_META_IDS: Partial<Record<AdminWaTemplateId, string>> = {
+  vehicle_purchase_kyc: '2020701738620974',
+};
+
+export function templateMetaId(metaName: string): string {
+  return TEMPLATE_META_IDS[metaName as AdminWaTemplateId] ?? '';
+}
+
 export type MetaTemplateButton = { type?: string; text?: string; url?: string };
 export type MetaTemplateComponent = {
   type?: string;
@@ -139,6 +148,36 @@ const KNOWN_TEMPLATE_BODIES: Record<string, { language: string; text: string; bu
       '',
       'Team',
       'Apni Zaroorat',
+    ].join('\n'),
+  },
+  vehicle_purchase_kyc: {
+    language: 'en',
+    text: [
+      'Namaste {{1}} ji,',
+      '',
+      'Aapki  loan ka KYC verification complete karne ke liye, kripya niche diye gaye documents yahin bhej dijiye:',
+      '',
+      '1️⃣ Aadhaar Card aur PAN Card',
+      '2️⃣ Gaadi ka Quotation ',
+      '3️⃣ 6 Mahine ka Bank Statement',
+      '4️⃣ 3 Mahine ki Salary Slip ya ITR',
+      '',
+      'Documents milte hi hum process aage badha denge.',
+      '',
+      'Team ',
+      'Apni Zaroorat',
+    ].join('\n'),
+  },
+  call_not_answered_followup: {
+    language: 'en',
+    text: [
+      'Namaste {{1}} ji,',
+      '',
+      'Aapke loan application ke silsile mein hamari team ne aapko call kiya tha, par aapse baat nahi ho payi.',
+      '',
+      'Kripya is message par reply karein ya jab bhi free hon humein call karein taaki hum aapka KYC process complete karwa sakein.',
+      '',
+      'Team Apni Zaroorat',
     ].join('\n'),
   },
   personal_loan_kyc: {
