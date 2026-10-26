@@ -46,7 +46,8 @@ function mediaFromRecord(
   const mime = String(media.mime_type ?? '').trim().slice(0, 80);
   const filename = String(media.filename ?? '').trim().slice(0, 180);
   const sha = String(media.sha256 ?? '').trim();
-  if (!mime && !filename && !sha) return null;
+  const knownMedia = (MEDIA_FIELDS as readonly string[]).includes(field);
+  if (!mime && !filename && !sha && !knownMedia) return null;
   return {
     mediaId: id,
     mime,

@@ -338,6 +338,7 @@ export class WhatsappService implements OnModuleInit {
         text: item.text,
         at: item.at,
         ...(item.sendError ? { sendError: item.sendError } : {}),
+        ...(item.sent ? { sent: true } : {}),
         ...(item.delivery ? { delivery: item.delivery } : {}),
         ...(item.replyBy ? { replyBy: item.replyBy } : {}),
         ...(item.kind ? { kind: item.kind } : {}),
@@ -469,12 +470,19 @@ export class WhatsappService implements OnModuleInit {
     }
 
     const seen = this.flowMem.get(phone)?.ids;
-    if (seen?.has(message.messageId) || seen?.has(assistantId)) {
+    const userMessage = this.inboundUserMessage(message);
+    if (!seen?.has(message.messageId)) {
+      let stored = false;
+      await this.waitPersist(phone, async () => {
+        stored = await this.persistInbound(phone, message.profileName, userMessage, null, message.phoneNumberId);
+      });
+      if (stored) this.rememberIds(phone, [userMessage.id]);
+    }
+    if (seen?.has(assistantId) || this.sentIds.has(assistantId)) {
       if (statusClick && !statusAlready) this.statusFlight.delete(phone);
       return;
     }
 
-    const userMessage = this.inboundUserMessage(message);
     const choice = productChoice(message.buttonId, message.text);
     let reply = this.decideReply(phone, message, assistantId);
     if (statusAlready && reply?.kind === 'status') reply = null;
@@ -539,7 +547,7 @@ export class WhatsappService implements OnModuleInit {
       }
     }
 
-    this.rememberIds(phone, [userMessage.id, ...(reply ? [reply.id] : [])]);
+    if (reply) this.rememberIds(phone, [reply.id]);
     await this.waitPersist(phone, () =>
       this.persistInbound(phone, message.profileName, userMessage, reply, message.phoneNumberId),
     );
@@ -576,6 +584,7 @@ export class WhatsappService implements OnModuleInit {
       return;
     }
     reply.sent = false;
+    reply.delivery = 'failed';
     reply.sendError = result.error || 'WhatsApp send failed';
     this.releaseFailedReply(phone, reply);
     console.error('WhatsappService.deliverBotReply', result.error);
@@ -749,12 +758,13 @@ export class WhatsappService implements OnModuleInit {
     waPhoneNumberId: string,
   ) {
     const incoming = reply ? [userMessage, reply] : [userMessage];
-    for (let attempt = 0; attempt < 3; attempt += 1) {
+    for (let attempt = 0; attempt < 6; attempt += 1) {
       const saved = await this.appendMessages(phone, profileName, incoming, waPhoneNumberId);
-      if (saved) return;
+      if (saved) return true;
       await new Promise((resolve) => setTimeout(resolve, 200 * (attempt + 1)));
     }
     console.error('WhatsappService.persistInbound failed', phone, incoming.map((item) => item.id).join(','));
+    return false;
   }
 
   private rememberSent(id: string) {
@@ -892,7 +902,7 @@ export class WhatsappService implements OnModuleInit {
     if (!claimed) return;
     const row = await this.readByPhone(phone);
     const result = await this.sendWhatsapp(settings, phone, message, row?.chat.waPhoneNumberId || '');
-    if (result.ok) await this.markSent(phone, message.id);
+    if (result.ok) await this.markSent(phone, message.id, message);
     else {
       await this.releaseSend(phone, message.id);
       if (result.error) await this.noteSendError(phone, message.id, result.error);
@@ -1181,6 +1191,8 @@ export class WhatsappService implements OnModuleInit {
       text: kycChatText(who, cat, insType),
       at: new Date().toISOString(),
       sent: true,
+      delivery: 'sent',
+      ...(sent.messageId ? { waMessageId: sent.messageId } : {}),
       replyBy: 'template',
       kind: 'kyc',
       waType: 'text',
@@ -1243,7 +1255,9 @@ export class WhatsappService implements OnModuleInit {
         }
       }
     }
-    return { ok: false, error: plainWhatsappSendError(sent.error) };
+    message.delivery = 'failed';
+    message.sendError = plainWhatsappSendError(sent.error);
+    return { ok: false, error: message.sendError };
   }
 
   private cachedMediaId(fromId: string, fileName: string): string {
@@ -1510,18 +1524,23 @@ export class WhatsappService implements OnModuleInit {
     return !Number.isFinite(at) || Date.now() - at > 45_000;
   }
 
-  private markSent(phone: string, messageId: string) {
+  private markSent(phone: string, messageId: string, stamp?: ChatMessage) {
     return this.patchMessage(
       phone,
       messageId,
       (message) => {
-        const next = { ...message, sent: true };
+        const next = {
+          ...message,
+          sent: true,
+          delivery: stamp?.delivery || message.delivery || 'sent',
+          ...(stamp?.waMessageId ? { waMessageId: stamp.waMessageId } : {}),
+        };
         delete next.sending;
         delete next.sendingAt;
         delete next.sendError;
         return next;
       },
-      (message) => !message.sent,
+      (message) => !message.sent || !message.waMessageId,
     );
   }
 
@@ -1558,7 +1577,7 @@ export class WhatsappService implements OnModuleInit {
       phone,
       messageId,
       (message) => {
-        const next = { ...message, sendError, sent: false };
+        const next = { ...message, sendError, sent: false, delivery: 'failed' as const };
         delete next.sending;
         delete next.sendingAt;
         return next;

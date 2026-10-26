@@ -358,6 +358,12 @@ const pdfIn = extractInboundMessages({
 assert.strictEqual(pdfIn[0].waType, 'document');
 assert.strictEqual(pdfIn[0].mediaId, 'media-pdf-1');
 assert.strictEqual(pdfIn[0].filename, 'pan.pdf');
+const barePhoto = extractInboundMessages({
+  object: 'whatsapp_business_account',
+  entry: [{ changes: [{ value: { messages: [{ from: '919876543210', id: 'wamid.photo', type: 'image', image: { id: 'media-only-id' } }] } }] }],
+});
+assert.strictEqual(barePhoto[0].mediaId, 'media-only-id');
+assert.strictEqual(barePhoto[0].waType, 'image');
 
 const hiddenFile = extractInboundMessages({
   object: 'whatsapp_business_account',
