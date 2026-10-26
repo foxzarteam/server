@@ -123,6 +123,31 @@ async function postGraphOnce(
   }
 }
 
+export async function fetchNamedTemplates(
+  token: string,
+  businessAccountId: string,
+  name: string,
+): Promise<{ ok: true; rows: unknown[] } | { ok: false; error: string }> {
+  const waba = businessAccountId.replace(/\D/g, '');
+  const templateName = name.trim();
+  if (!waba || !templateName) return { ok: false, error: 'WhatsApp business account ID is missing in Settings.' };
+  const url =
+    `https://graph.facebook.com/${GRAPH_VERSION}/${encodeURIComponent(waba)}/message_templates` +
+    `?name=${encodeURIComponent(templateName)}&fields=name,status,language,components&limit=20`;
+  try {
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${token}` },
+      signal: AbortSignal.timeout(GRAPH_SEND_MS),
+    });
+    if (!res.ok) return { ok: false, error: await metaErrorText(res) };
+    const data = (await res.json()) as { data?: unknown[] };
+    return { ok: true, rows: Array.isArray(data.data) ? data.data : [] };
+  } catch (error) {
+    const fail = error instanceof Error ? error.message : 'Could not load this WhatsApp template.';
+    return { ok: false, error: fail.slice(0, 300) };
+  }
+}
+
 export async function postGraphMessage(
   token: string,
   fromId: string,

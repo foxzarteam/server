@@ -30,10 +30,17 @@ import {
   GRAPH_VERSION,
   graphMessageBody,
   graphWaType,
+  fetchNamedTemplates,
   metaErrorText,
   plainWhatsappSendError,
   postGraphMessage,
 } from './whatsapp-graph';
+import {
+  buildAdminTemplateSend,
+  findAdminWaTemplate,
+  pickApprovedTemplate,
+  type MetaTemplateDefinition,
+} from './whatsapp-admin-templates';
 import {
   adminTargetPhone,
   canonicalWhatsappPhone,
@@ -43,7 +50,7 @@ import {
   shouldApplyDelivery,
   WhatsappDeliveryUpdate,
 } from './whatsapp-inbound';
-import { kycChatText, kycGraphPayload, KYC_START_BTN, KYC_STATUS_BTN, KYC_TEMPLATE_LANG } from './whatsapp-kyc';
+import { kycBodyName, kycChatText, kycGraphPayload, KYC_START_BTN, KYC_STATUS_BTN, KYC_TEMPLATE_LANG } from './whatsapp-kyc';
 import { WhatsappSettings, WhatsappSettingsService } from './whatsapp-settings.service';
 import { whatsappSignatureOk } from './whatsapp-verify';
 import {
@@ -97,6 +104,7 @@ export class WhatsappService implements OnModuleInit {
   private inboundTail = new Map<string, Promise<void>>();
   /** One welcome, loan, or insurance send in flight per number. */
   private marketingFlight = new Set<string>();
+  private adminTemplateCache = new Map<string, { until: number; template: MetaTemplateDefinition }>();
 
   constructor(
     @Inject(SUPABASE_CLIENT) private readonly supabase: SupabaseClient,
@@ -345,8 +353,7 @@ export class WhatsappService implements OnModuleInit {
         ...(item.waType ? { waType: item.waType } : {}),
         ...(item.filename ? { filename: item.filename } : {}),
         ...(item.mime ? { mime: item.mime } : {}),
-        ...(item.kind === 'kyc' ? { buttons: [KYC_START_BTN, KYC_STATUS_BTN] } : {}),
-        ...(item.kind === 'welcome' ? { buttons: ['Loan', 'Insurance'] } : {}),
+        ...this.bubbleButtons(item),
         ...(item.mediaId || item.filename === 'wa_ins.jpg' || item.filename === 'wa_loa.jpg' ? { hasMedia: true } : {}),
       })),
     };
@@ -548,9 +555,9 @@ export class WhatsappService implements OnModuleInit {
     }
 
     if (reply) this.rememberIds(phone, [reply.id]);
-    await this.waitPersist(phone, () =>
-      this.persistInbound(phone, message.profileName, userMessage, reply, message.phoneNumberId),
-    );
+    await this.waitPersist(phone, async () => {
+      await this.persistInbound(phone, message.profileName, userMessage, reply, message.phoneNumberId);
+    });
   }
 
   /** KYC Start / Status check: no DB wait. Does not count as Namaste welcome. */
@@ -841,6 +848,96 @@ export class WhatsappService implements OnModuleInit {
     return data ? { ok: true, data } : { ok: false, error: 'Sent, but chat could not be reloaded.' };
   }
 
+  /** Admin menu templates. Not once-per-phone: the admin chooses when to send again. */
+  async adminSendTemplate(
+    id: string,
+    templateId: string,
+  ): Promise<{ ok: boolean; error?: string; data?: WhatsappEnquiryDetail }> {
+    const option = findAdminWaTemplate(templateId);
+    if (!option) return { ok: false, error: 'Choose a template from the list.' };
+    const row = await this.getRowById(id);
+    if (!row) return { ok: false, error: 'Chat not found.' };
+
+    const settings = await this.settings.getEffective();
+    const token = settings.accessToken.trim().replace(/^bearer\s+/i, '').trim();
+    const configured = settings.phoneNumberId.replace(/\D/g, '');
+    const chatFrom = String(row.chat.waPhoneNumberId || '').replace(/\D/g, '');
+    const fromId = chatFrom.length >= 15 ? chatFrom : configured;
+    const to = canonicalWhatsappPhone(row.phone);
+    if (!token || !fromId) {
+      return {
+        ok: false,
+        error: !token
+          ? 'WhatsApp access token is missing in Settings.'
+          : 'WhatsApp phone number ID is missing in Settings.',
+      };
+    }
+    if (!/^[1-9][0-9]{7,14}$/.test(to)) {
+      return { ok: false, error: 'This chat does not have a valid WhatsApp number.' };
+    }
+    if (!settings.businessAccountId) {
+      return { ok: false, error: 'WhatsApp business account ID is missing in Settings.' };
+    }
+
+    const template = await this.approvedAdminTemplate(token, settings.businessAccountId, option.metaName);
+    if (!template.ok) return { ok: false, error: template.error };
+
+    const who = await this.templateCustomerName(row.phone, row.chat.profileName);
+    const built = buildAdminTemplateSend(to, template.template, who);
+    if ('error' in built) return { ok: false, error: built.error };
+
+    const message: ChatMessage = {
+      id: `tpl:${option.id}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`,
+      role: 'assistant',
+      text: built.text,
+      at: new Date().toISOString(),
+      replyBy: 'template',
+      kind: option.kyc ? 'kyc' : 'admin',
+      waType: 'text',
+      ...(built.buttons.length ? { buttons: built.buttons } : {}),
+    };
+    const sent = await postGraphMessage(token, fromId, built.payload);
+    if (sent.ok) {
+      message.sent = true;
+      message.delivery = 'sent';
+      if (sent.messageId) message.waMessageId = sent.messageId;
+      if (option.kyc) this.noteFlow(to, message);
+    } else {
+      message.delivery = 'failed';
+      message.sendError = plainWhatsappSendError(sent.error);
+    }
+    await this.waitPersist(to, async () => {
+      await this.appendMessage(to, row.chat.profileName, message, row.chat.waPhoneNumberId);
+    });
+    const data = await this.getForAdmin(row.id);
+    if (!sent.ok) return { ok: false, error: message.sendError || 'Could not send this template.', ...(data ? { data } : {}) };
+    return data ? { ok: true, data } : { ok: false, error: 'Sent, but chat could not be reloaded.' };
+  }
+
+  private bubbleButtons(item: ChatMessage): { buttons: string[] } | Record<string, never> {
+    if (item.buttons?.length) return { buttons: item.buttons };
+    if (item.kind === 'kyc') return { buttons: [KYC_START_BTN, KYC_STATUS_BTN] };
+    if (item.kind === 'welcome') return { buttons: ['Loan', 'Insurance'] };
+    return {};
+  }
+
+  private async approvedAdminTemplate(
+    token: string,
+    businessAccountId: string,
+    metaName: string,
+  ): Promise<{ ok: true; template: MetaTemplateDefinition } | { ok: false; error: string }> {
+    const cached = this.adminTemplateCache.get(metaName);
+    if (cached && cached.until > Date.now()) return { ok: true, template: cached.template };
+    const listed = await fetchNamedTemplates(token, businessAccountId, metaName);
+    if (!listed.ok) return { ok: false, error: plainWhatsappSendError(listed.error) };
+    const template = pickApprovedTemplate(listed.rows as MetaTemplateDefinition[], metaName);
+    if (!template) {
+      return { ok: false, error: 'This template is not approved on WhatsApp yet.' };
+    }
+    this.adminTemplateCache.set(metaName, { until: Date.now() + 10 * 60 * 1000, template });
+    return { ok: true, template };
+  }
+
   private async getRowById(id: string): Promise<EnquiryRow | null> {
     if (!/^[0-9a-f-]{36}$/i.test(id)) return null;
     const { data, error } = await this.table
@@ -907,6 +1004,14 @@ export class WhatsappService implements OnModuleInit {
       await this.releaseSend(phone, message.id);
       if (result.error) await this.noteSendError(phone, message.id, result.error);
     }
+  }
+
+  /** Form name for this number, including spaced or +91 mobiles. WhatsApp profile name only if no real application exists. */
+  private async templateCustomerName(phone: string, profileName: string): Promise<string> {
+    const rows = await this.leadRowsForPhone(phone, 'full_name, pan, mobile_number, updated_at');
+    const application = (rows ?? []).find((row) => !isDraftLead(row));
+    const fromForm = String(application?.full_name ?? '').trim();
+    return kycBodyName(fromForm || profileName);
   }
 
   /** Latest non-draft application name for each chat phone. Keyed by the enquiry phone. */

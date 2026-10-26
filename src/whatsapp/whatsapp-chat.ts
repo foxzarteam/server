@@ -44,6 +44,8 @@ export type ChatMessage = {
   mediaUrl?: string;
   filename?: string;
   mime?: string;
+  /** Labels of the template buttons, shown under the bubble. */
+  buttons?: string[];
 };
 
 export type ChatDoc = {
@@ -140,6 +142,15 @@ export function emptyFlow(): FlowMem {
   };
 }
 
+function buttonLabels(raw: unknown): { buttons: string[] } | Record<string, never> {
+  if (!Array.isArray(raw)) return {};
+  const buttons = raw
+    .map((item) => String(item ?? '').trim().slice(0, 40))
+    .filter(Boolean)
+    .slice(0, 3);
+  return buttons.length ? { buttons } : {};
+}
+
 export function asChat(raw: unknown): ChatDoc {
   let value = raw;
   if (typeof value === 'string') {
@@ -221,6 +232,7 @@ export function asChat(raw: unknown): ChatDoc {
         : {}),
       ...(row.filename ? { filename: String(row.filename).slice(0, 180) } : {}),
       ...(row.mime ? { mime: String(row.mime).slice(0, 80) } : {}),
+      ...buttonLabels(row.buttons),
     });
   }
   const adminReadAt = String(obj.adminReadAt ?? '').trim();

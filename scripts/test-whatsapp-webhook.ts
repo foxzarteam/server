@@ -5,6 +5,7 @@
 import assert from 'assert';
 import { createHmac } from 'crypto';
 import { graphMessageBody, isGraphTimeout, plainWhatsappSendError } from '../src/whatsapp/whatsapp-graph';
+import { buildAdminTemplateSend, findAdminWaTemplate, pickApprovedTemplate } from '../src/whatsapp/whatsapp-admin-templates';
 import { whatsappHubChallenge, whatsappSignatureOk } from '../src/whatsapp/whatsapp-verify';
 import { adminTargetPhone, canonicalWhatsappPhone, extractDeliveryUpdates, extractInboundMessages, shouldApplyDelivery } from '../src/whatsapp/whatsapp-inbound';
 import { decryptSettingsJson, encryptSettingsJson } from '../src/whatsapp/settings-crypto';
@@ -537,5 +538,49 @@ assert.strictEqual(unreadCustomerCount(asChat({ messages: unreadChat.messages })
 assert.strictEqual(adminCustomerName('Jayu Patel', 'Jayu Kumar'), 'Jayu Kumar');
 assert.strictEqual(adminCustomerName('Jayu Patel', ''), 'Jayu Patel');
 assert.strictEqual(adminCustomerName('Jayu Patel', '   '), 'Jayu Patel');
+
+assert.strictEqual(findAdminWaTemplate('application_kyc')?.metaName, 'application_kyc');
+assert.strictEqual(findAdminWaTemplate('personal_loan_kyc')?.kyc, true);
+assert.strictEqual(findAdminWaTemplate('call_not_answered_followup')?.kyc, false);
+assert.strictEqual(findAdminWaTemplate('nope'), null);
+const approved = pickApprovedTemplate(
+  [
+    { name: 'personal_loan_kyc', status: 'APPROVED', language: 'en', components: [] },
+    { name: 'personal_loan_kyc', status: 'APPROVED', language: 'en_GB', components: [] },
+    { name: 'personal_loan_kyc', status: 'PENDING', language: 'en_US', components: [] },
+  ],
+  'personal_loan_kyc',
+);
+assert.strictEqual(approved?.language, 'en_GB');
+const built = buildAdminTemplateSend(
+  '919876543210',
+  {
+    name: 'personal_loan_kyc',
+    language: 'en_GB',
+    components: [
+      { type: 'BODY', text: 'Dear {{1}}, complete your personal loan KYC.' },
+      { type: 'BUTTONS', buttons: [{ type: 'QUICK_REPLY', text: 'Complete KYC' }] },
+    ],
+  },
+  'Raju Patel',
+);
+assert.ok(!('error' in built));
+if (!('error' in built)) {
+  assert.strictEqual(built.text, 'Dear Raju Patel, complete your personal loan KYC.');
+  assert.deepStrictEqual(built.buttons, ['Complete KYC']);
+  const template = built.payload.template as { name: string; components: { parameters: { text: string }[] }[] };
+  assert.strictEqual(template.name, 'personal_loan_kyc');
+  assert.strictEqual(template.components[0].parameters[0].text, 'Raju Patel');
+}
+const mediaHeader = buildAdminTemplateSend(
+  '919876543210',
+  { name: 'personal_loan_kyc', language: 'en', components: [{ type: 'HEADER', format: 'IMAGE' }, { type: 'BODY', text: 'Hello' }] },
+  'Raju',
+);
+assert.ok('error' in mediaHeader);
+const withButtons = asChat({
+  messages: [{ id: 'tpl:1', role: 'assistant', kind: 'kyc', text: 'Dear Raju', buttons: ['Complete KYC', ''] }],
+});
+assert.deepStrictEqual(withButtons.messages[0].buttons, ['Complete KYC']);
 
 console.log('test-whatsapp-webhook: all asserts passed');

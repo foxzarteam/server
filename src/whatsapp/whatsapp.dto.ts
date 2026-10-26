@@ -11,6 +11,13 @@ export class StartWhatsappChatDto {
   text!: string;
 }
 
+export class SendWhatsappTemplateDto {
+  @IsString()
+  @MinLength(1)
+  @MaxLength(80)
+  template!: string;
+}
+
 export class UpdateWhatsappSettingsDto {
   @IsOptional()
   @IsString()
