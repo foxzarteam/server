@@ -469,6 +469,8 @@ assert.ok(alreadyKycStarted([{ role: 'assistant', text: 'Dear Atul. Your account
 assert.ok(!alreadyKycStarted([{ role: 'user', text: 'KYC verification is pending' }]));
 assert.strictEqual(pickBotReply('', 'Okay which bank ?', { ...idle, kyc: true, welcomed: false }).kind, null);
 assert.ok(alreadyKycStarted([{ role: 'assistant', text: 'To complete your KYC, please share clear photos or PDFs of these documents:' }]));
+assert.ok(alreadyKycStarted([{ role: 'assistant', kind: 'under_review', text: 'We have successfully received your KYC documents.' }]));
+assert.ok(alreadyKycStarted([{ role: 'assistant', text: 'We have successfully received your KYC documents. Your application is under review.' }]));
 assert.strictEqual(pickBotReply('Haan, KYC Start Karein', '', idle).kind, 'kyc_docs');
 assert.strictEqual(pickBotReply('Complete KYC', '', idle).kind, 'kyc_docs');
 assert.strictEqual(pickBotReply('Application Status Check Karein', '', idle).kind, 'status');

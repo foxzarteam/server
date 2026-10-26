@@ -134,8 +134,10 @@ export function alreadyWelcomed(messages: { role: string; kind?: string; text: s
 export function alreadyKycStarted(messages: { role: string; kind?: string; text?: string; sendError?: string }[]): boolean {
   return messages.some((item) => {
     if (item.role !== 'assistant' || item.sendError) return false;
-    if (item.kind === 'kyc' || item.kind === 'kyc_docs') return true;
-    return /kyc verification is pending|account application is in progress|complete your kyc|in just 2 mins/i.test(
+    if (item.kind === 'kyc' || item.kind === 'kyc_docs' || item.kind === 'under_review' || item.kind === 'rejected') {
+      return true;
+    }
+    return /kyc verification is pending|account application is in progress|complete your kyc|in just 2 mins|received your kyc/i.test(
       item.text || '',
     );
   });

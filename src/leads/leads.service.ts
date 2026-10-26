@@ -1508,7 +1508,18 @@ export class LeadsService {
         dto.hasExistingEmi === false ? 0 : dto.totalMonthlyEmi ?? null;
     }
     const profileCategory = String(payload.category ?? existing.category ?? '');
-    if (isVehicleLoanCategory(profileCategory)) {
+    const editingLoanProfile =
+      dto.category != null ||
+      dto.vehicleCategory !== undefined ||
+      dto.employmentType !== undefined ||
+      dto.netMonthlyIncome !== undefined ||
+      dto.cibilBand !== undefined ||
+      dto.loanAmt !== undefined ||
+      dto.requiredAmount !== undefined ||
+      dto.hasExistingEmi !== undefined ||
+      dto.totalMonthlyEmi !== undefined;
+    // The leads-table status dropdown sends only status. Do not re-check the loan form.
+    if (isVehicleLoanCategory(profileCategory) && editingLoanProfile) {
       const slug = await this.servicesService.resolveVehicleCategory(
         dto.vehicleCategory !== undefined
           ? dto.vehicleCategory
@@ -1526,6 +1537,7 @@ export class LeadsService {
       const incomeErr = personalLoanEmploymentError({
         category: profileCategory,
         netMonthlyIncome: Number(payload.net_monthly_income ?? existing.net_monthly_income),
+        employmentType: String(payload.employment_type ?? existing.employment_type ?? ''),
       });
       if (incomeErr) throw new LeadRuleError(incomeErr);
       const blocked = loanNotEligibleMessage({

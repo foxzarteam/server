@@ -412,10 +412,6 @@ export class WhatsappService implements OnModuleInit {
         this.inflight.delete(message.messageId);
       }
     };
-    if (isKycStatusClick(message.buttonId, message.text)) {
-      void run();
-      return;
-    }
     this.enqueueInbound(phone, run);
   }
 
@@ -437,7 +433,10 @@ export class WhatsappService implements OnModuleInit {
     }
 
     const seen = this.flowMem.get(phone)?.ids;
-    if (seen?.has(message.messageId) || seen?.has(assistantId)) return;
+    if (seen?.has(message.messageId) || seen?.has(assistantId)) {
+      if (statusClick && !statusAlready) this.statusFlight.delete(phone);
+      return;
+    }
 
     const userMessage = this.inboundUserMessage(message);
     const choice = productChoice(message.buttonId, message.text);
@@ -466,6 +465,8 @@ export class WhatsappService implements OnModuleInit {
     if (
       reply &&
       reply.kind !== 'welcome' &&
+      reply.kind !== 'personal_loan' &&
+      reply.kind !== 'insurance' &&
       reply.kind !== 'kyc' &&
       reply.kind !== 'kyc_docs' &&
       reply.kind !== 'status' &&
@@ -485,26 +486,27 @@ export class WhatsappService implements OnModuleInit {
       };
     }
 
-    this.rememberIds(phone, [userMessage.id, ...(reply ? [reply.id] : [])]);
-    if (reply) this.noteFlow(phone, reply);
-
-    this.queuePersist(phone, () =>
-      this.persistInbound(phone, message.profileName, userMessage, null, message.phoneNumberId),
-    );
-
     if (reply) {
-      const outbound = reply;
-      void this.deliverBotReply(settings, phone, outbound, message.phoneNumberId)
-        .catch((error) => {
-          outbound.sent = false;
-          outbound.sendError = error instanceof Error ? error.message : 'WhatsApp send failed';
-          this.releaseFailedReply(phone, outbound);
-          console.error('WhatsappService.deliverBotReply', outbound.sendError);
-        })
-        .finally(() => {
-          this.queuePersist(phone, () => this.persistInbound(phone, message.profileName, outbound, null, message.phoneNumberId));
-        });
+      try {
+        await this.deliverBotReply(settings, phone, reply, message.phoneNumberId);
+      } catch (error) {
+        reply.sent = false;
+        reply.sendError = error instanceof Error ? error.message : 'WhatsApp send failed';
+        this.releaseFailedReply(phone, reply);
+        console.error('WhatsappService.deliverBotReply', reply.sendError);
+      }
+      if (reply.sent) {
+        this.noteFlow(phone, reply);
+        if (reply.kind === 'welcome' || reply.kind === 'personal_loan' || reply.kind === 'insurance') {
+          this.marketingFlight.delete(`${phone}:${reply.kind}`);
+        }
+      }
     }
+
+    this.rememberIds(phone, [userMessage.id, ...(reply ? [reply.id] : [])]);
+    await this.waitPersist(phone, () =>
+      this.persistInbound(phone, message.profileName, userMessage, reply, message.phoneNumberId),
+    );
   }
 
   /** KYC Start / Status check: no DB wait. Does not count as Namaste welcome. */
@@ -911,30 +913,54 @@ export class WhatsappService implements OnModuleInit {
     if (this.kycTemplateSent.has(phone) || mem?.kyc) return true;
     const history = mem?.ids;
     if (history && [...history].some((id) => id.startsWith('kyc:'))) return true;
-    const applied = await this.phoneHasApplication(phone);
-    if (applied) {
+    const applied = await Promise.race([
+      this.applicationOnPhone(phone),
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), 3_000)),
+    ]);
+    if (applied === true) {
       this.rememberKycPhone(phone);
-      if (mem) mem.kyc = true;
+      if (mem) {
+        mem.kyc = true;
+        mem.welcomed = true;
+      }
       return true;
     }
     return false;
   }
 
-  /** Real application on this WhatsApp number. Draft placeholders do not count. */
-  private async phoneHasApplication(phone: string): Promise<boolean> {
-    const numbers = this.phoneLookupKeys(phone);
-    if (!numbers.length) return false;
+  /** True when a real lead exists, false when this number is fresh, null when the lookup failed. */
+  private async applicationOnPhone(phone: string): Promise<boolean | null> {
+    const rows = await this.leadRowsForPhone(phone, 'full_name, pan, mobile_number');
+    if (!rows) return null;
+    return rows.some((row) => !isDraftLead(row));
+  }
+
+  /** Same person even if the saved mobile is 10 digits, 91..., or has spaces. Null means the lookup failed. */
+  private async leadRowsForPhone(phone: string, columns: string): Promise<Record<string, unknown>[] | null> {
+    const canonical = canonicalWhatsappPhone(phone);
+    const ten = canonical.startsWith('91') && canonical.length === 12 ? canonical.slice(2) : '';
+    if (!/^[6-9]\d{9}$/.test(ten)) return [];
+    const filters = [
+      `mobile_number.eq."${ten}"`,
+      `mobile_number.eq."91${ten}"`,
+      `mobile_number.eq."+91${ten}"`,
+      `mobile_number.ilike."*${ten}"`,
+      `mobile_number.ilike."*${ten.slice(0, 5)}*${ten.slice(5)}*"`,
+    ];
     const { data, error } = await this.supabase
       .from(TABLE_LEADS)
-      .select('full_name, pan')
-      .in('mobile_number', numbers)
+      .select(columns)
       .eq('is_active', true)
+      .or(filters.join(','))
+      .order('updated_at', { ascending: false })
       .limit(20);
     if (error) {
-      console.error('WhatsappService.phoneHasApplication', error.message);
-      return false;
+      console.error('WhatsappService.leadRowsForPhone', error.message);
+      return null;
     }
-    return (data ?? []).some((row) => !isDraftLead(row as Record<string, unknown>));
+    return ((data ?? []) as unknown as Record<string, unknown>[]).filter(
+      (row) => canonicalWhatsappPhone(String(row.mobile_number ?? '')) === canonical,
+    );
   }
 
   /** Latest real application, so the KYC document list matches that product. */
@@ -943,22 +969,13 @@ export class WhatsappService implements OnModuleInit {
     category: string | null;
   }> {
     const empty = { employment: null as 'salaried' | 'self_employed' | null, category: null as string | null };
-    const numbers = this.phoneLookupKeys(phone);
-    if (!numbers.length) return empty;
-    const { data, error } = await this.supabase
-      .from(TABLE_LEADS)
-      .select('full_name, pan, employment_type, category, updated_at')
-      .in('mobile_number', numbers)
-      .eq('is_active', true)
-      .order('updated_at', { ascending: false })
-      .limit(20);
-    if (error) {
-      console.error('WhatsappService.kycProfileForPhone', error.message);
-      return empty;
-    }
+    const data = await this.leadRowsForPhone(
+      phone,
+      'full_name, pan, mobile_number, employment_type, category, updated_at',
+    );
+    if (!data) return empty;
     let category: string | null = null;
-    for (const row of data ?? []) {
-      const record = row as Record<string, unknown>;
+    for (const record of data) {
       if (isDraftLead(record)) continue;
       const leadCategory = String(record.category ?? '').trim().toLowerCase();
       if (!category) category = leadCategory;
@@ -978,7 +995,7 @@ export class WhatsappService implements OnModuleInit {
     });
   }
 
-  private async sendUnderReviewOnce(mobile: string, name: string): Promise<void> {
+  private async sendUnderReviewOnce(mobile: string, name: string, attempt = 0): Promise<void> {
     const phone = canonicalWhatsappPhone(mobile);
     if (!/^[0-9]{8,15}$/.test(phone)) return;
     if (this.underReviewSent.has(phone)) return;
@@ -1004,10 +1021,16 @@ export class WhatsappService implements OnModuleInit {
       message.sent = false;
       message.sendError = sent.error || 'WhatsApp send failed';
       console.error('WhatsappService.sendUnderReviewOnce', message.sendError);
+      if (attempt < 1) {
+        await new Promise((resolve) => setTimeout(resolve, 4_000));
+        return this.sendUnderReviewOnce(mobile, name, attempt + 1);
+      }
       return;
     }
     message.sent = true;
-    await this.appendMessage(phone, name, message, existing?.chat.waPhoneNumberId || '');
+    await this.waitPersist(phone, async () => {
+      await this.appendMessage(phone, name, message, existing?.chat.waPhoneNumberId || '');
+    });
   }
 
   /** One not-approved note per phone, even if the admin sets that status again. */
@@ -1017,7 +1040,7 @@ export class WhatsappService implements OnModuleInit {
     });
   }
 
-  private async sendRejectedOnce(mobile: string, name: string): Promise<void> {
+  private async sendRejectedOnce(mobile: string, name: string, attempt = 0): Promise<void> {
     const phone = canonicalWhatsappPhone(mobile);
     if (!/^[0-9]{8,15}$/.test(phone)) return;
     if (this.rejectedSent.has(phone)) return;
@@ -1043,10 +1066,16 @@ export class WhatsappService implements OnModuleInit {
       message.sent = false;
       message.sendError = sent.error || 'WhatsApp send failed';
       console.error('WhatsappService.sendRejectedOnce', message.sendError);
+      if (attempt < 1) {
+        await new Promise((resolve) => setTimeout(resolve, 4_000));
+        return this.sendRejectedOnce(mobile, name, attempt + 1);
+      }
       return;
     }
     message.sent = true;
-    await this.appendMessage(phone, name, message, existing?.chat.waPhoneNumberId || '');
+    await this.waitPersist(phone, async () => {
+      await this.appendMessage(phone, name, message, existing?.chat.waPhoneNumberId || '');
+    });
   }
 
   private rememberKycPhone(phone: string) {
@@ -1062,6 +1091,7 @@ export class WhatsappService implements OnModuleInit {
     category: string,
     leadId = '',
     insType?: string | null,
+    attempt = 0,
   ): Promise<void> {
     const cat = normalizeStoredCategory(category);
     const who = name.trim();
@@ -1098,6 +1128,10 @@ export class WhatsappService implements OnModuleInit {
     if (!sent.ok) {
       this.kycLeadSent.delete(leadKey);
       console.error('WhatsappService.dispatchKycTemplate', sent.error);
+      if (attempt < 1) {
+        await new Promise((resolve) => setTimeout(resolve, 4_000));
+        return this.dispatchKycTemplate(phone, name, category, leadId, insType, attempt + 1);
+      }
       return;
     }
     this.rememberKycPhone(phone);
@@ -1113,7 +1147,9 @@ export class WhatsappService implements OnModuleInit {
       waType: 'text',
     };
     this.noteFlow(phone, message);
-    await this.appendMessage(phone, name, message);
+    await this.waitPersist(phone, async () => {
+      await this.appendMessage(phone, name, message);
+    });
   }
 
   private async sendWhatsapp(
@@ -1143,6 +1179,20 @@ export class WhatsappService implements OnModuleInit {
       if (outbound.filename) message.filename = outbound.filename;
       if (outbound.mime) message.mime = outbound.mime;
       return { ok: true };
+    }
+    if (message.kind === 'personal_loan' || message.kind === 'insurance') {
+      const textPayload = graphMessageBody(phone, { ...message, waType: 'text' });
+      if (textPayload) {
+        const textSent = await postGraphMessage(token, fromId, textPayload);
+        if (textSent.ok) {
+          message.waType = 'text';
+          delete message.mediaId;
+          delete message.mediaUrl;
+          delete message.filename;
+          delete message.mime;
+          return { ok: true };
+        }
+      }
     }
     return sent;
   }
@@ -1273,7 +1323,7 @@ export class WhatsappService implements OnModuleInit {
     if (!/^[0-9]{8,15}$/.test(key) || incoming.length === 0) return null;
     phone = key;
 
-    for (let attempt = 0; attempt < 4; attempt += 1) {
+    for (let attempt = 0; attempt < 6; attempt += 1) {
       const current = await this.readByPhone(phone);
       const existing = new Set((current?.chat.messages ?? []).map((item) => item.id));
       const toAdd = incoming.filter((item) => !existing.has(item.id));
@@ -1376,7 +1426,7 @@ export class WhatsappService implements OnModuleInit {
     patch: (message: ChatMessage) => ChatMessage,
     when: (message: ChatMessage) => boolean,
   ): Promise<boolean> {
-    for (let attempt = 0; attempt < 4; attempt += 1) {
+    for (let attempt = 0; attempt < 6; attempt += 1) {
       const current = await this.readByPhone(phone);
       if (!current) return false;
       const target = current.chat.messages.find((item) => item.id === messageId);
