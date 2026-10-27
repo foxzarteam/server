@@ -5,6 +5,7 @@ export const ADMIN_WA_TEMPLATES = [
   { id: 'personal_loan_kyc', label: 'Personal Loan (PL KYC)', metaName: 'personal_loan_kyc', kyc: true },
   { id: 'document_pending_reminder', label: 'Reminder: Documents Pending', metaName: 'document_pending_reminder', kyc: false },
   { id: 'call_not_answered_followup', label: 'Reminder: Call Not Answered', metaName: 'call_not_answered_followup', kyc: false },
+  { id: 'reject_template', label: 'Reject Application', metaName: 'reject_template', kyc: false },
 ] as const;
 
 export type AdminWaTemplateId = (typeof ADMIN_WA_TEMPLATES)[number]['id'];
@@ -17,6 +18,7 @@ const TEMPLATE_META_IDS: Record<AdminWaTemplateId | 'application_kyc', string> =
   personal_loan_kyc: '29218275084524752',
   document_pending_reminder: '2268054780795382',
   call_not_answered_followup: '1429874262035888',
+  reject_template: '2397652557726837',
 };
 
 export function templateMetaId(metaName: string): string {
