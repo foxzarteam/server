@@ -34,6 +34,7 @@ import {
   fetchTemplateById,
   metaErrorText,
   plainWhatsappSendError,
+  isRetryableWhatsappSend,
   postGraphMessage,
 } from './whatsapp-graph';
 import {
@@ -58,7 +59,7 @@ import {
   shouldApplyDelivery,
   WhatsappDeliveryUpdate,
 } from './whatsapp-inbound';
-import { kycChatText, kycGraphPayload, KYC_START_BTN, KYC_STATUS_BTN, KYC_TEMPLATE_LANG } from './whatsapp-kyc';
+import { kycChatText, kycGraphPayload, kycTemplateAlreadySent, KYC_START_BTN, KYC_STATUS_BTN, KYC_TEMPLATE, KYC_TEMPLATE_LANG } from './whatsapp-kyc';
 import { WhatsappSettings, WhatsappSettingsService } from './whatsapp-settings.service';
 import { whatsappSignatureOk } from './whatsapp-verify';
 import {
@@ -104,7 +105,8 @@ export class WhatsappService implements OnModuleInit {
   private flowMem = new Map<string, FlowMem>();
   private persistTail = new Map<string, Promise<void>>();
   private kycTemplateSent = new Set<string>();
-  private kycLeadSent = new Set<string>();
+  /** One KYC send in flight per number, including Meta retries. */
+  private kycInflight = new Set<string>();
   private underReviewSent = new Set<string>();
   private rejectedSent = new Set<string>();
   /** Check Status already claimed for this phone, so a second tap does not wait or send again. */
@@ -128,20 +130,20 @@ export class WhatsappService implements OnModuleInit {
     this.warmTemplateMedia(settings);
   }
 
-  /** Fire-and-forget after OTP. One KYC template per lead that just got verified. */
+  /** Fire-and-forget after OTP. One 2-button KYC template per phone, not per lead. */
   notifyAfterOtpVerified(
     mobile: string,
     leads: { id?: string; full_name?: string; category?: string; ins_type?: string | null }[] = [],
   ): void {
-    for (const lead of leads) {
-      this.notifyApplicationKycStart({
-        leadId: String(lead.id ?? ''),
-        phone: mobile,
-        name: String(lead.full_name ?? ''),
-        category: String(lead.category ?? ''),
-        insType: lead.ins_type,
-      });
-    }
+    const lead = leads.find((item) => String(item.full_name ?? '').trim()) ?? leads[0];
+    if (!lead) return;
+    this.notifyApplicationKycStart({
+      leadId: String(lead.id ?? ''),
+      phone: mobile,
+      name: String(lead.full_name ?? ''),
+      category: String(lead.category ?? ''),
+      insType: lead.ins_type,
+    });
   }
 
   notifyApplicationKycStart(input: {
@@ -1303,76 +1305,83 @@ export class WhatsappService implements OnModuleInit {
     phone: string,
     name: string,
     category: string,
-    leadId = '',
+    _leadId = '',
     insType?: string | null,
-    attempt = 0,
   ): Promise<void> {
     const cat = normalizeStoredCategory(category);
     const who = name.trim();
     if (!who || who.toLowerCase() === LEAD_DRAFT_FULL_NAME.toLowerCase()) return;
     if (!/^[0-9]{8,15}$/.test(phone)) return;
-    const leadKey = leadId.trim() || `${phone}:${cat}:${String(insType ?? '')}`;
-    if (this.kycLeadSent.has(leadKey)) return;
-    this.kycLeadSent.add(leadKey);
-    if (this.kycLeadSent.size > 4000) {
-      const first = this.kycLeadSent.values().next().value;
-      if (first) this.kycLeadSent.delete(first);
-    }
+    if (this.kycInflight.has(phone)) return;
+    this.kycInflight.add(phone);
 
-    const settings = this.settings.peekEffective() ?? (await this.settings.getEffective());
-    const token = settings.accessToken.trim().replace(/^bearer\s+/i, '').trim();
-    const fromId = settings.phoneNumberId.replace(/\D/g, '');
-    if (!token || !fromId) {
-      this.kycLeadSent.delete(leadKey);
-      console.error('WhatsappService.dispatchKycTemplate missing WhatsApp settings');
-      return;
-    }
-
-    const existing = await this.readByPhone(phone);
-    if (existing?.chat.messages.some((item) => item.id === `kyc:${leadKey}` && !item.sendError)) {
-      this.rememberKycPhone(phone);
-      return;
-    }
-
-    const message: ChatMessage = {
-      id: `kyc:${leadKey}`,
-      role: 'assistant',
-      text: kycChatText(who, cat, insType),
-      at: new Date().toISOString(),
-      sending: true,
-      replyBy: 'template',
-      kind: 'kyc',
-      waType: 'text',
-    };
-    this.noteFlow(phone, message);
-    await this.waitPersist(phone, async () => {
-      await this.appendMessage(phone, name, message);
-    });
-
-    const sent = await postGraphMessage(
-      token,
-      fromId,
-      kycGraphPayload(phone, who, cat, KYC_TEMPLATE_LANG, insType),
-    );
-    if (!sent.ok) {
-      this.kycLeadSent.delete(leadKey);
-      console.error('WhatsappService.dispatchKycTemplate', sent.error);
-      await this.waitPersist(phone, async () => {
-        await this.noteSendError(phone, message.id, sent.error || 'Could not send this template.');
-      });
-      if (attempt < 1) {
-        await new Promise((resolve) => setTimeout(resolve, 4_000));
-        return this.dispatchKycTemplate(phone, name, category, leadId, insType, attempt + 1);
+    const retryWaitMs = [4_000, 8_000, 20_000, 45_000];
+    try {
+      const settings = this.settings.peekEffective() ?? (await this.settings.getEffective());
+      const token = settings.accessToken.trim().replace(/^bearer\s+/i, '').trim();
+      const fromId = settings.phoneNumberId.replace(/\D/g, '');
+      const opened = await this.readByPhone(phone);
+      if (kycTemplateAlreadySent(opened?.chat.messages ?? [])) {
+        this.rememberKycPhone(phone);
+        return;
       }
-      return;
+      if (!token || !fromId) {
+        console.error('WhatsappService.dispatchKycTemplate missing WhatsApp settings');
+        return;
+      }
+
+      const prior = (opened?.chat.messages ?? []).filter((item) => item.id.startsWith('kyc:')).at(-1);
+      const message: ChatMessage = {
+        id: prior?.id || `kyc:${phone}`,
+        role: 'assistant',
+        text: prior?.text || kycChatText(who, cat, insType),
+        at: prior?.at || new Date().toISOString(),
+        sending: true,
+        replyBy: 'template',
+        kind: 'kyc',
+        waType: 'text',
+      };
+      this.noteFlow(phone, message);
+      await this.waitPersist(phone, async () => {
+        await this.appendMessage(phone, name, message);
+      });
+
+      const languages = templateLanguageOrder(KYC_TEMPLATE, KYC_TEMPLATE_LANG);
+      let lastError = 'Could not send this template.';
+      for (let attempt = 0; attempt <= retryWaitMs.length; attempt += 1) {
+        if (attempt > 0) {
+          const again = await this.readByPhone(phone);
+          if (kycTemplateAlreadySent(again?.chat.messages ?? [])) {
+            this.rememberKycPhone(phone);
+            return;
+          }
+          await new Promise((resolve) => setTimeout(resolve, retryWaitMs[attempt - 1]));
+        }
+        let sent: { ok: boolean; error?: string; messageId?: string } = { ok: false, error: lastError };
+        for (const lang of languages) {
+          sent = await postGraphMessage(token, fromId, kycGraphPayload(phone, who, cat, lang, insType));
+          if (sent.ok || !isTemplateLanguageMiss(sent.error)) break;
+        }
+        if (sent.ok) {
+          this.rememberKycPhone(phone);
+          await this.waitPersist(phone, async () => {
+            await this.markSent(phone, message.id, {
+              delivery: 'sent',
+              ...(sent.messageId ? { waMessageId: sent.messageId } : {}),
+            } as ChatMessage);
+          });
+          return;
+        }
+        lastError = sent.error || lastError;
+        await this.waitPersist(phone, async () => {
+          await this.noteSendError(phone, message.id, lastError);
+        });
+        if (!isRetryableWhatsappSend(lastError)) break;
+      }
+      console.error(`WhatsappService.dispatchKycTemplate …${phone.slice(-4)}`, lastError);
+    } finally {
+      this.kycInflight.delete(phone);
     }
-    this.rememberKycPhone(phone);
-    await this.waitPersist(phone, async () => {
-      await this.markSent(phone, message.id, {
-        delivery: 'sent',
-        ...(sent.messageId ? { waMessageId: sent.messageId } : {}),
-      } as ChatMessage);
-    });
   }
 
   private async sendWhatsapp(

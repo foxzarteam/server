@@ -145,6 +145,30 @@ export class LeadsService {
     return ip ? { ip } : {};
   }
 
+  /**
+   * OTP can finish before the lead row exists. If this number is already verified,
+   * send the one-time KYC template from the form save itself.
+   */
+  private async notifyVerifiedPublicApply(
+    lead: Record<string, unknown> | null | undefined,
+    mobile: string,
+    name: string,
+  ): Promise<void> {
+    if (!lead || !(await this.otpService.hasVerifiedSession(mobile))) return;
+    const id = String(lead.id ?? '').trim();
+    if (id && !this.storedOtpVerified(lead)) {
+      const { error } = await this.leads
+        .update({ otp_verified: true, updated_at: new Date().toISOString() })
+        .eq('id', id);
+      if (error) console.error('LeadsService.notifyVerifiedPublicApply', error.message);
+    }
+    this.notifyApplicationWhatsapp(
+      { ...lead, full_name: name || lead.full_name, mobile_number: mobile, otp_verified: true },
+      mobile,
+      name,
+    );
+  }
+
   /** Admin create, and public apply only after OTP marks the lead verified. */
   private notifyApplicationWhatsapp(
     lead: Record<string, unknown> | null | undefined,
@@ -913,6 +937,7 @@ export class LeadsService {
           reason: 'public_apply_upgrade_draft',
           metadata: { pan_masked: panFields.pan },
         });
+        await this.notifyVerifiedPublicApply(updated, mobile, dto.fullName.trim());
         return { ok: true, lead: updated };
       } catch (err) {
         if (err instanceof LeadRuleError) {
@@ -937,6 +962,7 @@ export class LeadsService {
         metadata: { pan_masked: panFields.pan },
       });
     }
+    await this.notifyVerifiedPublicApply(lead, mobile, dto.fullName.trim());
     return { ok: true, lead: this.safeLead(lead)! };
   }
 

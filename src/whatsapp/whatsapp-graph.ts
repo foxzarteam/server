@@ -11,6 +11,26 @@ export function isGraphTimeout(error?: string): boolean {
   return /timeout|aborted|abort/i.test(error || '');
 }
 
+/**
+ * No answer, a dropped connection, or Meta was busy. A real reject (bad number,
+ * test-mode allow list, bad template) is not retried.
+ */
+export function isRetryableWhatsappSend(error?: string): boolean {
+  const text = String(error ?? '').trim();
+  if (!text) return true;
+  if (
+    /131026|131030|131042|131051|132000|132001|132005|132007|132012|132015|132016|133010|100:|190:|authorization error|not a whatsapp|allowed list|does not exist in the translation|parameter/i.test(
+      text,
+    )
+  ) {
+    return false;
+  }
+  if (/131000|130429|131016|133004|80007|\(5\d\d\)|\(429\)|\(408\)|temporarily|service unavailable|missing WhatsApp settings/i.test(text)) {
+    return true;
+  }
+  return isGraphTimeout(text) || /network|fetch failed|ECONNRESET|ETIMEDOUT|socket/i.test(text);
+}
+
 /** Meta was slow, busy, or the connection dropped. Auth and bad payloads are not retried. */
 export function isRetryableGraphError(error?: string, status?: number): boolean {
   if (status === 408 || status === 429 || (status != null && status >= 500)) return true;

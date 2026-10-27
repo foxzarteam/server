@@ -173,27 +173,24 @@ export class OtpService {
     return { success: true, message: MSG_OTP_VERIFIED };
   }
 
+  /** True when this mobile already finished OTP, even if the lead row was saved later. */
+  async hasVerifiedSession(mobileNumber: string): Promise<boolean> {
+    const mobile = mobileNumber.trim();
+    if (!mobile) return false;
+    const { data, error } = await this.otpSessions
+      .select('id')
+      .eq('mobile_number', mobile)
+      .eq('is_verified', true)
+      .limit(1);
+    if (error) {
+      console.error('OtpService.hasVerifiedSession', error.message);
+      return false;
+    }
+    return Array.isArray(data) && data.length > 0;
+  }
+
   /** Form-submit leads start as Verified No. OTP flips them to Yes and sends KYC WhatsApp. */
   private async markLeadsVerifiedForMobile(mobile: string): Promise<void> {
-    const { data, error: peekErr } = await this.supabase
-      .from(TABLE_LEADS)
-      .select('id, full_name, category, ins_type, otp_verified')
-      .eq('mobile_number', mobile)
-      .eq('is_active', true)
-      .limit(20);
-
-    if (peekErr) {
-      console.error('OtpService.markLeadsVerifiedForMobile peek', peekErr.message);
-      return;
-    }
-
-    const justVerified = (Array.isArray(data) ? data : []).filter((row) => {
-      const record = row as { full_name?: string; otp_verified?: boolean | string | null };
-      if (record.otp_verified === true || record.otp_verified === 'true') return false;
-      const name = String(record.full_name ?? '').trim();
-      return name.length > 0 && name.toLowerCase() !== 'unknown';
-    }) as { id?: string; full_name?: string; category?: string; ins_type?: string | null }[];
-
     const { error } = await this.supabase
       .from(TABLE_LEADS)
       .update({ otp_verified: true, updated_at: getCurrentIsoTime() })
@@ -204,8 +201,25 @@ export class OtpService {
       console.error('OtpService.markLeadsVerifiedForMobile', error.message);
       return;
     }
-    if (justVerified.length === 0) return;
-    this.whatsapp.notifyAfterOtpVerified(mobile, justVerified);
+
+    const { data, error: readErr } = await this.supabase
+      .from(TABLE_LEADS)
+      .select('id, full_name, category, ins_type')
+      .eq('mobile_number', mobile)
+      .eq('is_active', true)
+      .limit(20);
+
+    if (readErr) {
+      console.error('OtpService.markLeadsVerifiedForMobile read', readErr.message);
+      return;
+    }
+
+    const ready = (Array.isArray(data) ? data : []).filter((row) => {
+      const name = String((row as { full_name?: string }).full_name ?? '').trim();
+      return name.length > 0 && name.toLowerCase() !== 'unknown';
+    }) as { id?: string; full_name?: string; category?: string; ins_type?: string | null }[];
+    if (ready.length === 0) return;
+    this.whatsapp.notifyAfterOtpVerified(mobile, ready);
   }
 
   async verifyFirebaseToken(dto: VerifyFirebaseOtpDto): Promise<OtpResult> {

@@ -4,13 +4,13 @@
  */
 import assert from 'assert';
 import { createHmac } from 'crypto';
-import { graphMessageBody, isGraphTimeout, plainWhatsappSendError } from '../src/whatsapp/whatsapp-graph';
+import { graphMessageBody, isGraphTimeout, isRetryableWhatsappSend, plainWhatsappSendError } from '../src/whatsapp/whatsapp-graph';
 import { ADMIN_WA_TEMPLATES, adminBubbleText, buildAdminTemplateSend, findAdminWaTemplate, liveTemplateKey, normalizeMetaTemplates, pickApprovedTemplate, templateCanBeSent, templateMetaId, templatePersonName } from '../src/whatsapp/whatsapp-admin-templates';
 import { whatsappHubChallenge, whatsappSignatureOk } from '../src/whatsapp/whatsapp-verify';
 import { adminTargetPhone, canonicalWhatsappPhone, extractDeliveryUpdates, extractInboundMessages, shouldApplyDelivery } from '../src/whatsapp/whatsapp-inbound';
 import { decryptSettingsJson, encryptSettingsJson } from '../src/whatsapp/settings-crypto';
 import { adminCustomerName, asChat, unreadCustomerCount } from '../src/whatsapp/whatsapp-chat';
-import { kycBodyName, kycChatText, kycGraphPayload, kycProductName, KYC_START_BTN, KYC_TEMPLATE, KYC_TEMPLATE_LANG } from '../src/whatsapp/whatsapp-kyc';
+import { kycBodyName, kycChatText, kycGraphPayload, kycProductName, kycTemplateAlreadySent, KYC_START_BTN, KYC_TEMPLATE, KYC_TEMPLATE_LANG } from '../src/whatsapp/whatsapp-kyc';
 import { isGreeting, pickBotReply } from '../src/whatsapp/whatsapp-bot-rules';
 import {
   alreadyAdminMessaged,
@@ -227,6 +227,12 @@ const kycPayload = kycGraphPayload('919876543210', 'Raju Patel', 'insurance', 'e
 };
 assert.strictEqual(kycPayload.template.name, 'application_kyc');
 assert.strictEqual(KYC_TEMPLATE, 'application_kyc');
+assert.strictEqual(kycTemplateAlreadySent([{ id: 'kyc:919000000000', sent: true }]), true);
+assert.strictEqual(kycTemplateAlreadySent([{ id: 'kyc:919000000000', sendError: 'timeout' }]), false);
+assert.strictEqual(kycTemplateAlreadySent([{ id: 'tpl:personal_loan_kyc:1', sent: true }]), false);
+assert.strictEqual(isRetryableWhatsappSend('The operation was aborted due to timeout'), true);
+assert.strictEqual(isRetryableWhatsappSend('131030: Recipient not in allowed list'), false);
+assert.strictEqual(isRetryableWhatsappSend('131026: Message undeliverable'), false);
 assert.strictEqual(KYC_TEMPLATE_LANG, 'en_GB');
 assert.strictEqual(kycPayload.template.language.code, KYC_TEMPLATE_LANG);
 assert.strictEqual(kycPayload.template.components[0].parameters.length, 1);
