@@ -1,6 +1,5 @@
 /** Admin inbox menu. Same names are approved on Meta. Admin can send each one again. */
 export const ADMIN_WA_TEMPLATES = [
-  { id: 'application_kyc', label: 'Application KYC', metaName: 'application_kyc', kyc: true },
   { id: 'vehicle_refinance_kyc', label: 'Vehicle KYC (RC Wala)', metaName: 'vehicle_refinance_kyc', kyc: true },
   { id: 'vehicle_purchase_kyc', label: 'Vehicle Purchase KYC (Quotation Wala)', metaName: 'vehicle_purchase_kyc', kyc: true },
   { id: 'personal_loan_kyc', label: 'Personal Loan KYC', metaName: 'personal_loan_kyc', kyc: true },
@@ -11,7 +10,7 @@ export const ADMIN_WA_TEMPLATES = [
 export type AdminWaTemplateId = (typeof ADMIN_WA_TEMPLATES)[number]['id'];
 
 /** Meta template node id. Message text is read from this id, not stored in code. */
-const TEMPLATE_META_IDS: Record<AdminWaTemplateId, string> = {
+const TEMPLATE_META_IDS: Record<AdminWaTemplateId | 'application_kyc', string> = {
   application_kyc: '2014497809484610',
   vehicle_refinance_kyc: '1701000475154093',
   vehicle_purchase_kyc: '2020701738620974',
@@ -21,7 +20,7 @@ const TEMPLATE_META_IDS: Record<AdminWaTemplateId, string> = {
 };
 
 export function templateMetaId(metaName: string): string {
-  return TEMPLATE_META_IDS[metaName as AdminWaTemplateId] ?? '';
+  return TEMPLATE_META_IDS[metaName as keyof typeof TEMPLATE_META_IDS] ?? '';
 }
 
 export type MetaTemplateButton = { type?: string; text?: string; url?: string };

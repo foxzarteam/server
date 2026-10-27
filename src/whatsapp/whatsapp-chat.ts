@@ -10,6 +10,35 @@ function isMissingFileNotice(message: { role?: string; text?: string; mediaId?: 
   return text === MISSING_FILE_NOTICE || /^\[(unsupported|unknown|empty) message\]$/i.test(text);
 }
 
+const KYC_BUTTON = /^(complete kyc|check application status)$/i;
+const KYC_RACE_MS = 3 * 60 * 1000;
+
+/**
+ * The KYC template is what the customer taps. If that bubble was saved after the tap,
+ * put it back above the tap so the chat reads in the order it happened.
+ */
+export function placeKycBeforeClicks(messages: ChatMessage[]): ChatMessage[] {
+  const next = messages.slice();
+  for (let i = next.length - 1; i >= 0; i -= 1) {
+    const item = next[i];
+    if (item.role !== 'assistant' || !item.id.startsWith('kyc:')) continue;
+    let clickAt = -1;
+    for (let j = 0; j < i; j += 1) {
+      if (next[j].role === 'user' && KYC_BUTTON.test(next[j].text.trim())) {
+        clickAt = j;
+        break;
+      }
+    }
+    if (clickAt < 0) continue;
+    const kycTime = Date.parse(item.at);
+    const clickTime = Date.parse(next[clickAt].at);
+    if (Number.isFinite(kycTime) && Number.isFinite(clickTime) && kycTime - clickTime > KYC_RACE_MS) continue;
+    next.splice(i, 1);
+    next.splice(clickAt, 0, item);
+  }
+  return next;
+}
+
 /** WhatsApp sends an empty album shell plus the real photos. Drop the shell when a photo arrived. */
 export function dropFalseMissingFileNotices(messages: ChatMessage[]): ChatMessage[] {
   return messages.filter((message) => {
@@ -239,7 +268,7 @@ export function asChat(raw: unknown): ChatDoc {
   return {
     profileName: String(obj.profileName ?? '').slice(0, 120),
     waPhoneNumberId: String(obj.waPhoneNumberId ?? '').replace(/\D/g, '').slice(0, 30),
-    messages: dropFalseMissingFileNotices(clean).slice(-MAX_MESSAGES),
+    messages: placeKycBeforeClicks(dropFalseMissingFileNotices(clean)).slice(-MAX_MESSAGES),
     ...(typeof obj.leadNote === 'string' ? { leadNote: obj.leadNote.slice(0, 1500) } : {}),
     ...(Number.isFinite(Date.parse(adminReadAt)) ? { adminReadAt } : {}),
   };

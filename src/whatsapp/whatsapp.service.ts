@@ -15,6 +15,7 @@ import {
   adminCustomerName,
   asChat,
   dropFalseMissingFileNotices,
+  placeKycBeforeClicks,
   emptyFlow,
   MAX_MESSAGES,
   unreadCustomerCount,
@@ -329,7 +330,7 @@ export class WhatsappService implements OnModuleInit {
   async getForAdmin(id: string): Promise<WhatsappEnquiryDetail | null> {
     if (!/^[0-9a-f-]{36}$/i.test(id)) return null;
     const { data, error } = await this.table
-      .select('id, phone, chat, last_chat_at, created_at')
+      .select('id, phone, chat, last_chat_at, created_at, updated_at')
       .eq('id', id)
       .maybeSingle();
 
@@ -340,6 +341,7 @@ export class WhatsappService implements OnModuleInit {
 
     const row = data as EnquiryRow;
     const chat = asChat(row.chat);
+    await this.saveChatOrder(row, chat);
     const applicationNames = await this.applicationNames([row.phone]);
     const templates = await this.liveTemplates(chat.messages);
     void this.markAdminRead(row.id);
@@ -547,6 +549,9 @@ export class WhatsappService implements OnModuleInit {
     }
 
     if (reply) {
+      await this.waitPersist(phone, async () => {
+        await this.persistInbound(phone, message.profileName, userMessage, reply, message.phoneNumberId);
+      });
       try {
         await this.deliverBotReply(settings, phone, reply, message.phoneNumberId);
       } catch (error) {
@@ -560,13 +565,19 @@ export class WhatsappService implements OnModuleInit {
         if (reply.kind === 'welcome' || reply.kind === 'personal_loan' || reply.kind === 'insurance') {
           this.marketingFlight.delete(`${phone}:${reply.kind}`);
         }
+        await this.waitPersist(phone, async () => {
+          await this.markSent(phone, reply.id, {
+            delivery: reply.delivery || 'sent',
+            ...(reply.waMessageId ? { waMessageId: reply.waMessageId } : {}),
+          } as ChatMessage);
+        });
+      } else if (reply.sendError) {
+        await this.waitPersist(phone, async () => {
+          await this.noteSendError(phone, reply.id, reply.sendError || 'WhatsApp send failed');
+        });
       }
+      this.rememberIds(phone, [reply.id]);
     }
-
-    if (reply) this.rememberIds(phone, [reply.id]);
-    await this.waitPersist(phone, async () => {
-      await this.persistInbound(phone, message.profileName, userMessage, reply, message.phoneNumberId);
-    });
   }
 
   /** KYC Start / Status check: no DB wait. Does not count as Namaste welcome. */
@@ -1323,6 +1334,21 @@ export class WhatsappService implements OnModuleInit {
       return;
     }
 
+    const message: ChatMessage = {
+      id: `kyc:${leadKey}`,
+      role: 'assistant',
+      text: kycChatText(who, cat, insType),
+      at: new Date().toISOString(),
+      sending: true,
+      replyBy: 'template',
+      kind: 'kyc',
+      waType: 'text',
+    };
+    this.noteFlow(phone, message);
+    await this.waitPersist(phone, async () => {
+      await this.appendMessage(phone, name, message);
+    });
+
     const sent = await postGraphMessage(
       token,
       fromId,
@@ -1331,6 +1357,9 @@ export class WhatsappService implements OnModuleInit {
     if (!sent.ok) {
       this.kycLeadSent.delete(leadKey);
       console.error('WhatsappService.dispatchKycTemplate', sent.error);
+      await this.waitPersist(phone, async () => {
+        await this.noteSendError(phone, message.id, sent.error || 'Could not send this template.');
+      });
       if (attempt < 1) {
         await new Promise((resolve) => setTimeout(resolve, 4_000));
         return this.dispatchKycTemplate(phone, name, category, leadId, insType, attempt + 1);
@@ -1338,22 +1367,11 @@ export class WhatsappService implements OnModuleInit {
       return;
     }
     this.rememberKycPhone(phone);
-
-    const message: ChatMessage = {
-      id: `kyc:${leadKey}`,
-      role: 'assistant',
-      text: kycChatText(who, cat, insType),
-      at: new Date().toISOString(),
-      sent: true,
-      delivery: 'sent',
-      ...(sent.messageId ? { waMessageId: sent.messageId } : {}),
-      replyBy: 'template',
-      kind: 'kyc',
-      waType: 'text',
-    };
-    this.noteFlow(phone, message);
     await this.waitPersist(phone, async () => {
-      await this.appendMessage(phone, name, message);
+      await this.markSent(phone, message.id, {
+        delivery: 'sent',
+        ...(sent.messageId ? { waMessageId: sent.messageId } : {}),
+      } as ChatMessage);
     });
   }
 
@@ -1549,7 +1567,7 @@ export class WhatsappService implements OnModuleInit {
       }
 
       const prior = current?.chat.messages ?? [];
-      const messages = dropFalseMissingFileNotices([...prior, ...toAdd]).slice(-MAX_MESSAGES);
+      const messages = placeKycBeforeClicks(dropFalseMissingFileNotices([...prior, ...toAdd])).slice(-MAX_MESSAGES);
       if (
         current &&
         messages.length === prior.length &&
@@ -1569,7 +1587,7 @@ export class WhatsappService implements OnModuleInit {
         ...(adminReadAt ? { adminReadAt } : {}),
       };
       const now = new Date().toISOString();
-      const lastChatAt = toAdd[toAdd.length - 1]?.at || now;
+      const lastChatAt = messages[messages.length - 1]?.at || now;
 
       if (!current) {
         const { data, error } = await this.table
@@ -1604,6 +1622,23 @@ export class WhatsappService implements OnModuleInit {
       if (error) console.error('WhatsappService.appendMessage.update', error.message);
     }
     return null;
+  }
+
+  /** Rewrite a chat whose stored order does not match the process order. One write, then polls match. */
+  private async saveChatOrder(row: EnquiryRow, chat: ChatDoc): Promise<void> {
+    const before = (row.chat?.messages ?? []).map((item) => item.id).join('\n');
+    const after = chat.messages.map((item) => item.id).join('\n');
+    if (before === after) return;
+    const now = new Date().toISOString();
+    const { error } = await this.table
+      .update({
+        chat,
+        last_chat_at: chat.messages[chat.messages.length - 1]?.at || row.last_chat_at,
+        updated_at: now,
+      })
+      .eq('id', row.id)
+      .eq('updated_at', row.updated_at);
+    if (error) console.error('WhatsappService.saveChatOrder', error.message);
   }
 
   /** Opening a chat marks customer messages seen. Retries so a new message is not overwritten. */

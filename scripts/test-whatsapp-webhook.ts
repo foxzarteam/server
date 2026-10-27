@@ -5,7 +5,7 @@
 import assert from 'assert';
 import { createHmac } from 'crypto';
 import { graphMessageBody, isGraphTimeout, plainWhatsappSendError } from '../src/whatsapp/whatsapp-graph';
-import { adminBubbleText, buildAdminTemplateSend, findAdminWaTemplate, liveTemplateKey, normalizeMetaTemplates, pickApprovedTemplate, templateCanBeSent, templateMetaId, templatePersonName } from '../src/whatsapp/whatsapp-admin-templates';
+import { ADMIN_WA_TEMPLATES, adminBubbleText, buildAdminTemplateSend, findAdminWaTemplate, liveTemplateKey, normalizeMetaTemplates, pickApprovedTemplate, templateCanBeSent, templateMetaId, templatePersonName } from '../src/whatsapp/whatsapp-admin-templates';
 import { whatsappHubChallenge, whatsappSignatureOk } from '../src/whatsapp/whatsapp-verify';
 import { adminTargetPhone, canonicalWhatsappPhone, extractDeliveryUpdates, extractInboundMessages, shouldApplyDelivery } from '../src/whatsapp/whatsapp-inbound';
 import { decryptSettingsJson, encryptSettingsJson } from '../src/whatsapp/settings-crypto';
@@ -235,6 +235,14 @@ assert.ok(alreadyKycStarted([{ role: 'assistant', kind: 'kyc' }]));
 assert.ok(!alreadyKycStarted([{ role: 'assistant', kind: 'kyc', sendError: 'timeout' }]));
 assert.ok(!alreadyKycStarted([{ role: 'assistant', kind: 'welcome' }]));
 assert.strictEqual(asChat({ messages: [{ id: 'kyc:1', role: 'assistant', kind: 'kyc', text: 'x' }] }).messages[0].kind, 'kyc');
+const raced = asChat({
+  messages: [
+    { id: 'u1', role: 'user', text: 'Check Application Status', at: '2026-10-27T10:32:00.000Z' },
+    { id: 'ai:u1', role: 'assistant', kind: 'status', text: 'Check your application status', at: '2026-10-27T10:32:05.000Z' },
+    { id: 'kyc:lead1', role: 'assistant', kind: 'kyc', text: 'Dear Jeevraj. KYC is pending', at: '2026-10-27T10:32:20.000Z' },
+  ],
+});
+assert.deepStrictEqual(raced.messages.map((item) => item.id), ['kyc:lead1', 'u1', 'ai:u1']);
 const kycBtn = extractInboundMessages({
   object: 'whatsapp_business_account',
   entry: [
@@ -539,7 +547,8 @@ assert.strictEqual(adminCustomerName('Jayu Patel', 'Jayu Kumar'), 'Jayu Kumar');
 assert.strictEqual(adminCustomerName('Jayu Patel', ''), 'Jayu Patel');
 assert.strictEqual(adminCustomerName('Jayu Patel', '   '), 'Jayu Patel');
 
-assert.strictEqual(findAdminWaTemplate('application_kyc')?.metaName, 'application_kyc');
+assert.strictEqual(ADMIN_WA_TEMPLATES.length, 5);
+assert.strictEqual(findAdminWaTemplate('application_kyc'), null);
 assert.strictEqual(findAdminWaTemplate('personal_loan_kyc')?.kyc, true);
 assert.strictEqual(findAdminWaTemplate('call_not_answered_followup')?.kyc, false);
 assert.strictEqual(findAdminWaTemplate('nope'), null);

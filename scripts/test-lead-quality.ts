@@ -142,10 +142,10 @@ assert.ok(
   loanNotEligibleMessage({
     category: 'vehicle_loan',
     netMonthlyIncome: 20000,
-    cibilBand: 'below_600',
+    cibilBand: 'below_650',
     hasExistingEmi: false,
     totalMonthlyEmi: 0,
-  })?.includes('600'),
+  })?.includes('650'),
 );
 assert.strictEqual(
   loanNotEligibleMessage({
