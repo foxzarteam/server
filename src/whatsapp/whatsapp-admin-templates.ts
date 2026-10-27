@@ -1,10 +1,10 @@
 /** Admin inbox menu. Same names are approved on Meta. Admin can send each one again. */
 export const ADMIN_WA_TEMPLATES = [
-  { id: 'vehicle_refinance_kyc', label: 'Vehicle KYC (RC Wala)', metaName: 'vehicle_refinance_kyc', kyc: true },
-  { id: 'vehicle_purchase_kyc', label: 'Vehicle Purchase KYC (Quotation Wala)', metaName: 'vehicle_purchase_kyc', kyc: true },
-  { id: 'personal_loan_kyc', label: 'Personal Loan KYC', metaName: 'personal_loan_kyc', kyc: true },
-  { id: 'document_pending_reminder', label: 'Document Pending Reminder', metaName: 'document_pending_reminder', kyc: false },
-  { id: 'call_not_answered_followup', label: 'Call Not Answered', metaName: 'call_not_answered_followup', kyc: false },
+  { id: 'vehicle_refinance_kyc', label: 'Loan on Existing Car (Refinance)', metaName: 'vehicle_refinance_kyc', kyc: true },
+  { id: 'vehicle_purchase_kyc', label: 'New / Used Car Loan (Purchase)', metaName: 'vehicle_purchase_kyc', kyc: true },
+  { id: 'personal_loan_kyc', label: 'Personal Loan (PL KYC)', metaName: 'personal_loan_kyc', kyc: true },
+  { id: 'document_pending_reminder', label: 'Reminder: Documents Pending', metaName: 'document_pending_reminder', kyc: false },
+  { id: 'call_not_answered_followup', label: 'Reminder: Call Not Answered', metaName: 'call_not_answered_followup', kyc: false },
 ] as const;
 
 export type AdminWaTemplateId = (typeof ADMIN_WA_TEMPLATES)[number]['id'];
