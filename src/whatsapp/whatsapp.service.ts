@@ -507,15 +507,14 @@ export class WhatsappService implements OnModuleInit {
     let reply = this.decideReply(phone, message, assistantId);
     if (statusAlready && reply?.kind === 'status') reply = null;
     if (reply?.kind === 'kyc_docs') {
-      const profile = await Promise.race([
-        this.kycProfileForPhone(phone),
-        new Promise<null>((resolve) => setTimeout(() => resolve(null), 2_500)),
-      ]);
+      const profile = await this.kycProfileForPhone(phone);
       reply = {
         ...reply,
-        text: profile
-          ? kycDocsRequestText(profile.employment, profile.category)
-          : kycDocsRequestText(),
+        text: kycDocsRequestText(
+          profile.employment,
+          profile.category,
+          templatePersonName(profile.name, message.profileName),
+        ),
       };
     }
     if (reply && (reply.kind === 'welcome' || reply.kind === 'personal_loan' || reply.kind === 'insurance')) {
@@ -907,6 +906,7 @@ export class WhatsappService implements OnModuleInit {
     who: string,
     profileName: string,
     waPhoneNumberId: string,
+    kind?: ChatMessage['kind'],
   ): Promise<{ ok: boolean; error?: string; data?: WhatsappEnquiryDetail }> {
     const settings = await this.settings.getEffective();
     const token = settings.accessToken.trim().replace(/^bearer\s+/i, '').trim();
@@ -939,13 +939,14 @@ export class WhatsappService implements OnModuleInit {
     }
     if (!built) return { ok: false, error: sent.error || 'Could not send this template.' };
 
+    const messageKind = kind ?? (option.kyc ? 'kyc' : 'admin');
     const message: ChatMessage = {
       id: `tpl:${option.id}:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`,
       role: 'assistant',
       text: built.text,
       at: new Date().toISOString(),
       replyBy: 'template',
-      kind: option.kyc ? 'kyc' : 'admin',
+      kind: messageKind,
       waType: 'text',
       ...(built.buttons.length ? { buttons: built.buttons } : {}),
     };
@@ -953,7 +954,7 @@ export class WhatsappService implements OnModuleInit {
       message.sent = true;
       message.delivery = 'sent';
       if (sent.messageId) message.waMessageId = sent.messageId;
-      if (option.kyc) this.noteFlow(to, message);
+      if (messageKind === 'kyc' || messageKind === 'kyc_docs') this.noteFlow(to, message);
     } else {
       message.delivery = 'failed';
       message.sendError = plainWhatsappSendError(sent.error);
@@ -1183,25 +1184,24 @@ export class WhatsappService implements OnModuleInit {
   private async kycProfileForPhone(phone: string): Promise<{
     employment: 'salaried' | 'self_employed' | null;
     category: string | null;
+    name: string;
   }> {
-    const empty = { employment: null as 'salaried' | 'self_employed' | null, category: null as string | null };
+    const empty = {
+      employment: null as 'salaried' | 'self_employed' | null,
+      category: null as string | null,
+      name: '',
+    };
     const data = await this.leadRowsForPhone(
       phone,
       'full_name, pan, mobile_number, employment_type, category, updated_at',
     );
     if (!data) return empty;
-    let category: string | null = null;
-    for (const record of data) {
-      if (isDraftLead(record)) continue;
-      const leadCategory = String(record.category ?? '').trim().toLowerCase();
-      if (!category) category = leadCategory;
-      if (isVehicleLoanCategory(leadCategory) && category === leadCategory) {
-        return { employment: null, category: leadCategory };
-      }
-      const bucket = kycEmploymentBucket(String(record.employment_type ?? ''));
-      if (bucket) return { employment: bucket, category };
-    }
-    return { employment: null, category };
+    const record = data.find((row) => !isDraftLead(row));
+    if (!record) return empty;
+    const category = String(record.category ?? '').trim().toLowerCase() || null;
+    const name = String(record.full_name ?? '').trim();
+    if (category && isVehicleLoanCategory(category)) return { employment: null, category, name };
+    return { employment: kycEmploymentBucket(String(record.employment_type ?? '')), category, name };
   }
 
   /** One Under Review note per phone, even if the admin flips that status again. */

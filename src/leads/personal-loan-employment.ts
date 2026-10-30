@@ -58,11 +58,18 @@ export function storedEmploymentType(raw?: string | null): StoredEmployment | nu
   const v = String(raw ?? '')
     .trim()
     .toLowerCase()
-    .replace(/[\s-]+/g, '_');
-  if (v === 'salaried' || v === 'salaried_bank' || v === 'salaried_cash' || v === 'self_employed') {
-    return v;
+    .replace(/[\s/-]+/g, '_')
+    .replace(/_+/g, '_');
+  if (v === 'salaried' || v === 'salaried_bank' || v === 'salaried_cash') return v;
+  if (
+    v === 'self_employed' ||
+    v === 'selfemployed' ||
+    v === 'business' ||
+    v.startsWith('self_employed') ||
+    v.includes('self_employ')
+  ) {
+    return 'self_employed';
   }
-  if (v === 'selfemployed') return 'self_employed';
   return null;
 }
 

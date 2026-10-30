@@ -164,6 +164,7 @@ assert.ok(loanProfileError({ cibilBand: 'above_680', hasExistingEmi: true, total
 assert.ok(loanProfileError({ cibilBand: 'nope', hasExistingEmi: false, totalMonthlyEmi: 0 }));
 assert.strictEqual(kycEmploymentBucket('salaried_cash'), 'salaried');
 assert.strictEqual(kycEmploymentBucket('self_employed'), 'self_employed');
+assert.strictEqual(kycEmploymentBucket('Self-Employed / Business'), 'self_employed');
 
 assert.strictEqual(leadFullNameError('Rahul Sharma'), null);
 assert.ok(leadFullNameError('A')?.includes('required'));

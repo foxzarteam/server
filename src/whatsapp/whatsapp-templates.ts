@@ -188,7 +188,11 @@ function kycDocsIntro(): string {
 }
 
 /** Salaried applicants. Default when employment is missing. Vehicle loans use their own list. */
-export function kycDocsRequestText(employment?: string | null, category?: string | null): string {
+export function kycDocsRequestText(
+  employment?: string | null,
+  category?: string | null,
+  name?: string | null,
+): string {
   if (isVehicleLoanCategory(category)) {
     return [
       kycDocsIntro(),
@@ -199,25 +203,31 @@ export function kycDocsRequestText(employment?: string | null, category?: string
       '4️⃣ Vehicle Quotation 🚗 OR RC (if you have) 📄',
     ].join('\n');
   }
+  const who = String(name ?? '').trim().replace(/[\r\n\t]+/g, ' ').replace(/\s+/g, ' ').slice(0, 200);
+  const hello = `Hello ${who ? `${who} ` : ''}Ji,`;
   const kind = String(employment ?? '')
     .trim()
     .toLowerCase()
     .replace(/[\s-]+/g, '_');
   if (kind === 'self_employed' || kind === 'selfemployed') {
     return [
-      kycDocsIntro(),
+      hello,
       '',
-      '1️⃣ PAN Card 🪪',
-      '2️⃣ Aadhaar Card 🆔',
-      '3️⃣ Last 12 Months’ Bank Statement (PDF) 🏦',
-      '4️⃣ Last 3 Years’ ITR with Computation 📄',
-      '5️⃣ Any Available Business Proof (GST / Udyam / Shop Licence) 🏪',
-      '6️⃣ Passport-Size Photo 📸',
+      'To process your loan quickly, please share the following KYC documents here on WhatsApp:',
+      '',
+      '1️⃣ Photo, PAN Card & Aadhaar Card 🪪',
+      '2️⃣ Last 6 Months’ Bank Statement 🏦',
+      '3️⃣ Last 2 Years’ ITR / Udyam Certificate / GST Certificate 📄',
+      '4️⃣ Electricity Bill 💡',
+      '5️⃣ Permanent Address Proof (Voter ID / Passport, etc.) 🏠',
+      '',
+      'Team Apni Zaroorat',
     ].join('\n');
   }
   return [
-    kycDocsIntro(),
+    hello,
     '',
+    'To process your loan quickly, please share the following KYC documents here on WhatsApp:',
     '1️⃣ PAN Card 🪪',
     '2️⃣ Aadhaar Card 🆔',
     '3️⃣ Last 6 Months’ Bank Statement 🏦',
