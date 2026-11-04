@@ -1,7 +1,7 @@
 /** Admin inbox menu. Same names are approved on Meta. Admin can send each one again. */
 export const ADMIN_WA_TEMPLATES = [
-  { id: 'vehicle_refinance_kyc', label: 'Loan on Existing Car (Refinance)', metaName: 'vehicle_refinance_kyc', kyc: true },
-  { id: 'vehicle_purchase_kyc', label: 'New / Used Car Loan (Purchase)', metaName: 'vehicle_purchase_kyc', kyc: true },
+  { id: 'vehicle_refinance_kyc', label: 'Used vehicle (purchase) / Existing vehicle (refinanace)', metaName: 'vehicle_refinance_kyc', kyc: true },
+  { id: 'vehicle_purchase_kyc', label: 'New vehicle loan (purchase)', metaName: 'vehicle_purchase_kyc', kyc: true },
   { id: 'personal_loan_kyc', label: 'Personal Loan (PL KYC)', metaName: 'personal_loan_kyc', kyc: true },
   { id: 'self_employed_kyc', label: 'Self employee KYC', metaName: 'self_employed_kyc', kyc: true },
   { id: 'document_pending_reminder', label: 'Reminder: Documents Pending', metaName: 'document_pending_reminder', kyc: false },
