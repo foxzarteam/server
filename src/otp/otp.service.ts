@@ -2,16 +2,10 @@ import { Inject, Injectable } from '@nestjs/common';
 import { SupabaseClient } from '@supabase/supabase-js';
 import { SUPABASE_CLIENT } from '../config/supabase';
 import { WhatsappService } from '../whatsapp/whatsapp.service';
-import { getFirebaseAdmin, normalizeIndianMobile } from '../firebase/firebase-admin';
 import {
-  MSG_OTP_DAILY_LIMIT,
-  MSG_OTP_FIREBASE_MISMATCH,
-  MSG_OTP_FIREBASE_NOT_CONFIGURED,
   MSG_OTP_SESSION_FAILED,
-  MSG_OTP_SENT,
   MSG_OTP_VERIFIED,
   MSG_OTP_VERIFY_FAILED,
-  OTP_MAX_SENDS_PER_DAY,
   TABLE_LEADS,
   TABLE_OTP_SESSIONS,
   getCurrentIsoTime,
@@ -31,65 +25,12 @@ export class OtpService {
     return this.supabase.from(TABLE_OTP_SESSIONS);
   }
 
-  private async countSendsToday(mobileNumber: string): Promise<number> {
-    const { count, error } = await this.otpSessions
-      .select('id', { count: 'exact', head: true })
-      .eq('mobile_number', mobileNumber.trim())
-      .gte('created_at', startOfTodayIstIso());
-
-    if (error) {
-      console.error('OtpService.countSendsToday', error);
-      throw new Error('OTP_COUNT_FAILED');
-    }
-    return count ?? 0;
-  }
-
-  /**
-   * Before Firebase SMS: check today's IST limit, then insert ONE send row.
-   * Max 5 OTPs per mobile per day. Resets next calendar day (IST midnight).
-   */
-  async requestSend(dto: SendOtpDto): Promise<OtpResult> {
-    const mobile = dto.mobileNumber.trim();
-
-    let used = 0;
-    try {
-      used = await this.countSendsToday(mobile);
-    } catch {
-      return {
-        success: false,
-        message: 'Could not check OTP limit. Please try again.',
-      };
-    }
-
-    if (used >= OTP_MAX_SENDS_PER_DAY) {
-      return {
-        success: false,
-        message: MSG_OTP_DAILY_LIMIT,
-        remainingSends: 0,
-        retryNextDay: true,
-      };
-    }
-
-    const { data, error } = await this.otpSessions
-      .insert({
-        mobile_number: mobile,
-        is_verified: false,
-      })
-      .select('id')
-      .single();
-
-    if (error || !data) {
-      console.error('OtpService.requestSend insert', error);
-      return {
-        success: false,
-        message: MSG_OTP_SESSION_FAILED,
-      };
-    }
-
+  /** Firebase OTP SMS is disabled — never insert a send row or allow SMS. */
+  async requestSend(_dto: SendOtpDto): Promise<OtpResult> {
     return {
-      success: true,
-      message: MSG_OTP_SENT,
-      remainingSends: Math.max(0, OTP_MAX_SENDS_PER_DAY - used - 1),
+      success: false,
+      message: 'OTP is disabled. Submit the form without OTP.',
+      remainingSends: 0,
     };
   }
 
@@ -189,7 +130,7 @@ export class OtpService {
     return Array.isArray(data) && data.length > 0;
   }
 
-  /** Form-submit leads start as Verified No. OTP flips them to Yes and sends KYC WhatsApp. */
+  /** Legacy helper if an old OTP path still marks a phone. Public apply already sets verified + KYC. */
   private async markLeadsVerifiedForMobile(mobile: string): Promise<void> {
     const { error } = await this.supabase
       .from(TABLE_LEADS)
@@ -222,38 +163,12 @@ export class OtpService {
     this.whatsapp.notifyAfterOtpVerified(mobile, ready);
   }
 
-  async verifyFirebaseToken(dto: VerifyFirebaseOtpDto): Promise<OtpResult> {
-    const checked = await this.assertFirebaseIdToken(
-      dto.mobileNumber.trim(),
-      dto.idToken,
-    );
-    if (!checked.success) return checked;
-    return this.markPhoneVerified(dto.mobileNumber.trim());
-  }
-
-  /** Verify Firebase idToken matches mobile — no DB write (fast path for login). */
-  async assertFirebaseIdToken(
-    mobileNumber: string,
-    idToken: string,
-  ): Promise<OtpResult> {
-    const app = getFirebaseAdmin();
-    if (!app) {
-      return { success: false, message: MSG_OTP_FIREBASE_NOT_CONFIGURED };
-    }
-
-    try {
-      const decoded = await app.auth().verifyIdToken(idToken);
-      const tokenMobile = normalizeIndianMobile(decoded.phone_number);
-      if (!tokenMobile || tokenMobile !== mobileNumber.trim()) {
-        return { success: false, message: MSG_OTP_FIREBASE_MISMATCH };
-      }
-      return { success: true, message: MSG_OTP_VERIFIED };
-    } catch (e) {
-      if (process.env.NODE_ENV !== 'production') {
-        console.error('OtpService.assertFirebaseIdToken', e);
-      }
-      return { success: false, message: MSG_OTP_VERIFY_FAILED };
-    }
+  /** Firebase OTP SMS is disabled — never mark a phone verified via OTP. */
+  async verifyFirebaseToken(_dto: VerifyFirebaseOtpDto): Promise<OtpResult> {
+    return {
+      success: false,
+      message: 'OTP is disabled. Submit the form without OTP.',
+    };
   }
 
   /**

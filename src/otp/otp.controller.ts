@@ -1,40 +1,25 @@
-import {
-  Body,
-  Controller,
-  HttpCode,
-  HttpStatus,
-  Post,
-  Req,
-  BadRequestException,
-} from '@nestjs/common';
-import type { Request } from 'express';
-import { requestRateLimitIp } from '../common/client-ip';
-import { allowRateLimitedAction } from '../security/rate-limit';
+import { Body, Controller, HttpCode, HttpStatus, Post } from '@nestjs/common';
 import { SendOtpDto, VerifyFirebaseOtpDto } from './otp.dto';
-import { OtpService } from './otp.service';
 
 @Controller('otp')
 export class OtpController {
-  constructor(private readonly otpService: OtpService) {}
-
-  /** Rate-limit check + insert send row before Firebase SMS. */
+  /** Firebase OTP is off — public apply and customer login no longer send SMS. */
   @Post('request-send')
   @HttpCode(HttpStatus.OK)
-  async requestSend(@Body() dto: SendOtpDto, @Req() req: Request) {
-    const ip = requestRateLimitIp(req) ?? 'unknown';
-    if (!allowRateLimitedAction(`otp-request-ip:${ip}`, 12, 60_000)) {
-      throw new BadRequestException('Too many OTP requests. Please try again in a minute.');
-    }
-    return this.otpService.requestSend(dto);
+  requestSend(@Body() _dto: SendOtpDto) {
+    return {
+      success: false,
+      message: 'OTP is disabled. Submit the form without OTP.',
+      remainingSends: 0,
+    };
   }
 
   @Post('verify-firebase')
   @HttpCode(HttpStatus.OK)
-  async verifyFirebase(@Body() dto: VerifyFirebaseOtpDto, @Req() req: Request) {
-    const ip = requestRateLimitIp(req) ?? 'unknown';
-    if (!allowRateLimitedAction(`otp-verify-ip:${ip}`, 20, 60_000)) {
-      throw new BadRequestException('Too many verification attempts. Please try again in a minute.');
-    }
-    return this.otpService.verifyFirebaseToken(dto);
+  verifyFirebase(@Body() _dto: VerifyFirebaseOtpDto) {
+    return {
+      success: false,
+      message: 'OTP is disabled. Submit the form without OTP.',
+    };
   }
 }

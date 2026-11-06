@@ -2,7 +2,6 @@ import { Injectable } from '@nestjs/common';
 import { isApprovedLeadStatus } from '../common/lead-status';
 import { LeadsService } from '../leads/leads.service';
 import { isDraftLead } from '../leads/lead-present';
-import { OtpService } from '../otp/otp.service';
 import { isMaskedPan, isValidPanFormat, maskPan, normalizePan } from '../security/pan-crypto';
 import {
   asString,
@@ -13,10 +12,7 @@ import {
 
 @Injectable()
 export class CustomerService {
-  constructor(
-    private readonly leadsService: LeadsService,
-    private readonly otpService: OtpService,
-  ) {}
+  constructor(private readonly leadsService: LeadsService) {}
 
   async getApplications(mobileNumber: string): Promise<CustomerApplication[]> {
     // Skip per-row OTP lookup — dashboard only needs lead fields (faster login/load).
@@ -137,7 +133,7 @@ export class CustomerService {
 
   async login(
     mobileNumber: string,
-    idToken: string,
+    _idToken?: string,
   ): Promise<{
     ok: boolean;
     message?: string;
@@ -145,17 +141,6 @@ export class CustomerService {
     applications?: CustomerApplication[];
   }> {
     const mobile = mobileNumber.trim();
-
-    // Verify Firebase token once, then mark OTP session + load apps in parallel.
-    const tokenOk = await this.otpService.assertFirebaseIdToken(mobile, idToken);
-    if (!tokenOk.success) {
-      return {
-        ok: false,
-        message: tokenOk.message || 'OTP verification expired. Please verify again.',
-      };
-    }
-
-    await this.otpService.markPhoneVerified(mobile);
     const applications = await this.getApplications(mobile);
 
     if (applications.length === 0) {

@@ -43,7 +43,7 @@ export class CustomerController {
   }
 
   /**
-   * Public: verify Firebase OTP + return applications for customer track login.
+   * Public: mobile-only customer track login (OTP disabled).
    * az_web sets the session cookie from this response.
    */
   @Post('login')
@@ -57,7 +57,7 @@ export class CustomerController {
     ) {
       throw new BadRequestException('Too many attempts. Try again in a minute.');
     }
-    const result = await this.customerService.login(dto.mobileNumber, dto.idToken);
+    const result = await this.customerService.login(dto.mobileNumber);
     if (!result.ok) {
       const msg = result.message || 'Login failed.';
       const notFound = msg.toLowerCase().includes('no application');

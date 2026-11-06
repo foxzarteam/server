@@ -19,9 +19,10 @@ export class CustomerLoginDto {
   @Matches(/^[6-9]\d{9}$/, { message: 'Invalid Indian mobile number' })
   mobileNumber: string;
 
+  /** Legacy Firebase token. Ignored — OTP login is disabled. */
+  @IsOptional()
   @IsString()
-  @MinLength(20, { message: 'idToken is required' })
-  idToken: string;
+  idToken?: string;
 }
 
 export class ApplicationsDto {

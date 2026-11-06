@@ -145,23 +145,13 @@ export class LeadsService {
     return ip ? { ip } : {};
   }
 
-  /**
-   * OTP can finish before the lead row exists. If this number is already verified,
-   * send the one-time KYC template from the form save itself.
-   */
-  private async notifyVerifiedPublicApply(
+  /** Public apply is verified without OTP. Send the one-time KYC WhatsApp from form save. */
+  private notifyPublicApply(
     lead: Record<string, unknown> | null | undefined,
     mobile: string,
     name: string,
-  ): Promise<void> {
-    if (!lead || !(await this.otpService.hasVerifiedSession(mobile))) return;
-    const id = String(lead.id ?? '').trim();
-    if (id && !this.storedOtpVerified(lead)) {
-      const { error } = await this.leads
-        .update({ otp_verified: true, updated_at: new Date().toISOString() })
-        .eq('id', id);
-      if (error) console.error('LeadsService.notifyVerifiedPublicApply', error.message);
-    }
+  ): void {
+    if (!lead) return;
     this.notifyApplicationWhatsapp(
       { ...lead, full_name: name || lead.full_name, mobile_number: mobile, otp_verified: true },
       mobile,
@@ -169,7 +159,7 @@ export class LeadsService {
     );
   }
 
-  /** Admin create, and public apply only after OTP marks the lead verified. */
+  /** Admin create and public apply: send the KYC start template once. */
   private notifyApplicationWhatsapp(
     lead: Record<string, unknown> | null | undefined,
     fallbackPhone = '',
@@ -872,7 +862,7 @@ export class LeadsService {
       category,
       status: 'pending',
       is_active: true,
-      otp_verified: false,
+      otp_verified: true,
       consent_accepted: true,
     };
 
@@ -923,6 +913,7 @@ export class LeadsService {
           clientIp: meta?.clientIp ?? undefined,
           agentId: !byMobile.agent_id && agentId ? agentId : undefined,
           consentAccepted: true,
+          otpVerified: true,
         });
         if (!updated) {
           return {
@@ -937,7 +928,7 @@ export class LeadsService {
           reason: 'public_apply_upgrade_draft',
           metadata: { pan_masked: panFields.pan },
         });
-        await this.notifyVerifiedPublicApply(updated, mobile, dto.fullName.trim());
+        this.notifyPublicApply(updated, mobile, dto.fullName.trim());
         return { ok: true, lead: updated };
       } catch (err) {
         if (err instanceof LeadRuleError) {
@@ -962,8 +953,8 @@ export class LeadsService {
         metadata: { pan_masked: panFields.pan },
       });
     }
-    await this.notifyVerifiedPublicApply(lead, mobile, dto.fullName.trim());
-    return { ok: true, lead: this.safeLead(lead)! };
+    this.notifyPublicApply(lead, mobile, dto.fullName.trim());
+    return { ok: true, lead: this.safeLead({ ...lead, otp_verified: true })! };
   }
 
   /** Same loan profile and eligibility as the public form. No OTP. */

@@ -69,8 +69,7 @@ export class LeadsController {
   }
 
   /**
-   * Public apply: persist the lead on form submit (Verified = No).
-   * OTP is a later step — verify-firebase marks Verified = Yes.
+   * Public apply: persist the lead on form submit (Verified = Yes, no OTP).
    * One mobile number can apply once per product. Approved can apply again. Rejected cannot.
    */
   @Post('apply')
