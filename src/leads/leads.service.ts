@@ -1252,18 +1252,36 @@ export class LeadsService {
     return { ok: true, lead: created };
   }
 
-  async getAll(): Promise<Record<string, unknown>[]> {
-    const { data, error } = await this.leads
-      .select()
-      .eq('is_active', true)
-      .order('created_at', { ascending: false });
-
-    if (error) {
-      console.error('LeadsService.getAll', error.message);
-      return [];
+  /**
+   * Supabase/PostgREST returns at most ~1000 rows per request.
+   * Page with .range() so admin list/export is not capped at 1000.
+   */
+  private async fetchActiveLeadsPaged(
+    filter?: { agentId?: string },
+  ): Promise<Record<string, unknown>[]> {
+    const pageSize = 1000;
+    const out: Record<string, unknown>[] = [];
+    for (let from = 0; from < 100_000; from += pageSize) {
+      let query = this.leads
+        .select()
+        .eq('is_active', true)
+        .order('created_at', { ascending: false })
+        .range(from, from + pageSize - 1);
+      if (filter?.agentId) query = query.eq('agent_id', filter.agentId);
+      const { data, error } = await query;
+      if (error) {
+        console.error('LeadsService.fetchActiveLeadsPaged', error.message);
+        break;
+      }
+      const rows = (data as Record<string, unknown>[]) || [];
+      out.push(...rows);
+      if (rows.length < pageSize) break;
     }
+    return out;
+  }
 
-    const leads = (data as Record<string, unknown>[]) || [];
+  async getAll(): Promise<Record<string, unknown>[]> {
+    const leads = await this.fetchActiveLeadsPaged();
     const withOtp = await this.withOtpVerified(leads);
     const safe = this.safeLeads(withOtp);
     const withGeo = await this.enrichMissingIpLocations(safe);
@@ -1284,17 +1302,7 @@ export class LeadsService {
   }): Promise<
     { ok: true; rows: Record<string, unknown>[] } | { ok: false; message: string }
   > {
-    const { data, error } = await this.leads
-      .select()
-      .eq('is_active', true)
-      .order('created_at', { ascending: false });
-
-    if (error) {
-      console.error('LeadsService.exportAllForAdmin', error.message);
-      return { ok: false, message: 'Could not load leads' };
-    }
-
-    const leads = (data as Record<string, unknown>[]) || [];
+    const leads = await this.fetchActiveLeadsPaged();
     const withOtp = await this.withOtpVerified(leads);
     const withGeo = await this.enrichMissingIpLocations(withOtp);
     const withPartner = await this.enrichWithPartnerSource(withGeo);
@@ -1420,16 +1428,7 @@ export class LeadsService {
   async getByAgentId(agentId: string): Promise<Record<string, unknown>[]> {
     const id = agentId.trim();
     if (!id) return [];
-    const { data, error } = await this.leads
-      .select()
-      .eq('agent_id', id)
-      .eq('is_active', true)
-      .order('created_at', { ascending: false });
-    if (error) {
-      console.error('LeadsService.getByAgentId', error.message);
-      return [];
-    }
-    const leads = (data as Record<string, unknown>[]) || [];
+    const leads = await this.fetchActiveLeadsPaged({ agentId: id });
     const withOtp = await this.withOtpVerified(leads);
     return this.safeLeads(withOtp);
   }

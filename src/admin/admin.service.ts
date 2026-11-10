@@ -10,7 +10,10 @@ export class AdminStatsService {
 
   async getDashboardStats(): Promise<DashboardStats> {
     const [leadsRes, usersRes, partnersRes] = await Promise.all([
-      this.supabase.from(TABLE_LEADS).select('*', { count: 'exact', head: true }),
+      this.supabase
+        .from(TABLE_LEADS)
+        .select('*', { count: 'exact', head: true })
+        .eq('is_active', true),
       this.supabase.from(TABLE_USERS).select('*', { count: 'exact', head: true }),
       this.supabase.from(TABLE_PARTNER).select('*', { count: 'exact', head: true }),
     ]);
