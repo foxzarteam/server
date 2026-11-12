@@ -22,6 +22,8 @@ export const MSG_CIBIL_BELOW_650 =
   'Sorry, you are not eligible for this loan. A CIBIL score below 650 does not meet the current criteria.';
 export const MSG_EMI_HALF =
   'Sorry, you are not eligible for this loan. Your existing EMI is half or more of your net monthly income.';
+export const MSG_SALARY_CASH =
+  'Sorry, you are not eligible for this loan. Salary credited in cash or by cheque does not meet the current criteria. Please apply if your salary is credited to a bank account.';
 
 export function isVehicleLoanCategory(category?: string | null): boolean {
   const value = String(category ?? '')
@@ -64,17 +66,23 @@ export function netMonthlyIncomeTooLow(income: number | null | undefined, catego
 }
 
 /**
- * Other loans: reject CIBIL below 680, or existing EMI that is half or more of net income.
- * Vehicle loan: reject when the applicant says CIBIL is below 650. No EMI rule.
+ * Loans: reject cash/cheque salary, low CIBIL, or EMI that is half or more of net income.
+ * Vehicle loan: reject cash/cheque salary, or CIBIL below 650. No EMI rule.
  * A missing or non-positive income is a field error, not this popup.
  */
 export function loanNotEligibleMessage(dto: {
   category?: string | null;
   netMonthlyIncome?: number | null;
+  employmentType?: string | null;
   cibilBand?: string | null;
   hasExistingEmi?: boolean | null;
   totalMonthlyEmi?: number | null;
 }): string | null {
+  const employment = String(dto.employmentType ?? '')
+    .trim()
+    .toLowerCase()
+    .replace(/[\s/-]+/g, '_');
+  if (employment === 'salaried_cash') return MSG_SALARY_CASH;
   const income = Number(dto.netMonthlyIncome);
   if (!Number.isFinite(income) || income <= 0) return null;
   const band = storedCibilBand(dto.cibilBand);

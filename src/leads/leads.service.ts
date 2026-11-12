@@ -1559,6 +1559,7 @@ export class LeadsService {
       const blocked = loanNotEligibleMessage({
         category: profileCategory,
         netMonthlyIncome: Number(payload.net_monthly_income ?? existing.net_monthly_income),
+        employmentType: String(payload.employment_type ?? existing.employment_type ?? ''),
         cibilBand: String(payload.cibil_band ?? existing.cibil_band ?? ''),
         hasExistingEmi: false,
         totalMonthlyEmi: 0,

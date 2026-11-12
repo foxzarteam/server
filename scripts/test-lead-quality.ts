@@ -117,6 +117,25 @@ assert.strictEqual(
   loanNotEligibleMessage({ netMonthlyIncome: 50000, cibilBand: 'above_680', hasExistingEmi: false, totalMonthlyEmi: 0 }),
   null,
 );
+assert.ok(
+  loanNotEligibleMessage({
+    netMonthlyIncome: 50000,
+    employmentType: 'salaried_cash',
+    cibilBand: 'above_680',
+    hasExistingEmi: false,
+    totalMonthlyEmi: 0,
+  })?.includes('cash or by cheque'),
+);
+assert.strictEqual(
+  loanNotEligibleMessage({
+    netMonthlyIncome: 50000,
+    employmentType: 'salaried_bank',
+    cibilBand: 'above_680',
+    hasExistingEmi: false,
+    totalMonthlyEmi: 0,
+  }),
+  null,
+);
 assert.strictEqual(
   loanNotEligibleMessage({ netMonthlyIncome: 17000, cibilBand: 'above_680', hasExistingEmi: true, totalMonthlyEmi: 1000 }),
   null,
