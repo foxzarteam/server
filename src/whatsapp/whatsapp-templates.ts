@@ -3,13 +3,18 @@ import { isVehicleLoanCategory } from '../leads/loan-rules';
 const SITE = 'https://apnizaroorat.com';
 const LOAN_URL = `${SITE}/products/loans/`;
 const INSURANCE_URL = `${SITE}/products/insurance/`;
+const CREDIT_CARD_URL = `${SITE}/products/credit-card/`;
 const STATUS_URL = `${SITE}/customer/login`;
 const LOAN_IMAGE = `${SITE}/images/whatsapp/wa_loa.jpg`;
 const INSURANCE_IMAGE = `${SITE}/images/whatsapp/wa_ins.jpg`;
+/** Same asset as the credit-card page hero (`public/images/service/creditcard.png`). */
+const CREDIT_CARD_IMAGE = `${SITE}/images/service/creditcard.png`;
 const BTN_LOAN = 'personal_loan';
 const BTN_INSURANCE = 'insurance';
+const BTN_CREDIT_CARD = 'credit_card';
 
-export type ProductChoice = 'personal_loan' | 'insurance';
+export type ProductChoice = 'personal_loan' | 'insurance' | 'credit_card';
+export type ProductImageFile = 'wa_loa.jpg' | 'wa_ins.jpg' | 'creditcard.png' | '';
 
 function who(profileName: string): string {
   const name = profileName.trim();
@@ -17,7 +22,7 @@ function who(profileName: string): string {
 }
 
 export function welcomeText(profileName: string): string {
-  return `Hello ${who(profileName)} 🙏\nWelcome to Apni Zaroorat.\nTell us, do you need a Loan or Insurance?\nTap a button below.`;
+  return `Hello ${who(profileName)} 🙏\nWelcome to Apni Zaroorat.\nTell us, do you need a Loan, Insurance, or Credit Card?\nTap a button below.`;
 }
 
 export function personalLoanText(profileName: string): string {
@@ -28,12 +33,22 @@ export function insuranceText(profileName: string): string {
   return `Great, ${who(profileName)}! 🛡️\n\nHealth, Bike, Life, and every kind of insurance option is available for you on affordable plans.\n\nApply now for the insurance that fits your needs 👇\n${INSURANCE_URL}`;
 }
 
-export function productImageUrl(choice: ProductChoice): string {
-  return choice === 'insurance' ? INSURANCE_IMAGE : LOAN_IMAGE;
+export function creditCardText(profileName: string): string {
+  return `Great, ${who(profileName)}! 💳\n\nApply for the right credit card online — partner bank options with exciting offers.\n\nApply now 👇\n${CREDIT_CARD_URL}`;
 }
 
-export function productImageFilename(choice: ProductChoice): string {
-  return choice === 'insurance' ? 'wa_ins.jpg' : 'wa_loa.jpg';
+export function productImageUrl(choice: ProductChoice): string {
+  if (choice === 'insurance') return INSURANCE_IMAGE;
+  if (choice === 'personal_loan') return LOAN_IMAGE;
+  if (choice === 'credit_card') return CREDIT_CARD_IMAGE;
+  return '';
+}
+
+export function productImageFilename(choice: ProductChoice): ProductImageFile {
+  if (choice === 'insurance') return 'wa_ins.jpg';
+  if (choice === 'personal_loan') return 'wa_loa.jpg';
+  if (choice === 'credit_card') return 'creditcard.png';
+  return '';
 }
 
 type ProductImageFields = {
@@ -45,10 +60,28 @@ type ProductImageFields = {
   mime?: string;
 };
 
-export function productImageFile(message: { filename?: string; kind?: string }): 'wa_loa.jpg' | 'wa_ins.jpg' | '' {
-  if (message.filename === 'wa_ins.jpg' || message.filename === 'wa_loa.jpg') return message.filename;
+export function productImageFile(message: { filename?: string; kind?: string }): ProductImageFile {
+  if (
+    message.filename === 'wa_ins.jpg' ||
+    message.filename === 'wa_loa.jpg' ||
+    message.filename === 'creditcard.png'
+  ) {
+    return message.filename;
+  }
   if (message.kind === 'insurance') return 'wa_ins.jpg';
   if (message.kind === 'personal_loan') return 'wa_loa.jpg';
+  if (message.kind === 'credit_card') return 'creditcard.png';
+  return '';
+}
+
+export function isProductOfferKind(kind: string | undefined | null): kind is ProductChoice {
+  return kind === 'personal_loan' || kind === 'insurance' || kind === 'credit_card';
+}
+
+function productChoiceFromImageFile(fileName: ProductImageFile): ProductChoice | '' {
+  if (fileName === 'wa_ins.jpg') return 'insurance';
+  if (fileName === 'wa_loa.jpg') return 'personal_loan';
+  if (fileName === 'creditcard.png') return 'credit_card';
   return '';
 }
 
@@ -60,10 +93,11 @@ export function withCachedProductImage<T extends ProductImageFields>(message: T,
     if (message.waType === 'image' && message.mediaUrl) return message;
     return message.waType === 'image' ? { ...message, waType: 'text' } : message;
   }
-  const base = { ...message, filename: fileName, mime: 'image/jpeg', waType: 'image' as const };
+  const mime = fileName.endsWith('.png') ? 'image/png' : 'image/jpeg';
+  const base = { ...message, filename: fileName, mime, waType: 'image' as const };
   if (cachedMediaId) return { ...base, mediaId: cachedMediaId, mediaUrl: undefined };
-  const choice: ProductChoice = fileName === 'wa_ins.jpg' ? 'insurance' : 'personal_loan';
-  return { ...base, mediaId: undefined, mediaUrl: productImageUrl(choice) };
+  const choice = productChoiceFromImageFile(fileName);
+  return { ...base, mediaId: undefined, mediaUrl: choice ? productImageUrl(choice) : undefined };
 }
 
 export function statusCheckText(): string {
@@ -85,6 +119,7 @@ export function welcomeInteractive(body: string) {
         buttons: [
           { type: 'reply', reply: { id: BTN_LOAN, title: 'Loan' } },
           { type: 'reply', reply: { id: BTN_INSURANCE, title: 'Insurance' } },
+          { type: 'reply', reply: { id: BTN_CREDIT_CARD, title: 'Credit Card' } },
         ],
       },
     },
@@ -95,8 +130,12 @@ export function productChoice(buttonId: string, text: string): ProductChoice | '
   const id = buttonId.trim().toLowerCase();
   if (id === BTN_LOAN) return 'personal_loan';
   if (id === BTN_INSURANCE) return 'insurance';
+  if (id === BTN_CREDIT_CARD || id === 'credit-card') return 'credit_card';
   const t = text.trim().toLowerCase();
   if (!t) return '';
+  if (/\bcredit\s*card\b|\bcc\b/.test(t) && !/\bloan\b/.test(t) && !/\binsurance\b/.test(t)) {
+    return 'credit_card';
+  }
   if (/\binsurance|insurence|insurnace\b/.test(t) && !/\bloan\b/.test(t)) return 'insurance';
   if (/\bpersonal loan\b/.test(t) || t === 'loan') return 'personal_loan';
   return '';
@@ -117,7 +156,11 @@ export function templateSettled(
 }
 
 export function alreadyOfferedProduct(messages: { role: string; kind?: string; sendError?: string }[]): boolean {
-  return templateSettled(messages, 'personal_loan') || templateSettled(messages, 'insurance');
+  return (
+    templateSettled(messages, 'personal_loan') ||
+    templateSettled(messages, 'insurance') ||
+    templateSettled(messages, 'credit_card')
+  );
 }
 
 export function alreadyWelcomed(messages: { role: string; kind?: string; text: string; sendError?: string }[]): boolean {
@@ -125,7 +168,7 @@ export function alreadyWelcomed(messages: { role: string; kind?: string; text: s
   const hits = messages.filter(
     (item) =>
       item.role === 'assistant' &&
-      /loan chahiye ya insurance|do you need a loan or insurance/i.test(item.text),
+      /loan chahiye ya insurance|do you need a loan or insurance|loan, insurance, or credit card/i.test(item.text),
   );
   if (hits.some((item) => !item.sendError)) return true;
   return hits.filter((item) => item.sendError).length >= 2;

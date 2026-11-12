@@ -10,6 +10,7 @@ export type BotReplyKind =
   | 'status'
   | 'personal_loan'
   | 'insurance'
+  | 'credit_card'
   | 'welcome';
 
 export type BotState = {
@@ -21,6 +22,7 @@ export type BotState = {
   statusSent?: boolean;
   loanOffered?: boolean;
   insuranceOffered?: boolean;
+  creditCardOffered?: boolean;
   product?: ProductChoice;
 };
 
@@ -42,8 +44,8 @@ export function isGreeting(text: string): boolean {
  * One place for WhatsApp bot replies.
  * 1. KYC Start click → docs list (once)
  * 2. Status check click → login link, once
- * 3. If KYC template already went, or this number already applied → no welcome, loan, or insurance
- * 4. Personal Loan / Insurance tap or words → product, once, only when they have not applied
+ * 3. If KYC template already went, or this number already applied → no welcome / product offers
+ * 4. Loan / Insurance / Credit Card tap or words → product, once, only when they have not applied
  * 5. Hello/Hi or any first message → welcome once, only when they have not applied
  * 6. After that, other chatter → silent
  */
@@ -63,8 +65,13 @@ export function pickBotReply(
   if (state.kyc) return { kind: null };
 
   const choice = productChoice(buttonId, text);
-  if (choice === 'personal_loan' || choice === 'insurance') {
-    const already = choice === 'personal_loan' ? Boolean(state.loanOffered) : Boolean(state.insuranceOffered);
+  if (choice === 'personal_loan' || choice === 'insurance' || choice === 'credit_card') {
+    const already =
+      choice === 'personal_loan'
+        ? Boolean(state.loanOffered)
+        : choice === 'insurance'
+          ? Boolean(state.insuranceOffered)
+          : Boolean(state.creditCardOffered);
     if (already) return { kind: null };
     return { kind: choice, product: choice };
   }

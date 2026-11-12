@@ -65,7 +65,7 @@ export type ChatMessage = {
   /** WhatsApp receipt: accepted, on the phone, read, or failed. */
   delivery?: 'sent' | 'delivered' | 'read' | 'failed';
   replyBy?: 'template' | 'admin';
-  kind?: 'welcome' | 'personal_loan' | 'insurance' | 'status' | 'admin' | 'thanks' | 'kyc' | 'kyc_docs' | 'under_review' | 'rejected';
+  kind?: 'welcome' | 'personal_loan' | 'insurance' | 'credit_card' | 'status' | 'admin' | 'thanks' | 'kyc' | 'kyc_docs' | 'under_review' | 'rejected';
   waType?: 'text' | 'interactive' | 'image' | 'document' | 'audio' | 'video';
   mediaId?: string;
   /** Meta message id, so a later delivery failure can be attached to this bubble. */
@@ -146,6 +146,7 @@ export type FlowMem = {
   offered: boolean;
   loanOffered: boolean;
   insuranceOffered: boolean;
+  creditCardOffered: boolean;
   thanked: boolean;
   kyc: boolean;
   kycDocs: boolean;
@@ -162,6 +163,7 @@ export function emptyFlow(): FlowMem {
     offered: false,
     loanOffered: false,
     insuranceOffered: false,
+    creditCardOffered: false,
     thanked: false,
     kyc: false,
     kycDocs: false,
@@ -218,6 +220,7 @@ export function asChat(raw: unknown): ChatDoc {
       row.kind === 'welcome' ||
       row.kind === 'personal_loan' ||
       row.kind === 'insurance' ||
+      row.kind === 'credit_card' ||
       row.kind === 'status' ||
       row.kind === 'admin' ||
       row.kind === 'thanks' ||

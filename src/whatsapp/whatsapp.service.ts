@@ -8,6 +8,7 @@ import { isDraftLead } from '../leads/lead-present';
 import { kycEmploymentBucket } from '../leads/personal-loan-employment';
 import { isVehicleLoanCategory } from '../leads/loan-rules';
 import { normalizeStoredCategory } from '../leads/lead-present';
+import { isStoredLoanCategory } from '../wallet/loan-amount';
 import { SUPABASE_CLIENT } from '../config/supabase';
 import { isGreeting, pickBotReply } from './whatsapp-bot-rules';
 import { allowRateLimitedAction } from '../security/rate-limit';
@@ -74,7 +75,9 @@ import {
   isKycStatusClick,
   kycDocsRequestText,
   statusCheckText,
+  creditCardText,
   insuranceText,
+  isProductOfferKind,
   personalLoanText,
   productChoice,
   productImageFile,
@@ -154,6 +157,8 @@ export class WhatsappService implements OnModuleInit {
     insType?: string | null;
   }): void {
     const category = normalizeStoredCategory(String(input.category ?? ''));
+    /** KYC start WhatsApp is loan-only — never for insurance or credit card. */
+    if (!isStoredLoanCategory(category)) return;
     void this.dispatchKycTemplate(
       canonicalWhatsappPhone(input.phone),
       String(input.name ?? ''),
@@ -367,7 +372,12 @@ export class WhatsappService implements OnModuleInit {
         ...(item.filename ? { filename: item.filename } : {}),
         ...(item.mime ? { mime: item.mime } : {}),
         ...this.bubbleButtons(item),
-        ...(item.mediaId || item.filename === 'wa_ins.jpg' || item.filename === 'wa_loa.jpg' ? { hasMedia: true } : {}),
+        ...(item.mediaId ||
+        item.filename === 'wa_ins.jpg' ||
+        item.filename === 'wa_loa.jpg' ||
+        item.filename === 'creditcard.png'
+          ? { hasMedia: true }
+          : {}),
       })),
     };
   }
@@ -384,10 +394,14 @@ export class WhatsappService implements OnModuleInit {
     const item = row.chat.messages.find((message) => message.id === id);
     if (!item) return null;
 
-    if (!item.mediaId && (item.filename === 'wa_ins.jpg' || item.filename === 'wa_loa.jpg')) {
+    if (
+      !item.mediaId &&
+      (item.filename === 'wa_ins.jpg' || item.filename === 'wa_loa.jpg' || item.filename === 'creditcard.png')
+    ) {
       const path = this.templateImagePath(item.filename);
       if (!path) return null;
-      return { buffer: readFileSync(path), mime: 'image/jpeg', filename: item.filename };
+      const mime = item.filename.endsWith('.png') ? 'image/png' : 'image/jpeg';
+      return { buffer: readFileSync(path), mime, filename: item.filename };
     }
     if (!item.mediaId) return null;
 
@@ -517,7 +531,7 @@ export class WhatsappService implements OnModuleInit {
         ),
       };
     }
-    if (reply && (reply.kind === 'welcome' || reply.kind === 'personal_loan' || reply.kind === 'insurance')) {
+    if (reply && (reply.kind === 'welcome' || isProductOfferKind(reply.kind))) {
       const claim = `${phone}:${reply.kind}`;
       if (this.marketingFlight.has(claim) || (await this.recentlyApplied(phone))) {
         reply = null;
@@ -528,8 +542,7 @@ export class WhatsappService implements OnModuleInit {
     if (
       reply &&
       reply.kind !== 'welcome' &&
-      reply.kind !== 'personal_loan' &&
-      reply.kind !== 'insurance' &&
+      !isProductOfferKind(reply.kind) &&
       reply.kind !== 'kyc' &&
       reply.kind !== 'kyc_docs' &&
       reply.kind !== 'status' &&
@@ -563,7 +576,7 @@ export class WhatsappService implements OnModuleInit {
       }
       if (reply.sent) {
         this.noteFlow(phone, reply);
-        if (reply.kind === 'welcome' || reply.kind === 'personal_loan' || reply.kind === 'insurance') {
+        if (reply.kind === 'welcome' || isProductOfferKind(reply.kind)) {
           this.marketingFlight.delete(`${phone}:${reply.kind}`);
         }
         await this.waitPersist(phone, async () => {
@@ -628,7 +641,7 @@ export class WhatsappService implements OnModuleInit {
       mem.statusSent = false;
       this.statusFlight.delete(phone);
     }
-    if (reply.kind === 'welcome' || reply.kind === 'personal_loan' || reply.kind === 'insurance') {
+    if (reply.kind === 'welcome' || isProductOfferKind(reply.kind)) {
       this.marketingFlight.delete(`${phone}:${reply.kind}`);
     }
     if (reply.kind === 'personal_loan') {
@@ -639,7 +652,11 @@ export class WhatsappService implements OnModuleInit {
       mem.insuranceOffered = false;
       if (mem.product === 'insurance') mem.product = undefined;
     }
-    mem.offered = Boolean(mem.loanOffered || mem.insuranceOffered);
+    if (reply.kind === 'credit_card') {
+      mem.creditCardOffered = false;
+      if (mem.product === 'credit_card') mem.product = undefined;
+    }
+    mem.offered = Boolean(mem.loanOffered || mem.insuranceOffered || mem.creditCardOffered);
   }
 
   private async hydrateFlow(phone: string) {
@@ -653,11 +670,12 @@ export class WhatsappService implements OnModuleInit {
     const kyc = alreadyKycStarted(messages) || kycDocs || prev.kyc || this.kycTemplateSent.has(phone);
     const loanOffered = prev.loanOffered || templateSettled(messages, 'personal_loan');
     const insuranceOffered = prev.insuranceOffered || templateSettled(messages, 'insurance');
+    const creditCardOffered = prev.creditCardOffered || templateSettled(messages, 'credit_card');
     if (kyc) this.rememberKycPhone(phone);
     if (!prev.product) {
       for (const item of messages) {
         if (item.sendError) continue;
-        if (item.role === 'assistant' && (item.kind === 'personal_loan' || item.kind === 'insurance')) {
+        if (item.role === 'assistant' && isProductOfferKind(item.kind)) {
           prev.product = item.kind;
         }
       }
@@ -667,6 +685,7 @@ export class WhatsappService implements OnModuleInit {
     prev.offered = offered;
     prev.loanOffered = loanOffered;
     prev.insuranceOffered = insuranceOffered;
+    prev.creditCardOffered = creditCardOffered;
     prev.thanked = thanked;
     prev.kyc = kyc;
     prev.kycDocs = kycDocs;
@@ -685,6 +704,7 @@ export class WhatsappService implements OnModuleInit {
       offered: Boolean(mem?.offered),
       loanOffered: Boolean(mem?.loanOffered),
       insuranceOffered: Boolean(mem?.insuranceOffered),
+      creditCardOffered: Boolean(mem?.creditCardOffered),
       thanked: Boolean(mem?.thanked),
       statusSent: Boolean(mem?.statusSent),
       product: mem?.product,
@@ -712,7 +732,7 @@ export class WhatsappService implements OnModuleInit {
         waType: 'text',
       };
     }
-    if (picked.kind === 'personal_loan' || picked.kind === 'insurance') {
+    if (isProductOfferKind(picked.kind)) {
       return this.productTemplateMessage(assistantId, name, picked.kind);
     }
     return {
@@ -730,11 +750,12 @@ export class WhatsappService implements OnModuleInit {
     const prev = this.flowMem.get(phone) || emptyFlow();
     if (!prev.ids) prev.ids = new Set();
     if (reply.kind === 'welcome') prev.welcomed = true;
-    if (reply.kind === 'personal_loan' || reply.kind === 'insurance') {
+    if (isProductOfferKind(reply.kind)) {
       prev.welcomed = true;
       prev.offered = true;
       if (reply.kind === 'personal_loan') prev.loanOffered = true;
       if (reply.kind === 'insurance') prev.insuranceOffered = true;
+      if (reply.kind === 'credit_card') prev.creditCardOffered = true;
       prev.product = reply.kind;
     }
     if (reply.kind === 'thanks') prev.thanked = true;
@@ -971,7 +992,7 @@ export class WhatsappService implements OnModuleInit {
   private bubbleButtons(item: ChatMessage): { buttons: string[] } | Record<string, never> {
     if (item.buttons?.length) return { buttons: item.buttons };
     if (item.kind === 'kyc' && item.id.startsWith('kyc:')) return { buttons: [KYC_START_BTN, KYC_STATUS_BTN] };
-    if (item.kind === 'welcome') return { buttons: ['Loan', 'Insurance'] };
+    if (item.kind === 'welcome') return { buttons: ['Loan', 'Insurance', 'Credit Card'] };
     return {};
   }
 
@@ -1018,16 +1039,22 @@ export class WhatsappService implements OnModuleInit {
 
   private productTemplateMessage(id: string, name: string, choice: ProductChoice): ChatMessage {
     const fileName = productImageFilename(choice);
+    const text =
+      choice === 'insurance'
+        ? insuranceText(name)
+        : choice === 'credit_card'
+          ? creditCardText(name)
+          : personalLoanText(name);
     return {
       id,
       role: 'assistant',
-      text: choice === 'insurance' ? insuranceText(name) : personalLoanText(name),
+      text,
       at: new Date().toISOString(),
       replyBy: 'template',
       kind: choice,
       waType: 'image',
       filename: fileName,
-      mime: 'image/jpeg',
+      mime: fileName.endsWith('.png') ? 'image/png' : 'image/jpeg',
       mediaUrl: productImageUrl(choice),
     };
   }
@@ -1405,8 +1432,7 @@ export class WhatsappService implements OnModuleInit {
     if (!/^[1-9][0-9]{7,14}$/.test(to)) {
       return { ok: false, error: 'This chat does not have a valid WhatsApp number.' };
     }
-    const needsImage =
-      message.waType === 'image' || message.kind === 'personal_loan' || message.kind === 'insurance';
+    const needsImage = message.waType === 'image' || isProductOfferKind(message.kind);
     const outbound = needsImage ? this.withTemplateImage(settings, fromId, message) : message;
     const payload = graphMessageBody(to, outbound);
     if (!payload) return { ok: false, error: 'Nothing to send.' };
@@ -1420,7 +1446,7 @@ export class WhatsappService implements OnModuleInit {
       if (outbound.mime) message.mime = outbound.mime;
       return { ok: true };
     }
-    if (message.kind === 'personal_loan' || message.kind === 'insurance') {
+    if (isProductOfferKind(message.kind)) {
       const textPayload = graphMessageBody(to, { ...message, waType: 'text' });
       if (textPayload) {
         const textSent = await postGraphMessage(token, fromId, textPayload);
@@ -1455,7 +1481,11 @@ export class WhatsappService implements OnModuleInit {
   }
 
   private templateImagePath(fileName: string): string {
-    const safe = fileName === 'wa_ins.jpg' ? 'wa_ins.jpg' : 'wa_loa.jpg';
+    const safe =
+      fileName === 'wa_ins.jpg' || fileName === 'wa_loa.jpg' || fileName === 'creditcard.png'
+        ? fileName
+        : '';
+    if (!safe) return '';
     const bases = [
       join(__dirname, 'media'),
       join(__dirname, '..', 'whatsapp', 'media'),
@@ -1469,8 +1499,8 @@ export class WhatsappService implements OnModuleInit {
       join(process.cwd(), 'az_web', 'public', 'images', 'service'),
     ];
     for (const dir of bases) {
-      const jpg = join(dir, safe);
-      if (existsSync(jpg)) return jpg;
+      const path = join(dir, safe);
+      if (existsSync(path)) return path;
     }
     return '';
   }
@@ -1480,6 +1510,7 @@ export class WhatsappService implements OnModuleInit {
     if (!fromId || !settings.accessToken) return;
     void this.templateMediaId(settings, fromId, 'wa_loa.jpg');
     void this.templateMediaId(settings, fromId, 'wa_ins.jpg');
+    void this.templateMediaId(settings, fromId, 'creditcard.png');
   }
 
   private async templateMediaId(settings: WhatsappSettings, fromId: string, fileName: string): Promise<string> {
@@ -1498,7 +1529,7 @@ export class WhatsappService implements OnModuleInit {
       const uploaded = await this.uploadWhatsappMedia(settings, fromId, {
         buffer: readFileSync(path),
         originalname: fileName,
-        mimetype: 'image/jpeg',
+        mimetype: fileName.endsWith('.png') ? 'image/png' : 'image/jpeg',
       });
       if (!uploaded.id) {
         console.error('WhatsappService.templateMediaId', uploaded.error);

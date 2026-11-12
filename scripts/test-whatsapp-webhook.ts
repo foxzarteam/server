@@ -17,6 +17,7 @@ import {
   alreadyKycDocsAsked,
   alreadyKycStarted,
   alreadyWelcomed,
+  creditCardText,
   insuranceText,
   isKycStartClick,
   isKycStatusClick,
@@ -181,11 +182,12 @@ const click = extractInboundMessages({
 assert.strictEqual(click[0].buttonId, 'personal_loan');
 assert.strictEqual(productChoice(click[0].buttonId, click[0].text), 'personal_loan');
 assert.strictEqual(productChoice('insurance', 'Insurance'), 'insurance');
+assert.strictEqual(productChoice('credit_card', 'Credit Card'), 'credit_card');
 assert.deepStrictEqual(
   welcomeInteractive('hi').interactive.action.buttons.map((btn) => btn.reply.title),
-  ['Loan', 'Insurance'],
+  ['Loan', 'Insurance', 'Credit Card'],
 );
-assert.ok(/do you need a Loan or Insurance/.test(welcomeText('Gaurav')));
+assert.ok(/Loan, Insurance, or Credit Card/.test(welcomeText('Gaurav')));
 assert.ok(!/Personal Loan/.test(welcomeText('Gaurav')));
 assert.ok(!/Navya/i.test(welcomeText('Gaurav')));
 assert.ok(/apnizaroorat.com\/products\/loans\//.test(personalLoanText('Gaurav')));
@@ -193,6 +195,7 @@ assert.ok(/\n\nThe best loan options/.test(personalLoanText('Gaurav')));
 assert.ok(/\n\nHealth, Bike, Life/.test(insuranceText('Gaurav')));
 assert.ok(/apnizaroorat.com\/products\/insurance\//.test(insuranceText('Gaurav')));
 assert.ok(/Health, Bike, Life/.test(insuranceText('Gaurav')));
+assert.ok(/apnizaroorat.com\/products\/credit-card\//.test(creditCardText('Gaurav')));
 assert.ok(!/50 Lakh/i.test(personalLoanText('Gaurav')));
 const loanImage = {
   id: 'ai:loan',
@@ -541,6 +544,8 @@ assert.strictEqual(pickBotReply('personal_loan', '', { ...idle, loanOffered: tru
 assert.strictEqual(pickBotReply('personal_loan', '', { ...idle, product: 'personal_loan' }).kind, 'personal_loan');
 assert.strictEqual(pickBotReply('insurance', '', { ...idle, loanOffered: true }).kind, 'insurance');
 assert.strictEqual(pickBotReply('insurance', '', { ...idle, insuranceOffered: true }).kind, null);
+assert.strictEqual(pickBotReply('credit_card', '', idle).kind, 'credit_card');
+assert.strictEqual(pickBotReply('credit_card', '', { ...idle, creditCardOffered: true }).kind, null);
 assert.strictEqual(pickBotReply('personal_loan', '', { ...idle, product: 'insurance', loanOffered: true }).kind, null);
 assert.strictEqual(pickBotReply('', 'thanks', { ...idle, welcomed: true }).kind, null);
 

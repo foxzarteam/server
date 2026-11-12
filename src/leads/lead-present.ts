@@ -53,6 +53,7 @@ export function categoryLabel(category: unknown): string {
   const c = normalizeStoredCategory(String(category ?? ''));
   if (c === 'personal_loan') return 'Personal Loan';
   if (c === 'insurance') return 'Insurance';
+  if (c === 'credit_card') return 'Credit Card';
   if (c === 'vehicle_loan' || c === 'car_loan') return 'Vehicle Loan';
   return c.replace(/_/g, ' ').replace(/\b\w/g, (ch) => ch.toUpperCase());
 }

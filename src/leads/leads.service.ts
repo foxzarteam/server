@@ -159,7 +159,7 @@ export class LeadsService {
     );
   }
 
-  /** Admin create and public apply: send the KYC start template once. */
+  /** Admin create and public apply: KYC WhatsApp only for loan products (not insurance / credit card). */
   private notifyApplicationWhatsapp(
     lead: Record<string, unknown> | null | undefined,
     fallbackPhone = '',
@@ -167,6 +167,7 @@ export class LeadsService {
   ): void {
     if (!lead) return;
     const category = normalizeStoredCategory(String(lead.category ?? ''));
+    if (!isStoredLoanCategory(category)) return;
     this.whatsapp.notifyApplicationKycStart({
       leadId: String(lead.id ?? ''),
       phone: String(lead.mobile_number ?? lead.mobileNumber ?? fallbackPhone ?? ''),
@@ -887,6 +888,10 @@ export class LeadsService {
       payload.required_amount = null;
       payload.loan_amt = null;
       payload.ins_type = ins;
+    } else if (category === 'credit_card') {
+      payload.required_amount = null;
+      payload.loan_amt = null;
+      payload.ins_type = null;
     }
 
     // Upgrade OTP/start draft for this category only — never overwrite another product.
@@ -899,10 +904,18 @@ export class LeadsService {
           fullName: dto.fullName.trim(),
           email: dto.email,
           pincode: dto.pincode,
-          requiredAmount: category === 'insurance' ? null : loanAmounts?.requiredAmount ?? dto.requiredAmount,
+          requiredAmount:
+            category === 'insurance' || category === 'credit_card'
+              ? null
+              : (loanAmounts?.requiredAmount ?? dto.requiredAmount),
           category,
           status: 'pending',
-          loanAmt: loanAmounts ? loanAmounts.loanAmt : undefined,
+          loanAmt:
+            category === 'insurance' || category === 'credit_card'
+              ? null
+              : loanAmounts
+                ? loanAmounts.loanAmt
+                : undefined,
           insType: category === 'insurance' ? ins : null,
           netMonthlyIncome: loanAmounts ? dto.netMonthlyIncome ?? null : null,
           employmentType: loanAmounts ? dto.employmentType : undefined,
@@ -1110,7 +1123,8 @@ export class LeadsService {
       full_name: dto.fullName.trim(),
       email: dto.email?.trim() || null,
       pincode: dto.pincode?.trim() || null,
-      required_amount: category === 'insurance' ? null : dto.requiredAmount || null,
+      required_amount:
+        category === 'insurance' || category === 'credit_card' ? null : dto.requiredAmount || null,
       category,
       status: 'pending',
       is_active: true,
