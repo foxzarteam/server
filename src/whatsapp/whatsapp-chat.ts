@@ -65,7 +65,19 @@ export type ChatMessage = {
   /** WhatsApp receipt: accepted, on the phone, read, or failed. */
   delivery?: 'sent' | 'delivered' | 'read' | 'failed';
   replyBy?: 'template' | 'admin';
-  kind?: 'welcome' | 'personal_loan' | 'insurance' | 'credit_card' | 'status' | 'admin' | 'thanks' | 'kyc' | 'kyc_docs' | 'under_review' | 'rejected';
+  kind?:
+    | 'welcome'
+    | 'personal_loan'
+    | 'insurance'
+    | 'credit_card'
+    | 'status'
+    | 'admin'
+    | 'thanks'
+    | 'kyc'
+    | 'kyc_docs'
+    | 'apply_confirm'
+    | 'under_review'
+    | 'rejected';
   waType?: 'text' | 'interactive' | 'image' | 'document' | 'audio' | 'video';
   mediaId?: string;
   /** Meta message id, so a later delivery failure can be attached to this bubble. */
@@ -226,6 +238,7 @@ export function asChat(raw: unknown): ChatDoc {
       row.kind === 'thanks' ||
       row.kind === 'kyc' ||
       row.kind === 'kyc_docs' ||
+      row.kind === 'apply_confirm' ||
       row.kind === 'under_review' ||
       row.kind === 'rejected'
         ? row.kind

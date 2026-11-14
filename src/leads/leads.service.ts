@@ -159,7 +159,11 @@ export class LeadsService {
     );
   }
 
-  /** Admin create and public apply: KYC WhatsApp only for loan products (not insurance / credit card). */
+  /**
+   * After apply/create:
+   * - loans → KYC start template
+   * - credit_card / insurance → submit confirmation (no KYC)
+   */
   private notifyApplicationWhatsapp(
     lead: Record<string, unknown> | null | undefined,
     fallbackPhone = '',
@@ -167,14 +171,27 @@ export class LeadsService {
   ): void {
     if (!lead) return;
     const category = normalizeStoredCategory(String(lead.category ?? ''));
-    if (!isStoredLoanCategory(category)) return;
-    this.whatsapp.notifyApplicationKycStart({
-      leadId: String(lead.id ?? ''),
-      phone: String(lead.mobile_number ?? lead.mobileNumber ?? fallbackPhone ?? ''),
-      name: String(lead.full_name ?? lead.fullName ?? fallbackName ?? ''),
-      category,
-      insType: lead.ins_type != null ? String(lead.ins_type) : null,
-    });
+    const phone = String(lead.mobile_number ?? lead.mobileNumber ?? fallbackPhone ?? '');
+    const name = String(lead.full_name ?? lead.fullName ?? fallbackName ?? '');
+    const insType = lead.ins_type != null ? String(lead.ins_type) : null;
+    if (isStoredLoanCategory(category)) {
+      this.whatsapp.notifyApplicationKycStart({
+        leadId: String(lead.id ?? ''),
+        phone,
+        name,
+        category,
+        insType,
+      });
+      return;
+    }
+    if (category === 'credit_card' || category === 'insurance') {
+      this.whatsapp.notifyApplyConfirm({
+        phone,
+        name,
+        category,
+        insType,
+      });
+    }
   }
 
   /** Background geo fill from the saved visitor IP — never throws into apply/start. */

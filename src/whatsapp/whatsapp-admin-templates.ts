@@ -12,7 +12,10 @@ export const ADMIN_WA_TEMPLATES = [
 export type AdminWaTemplateId = (typeof ADMIN_WA_TEMPLATES)[number]['id'];
 
 /** Meta template node id. Message text is read from this id, not stored in code. */
-const TEMPLATE_META_IDS: Record<AdminWaTemplateId | 'application_kyc', string> = {
+const TEMPLATE_META_IDS: Record<
+  AdminWaTemplateId | 'application_kyc' | 'credit_card_application' | 'insurance_application',
+  string
+> = {
   application_kyc: '2014497809484610',
   vehicle_refinance_kyc: '1701000475154093',
   vehicle_purchase_kyc: '2020701738620974',
@@ -21,6 +24,8 @@ const TEMPLATE_META_IDS: Record<AdminWaTemplateId | 'application_kyc', string> =
   document_pending_reminder: '2268054780795382',
   call_not_answered_followup: '1429874262035888',
   reject_template: '2397652557726837',
+  credit_card_application: '1489701479702861',
+  insurance_application: '1708933907369944',
 };
 
 export function templateMetaId(metaName: string): string {

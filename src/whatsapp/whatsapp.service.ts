@@ -60,6 +60,14 @@ import {
   shouldApplyDelivery,
   WhatsappDeliveryUpdate,
 } from './whatsapp-inbound';
+import {
+  APPLY_CONFIRM_TEMPLATE_LANG,
+  applyConfirmAlreadySent,
+  applyConfirmChatId,
+  applyConfirmFallbackText,
+  applyConfirmTemplateName,
+  buildApplyConfirmSend,
+} from './whatsapp-apply-confirm';
 import { kycChatText, kycGraphPayload, kycTemplateAlreadySent, KYC_START_BTN, KYC_STATUS_BTN, KYC_TEMPLATE, KYC_TEMPLATE_LANG } from './whatsapp-kyc';
 import { WhatsappSettings, WhatsappSettingsService } from './whatsapp-settings.service';
 import { whatsappSignatureOk } from './whatsapp-verify';
@@ -167,6 +175,25 @@ export class WhatsappService implements OnModuleInit {
       input.insType,
     ).catch((error) => {
       console.error('WhatsappService.notifyApplicationKycStart', error);
+    });
+  }
+
+  /** Credit card / insurance form submit — confirmation template (not KYC). */
+  notifyApplyConfirm(input: {
+    phone: string;
+    name: string;
+    category: string;
+    insType?: string | null;
+  }): void {
+    const category = normalizeStoredCategory(String(input.category ?? ''));
+    if (category !== 'credit_card' && category !== 'insurance') return;
+    void this.dispatchApplyConfirm(
+      canonicalWhatsappPhone(input.phone),
+      String(input.name ?? ''),
+      category,
+      input.insType,
+    ).catch((error) => {
+      console.error('WhatsappService.notifyApplyConfirm', error);
     });
   }
 
@@ -1326,6 +1353,96 @@ export class WhatsappService implements OnModuleInit {
     if (this.kycTemplateSent.size <= 4000) return;
     const first = this.kycTemplateSent.values().next().value;
     if (first) this.kycTemplateSent.delete(first);
+  }
+
+  private async dispatchApplyConfirm(
+    phone: string,
+    name: string,
+    category: 'credit_card' | 'insurance',
+    insType?: string | null,
+  ): Promise<void> {
+    const who = name.trim();
+    if (!who || who.toLowerCase() === LEAD_DRAFT_FULL_NAME.toLowerCase()) return;
+    if (!/^[0-9]{8,15}$/.test(phone)) return;
+    const flightKey = `apply_confirm:${category}:${phone}`;
+    if (this.kycInflight.has(flightKey)) return;
+    this.kycInflight.add(flightKey);
+
+    const retryWaitMs = [4_000, 8_000, 20_000];
+    const templateName = applyConfirmTemplateName(category);
+    try {
+      const settings = this.settings.peekEffective() ?? (await this.settings.getEffective());
+      const token = settings.accessToken.trim().replace(/^bearer\s+/i, '').trim();
+      const fromId = settings.phoneNumberId.replace(/\D/g, '');
+      const opened = await this.readByPhone(phone);
+      if (applyConfirmAlreadySent(opened?.chat.messages ?? [], category, phone)) return;
+      if (!token || !fromId) {
+        console.error('WhatsappService.dispatchApplyConfirm missing WhatsApp settings');
+        return;
+      }
+
+      const metaTemplate = await this.approvedAdminTemplate(token, templateName);
+      const built = metaTemplate
+        ? buildApplyConfirmSend(phone, metaTemplate, category, who, insType)
+        : { error: 'WhatsApp did not return this template text.' as const };
+      if ('error' in built) {
+        console.error('WhatsappService.dispatchApplyConfirm', built.error, templateName);
+      }
+      const bubbleText =
+        'text' in built ? built.text : applyConfirmFallbackText(category, who, insType);
+      const listedLang = metaTemplate?.language?.trim() || APPLY_CONFIRM_TEMPLATE_LANG;
+
+      const message: ChatMessage = {
+        id: applyConfirmChatId(category, phone),
+        role: 'assistant',
+        text: bubbleText,
+        at: new Date().toISOString(),
+        sending: true,
+        replyBy: 'template',
+        kind: 'apply_confirm',
+        waType: 'text',
+      };
+      await this.waitPersist(phone, async () => {
+        await this.appendMessage(phone, who, message);
+      });
+
+      const languages = templateLanguageOrder(templateName, listedLang);
+      let lastError = 'Could not send this template.';
+      for (let attempt = 0; attempt <= retryWaitMs.length; attempt += 1) {
+        if (attempt > 0) {
+          const again = await this.readByPhone(phone);
+          if (applyConfirmAlreadySent(again?.chat.messages ?? [], category, phone)) return;
+          await new Promise((resolve) => setTimeout(resolve, retryWaitMs[attempt - 1]));
+        }
+        let sent: { ok: boolean; error?: string; messageId?: string } = { ok: false, error: lastError };
+        for (const lang of languages) {
+          const attempt =
+            metaTemplate != null
+              ? buildApplyConfirmSend(phone, metaTemplate, category, who, insType, lang)
+              : { error: 'missing template' as const };
+          if ('error' in attempt) break;
+          sent = await postGraphMessage(token, fromId, attempt.payload);
+          if (sent.ok || !isTemplateLanguageMiss(sent.error)) break;
+        }
+        if (sent.ok) {
+          await this.waitPersist(phone, async () => {
+            await this.markSent(phone, message.id, {
+              delivery: 'sent',
+              ...(sent.messageId ? { waMessageId: sent.messageId } : {}),
+            } as ChatMessage);
+          });
+          return;
+        }
+        lastError = sent.error || lastError;
+        await this.waitPersist(phone, async () => {
+          await this.noteSendError(phone, message.id, lastError);
+        });
+        if (!isRetryableWhatsappSend(lastError)) break;
+      }
+      console.error(`WhatsappService.dispatchApplyConfirm ${category} …${phone.slice(-4)}`, lastError);
+    } finally {
+      this.kycInflight.delete(flightKey);
+    }
   }
 
   private async dispatchKycTemplate(
