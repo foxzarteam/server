@@ -7,6 +7,7 @@ export const ADMIN_WA_TEMPLATES = [
   { id: 'document_pending_reminder', label: 'Reminder: Documents Pending', metaName: 'document_pending_reminder', kyc: false },
   { id: 'call_not_answered_followup', label: 'Reminder: Call Not Answered', metaName: 'call_not_answered_followup', kyc: false },
   { id: 'reject_template', label: 'Reject Application', metaName: 'reject_template', kyc: false },
+  { id: 'improve_cibil_score', label: 'Improve CIBIL Score', metaName: 'improve_cibil_score', kyc: false },
 ] as const;
 
 export type AdminWaTemplateId = (typeof ADMIN_WA_TEMPLATES)[number]['id'];
@@ -24,6 +25,7 @@ const TEMPLATE_META_IDS: Record<
   document_pending_reminder: '2268054780795382',
   call_not_answered_followup: '1429874262035888',
   reject_template: '2397652557726837',
+  improve_cibil_score: '2490611038136927',
   credit_card_application: '1489701479702861',
   insurance_application: '1708933907369944',
 };

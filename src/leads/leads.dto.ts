@@ -96,8 +96,10 @@ export class CreateLeadDto {
   })
   fullName: string;
 
-  @IsOptional()
-  @IsString()
+  @ValidateIf((o) => o.category === 'credit_card' || (o.email != null && o.email !== ''))
+  @IsString({ message: 'Enter a valid email address' })
+  @Matches(/^[^\s@]+@[^\s@]+\.[^\s@]+$/, { message: 'Enter a valid email address' })
+  @MaxLength(255, { message: 'Email must be 255 characters or less' })
   email?: string;
 
   /** Public PL/insurance apply forms always send this (Indian 6-digit PIN). */

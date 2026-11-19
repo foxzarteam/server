@@ -564,7 +564,7 @@ assert.strictEqual(adminCustomerName('Jayu Patel', 'Jayu Kumar'), 'Jayu Kumar');
 assert.strictEqual(adminCustomerName('Jayu Patel', ''), 'Jayu Patel');
 assert.strictEqual(adminCustomerName('Jayu Patel', '   '), 'Jayu Patel');
 
-assert.strictEqual(ADMIN_WA_TEMPLATES.length, 7);
+assert.strictEqual(ADMIN_WA_TEMPLATES.length, 8);
 assert.strictEqual(findAdminWaTemplate('self_employed_kyc')?.label, 'Self employee KYC');
 assert.strictEqual(findAdminWaTemplate('self_employed_kyc')?.kyc, true);
 assert.strictEqual(findAdminWaTemplate('reject_template')?.label, 'Reject Application');
@@ -594,6 +594,8 @@ assert.strictEqual(templateMetaId('application_kyc'), '2014497809484610');
 assert.strictEqual(templateMetaId('vehicle_purchase_kyc'), '2020701738620974');
 assert.strictEqual(templateMetaId('call_not_answered_followup'), '1429874262035888');
 assert.strictEqual(templateMetaId('reject_template'), '2397652557726837');
+assert.strictEqual(templateMetaId('improve_cibil_score'), '2490611038136927');
+assert.strictEqual(findAdminWaTemplate('improve_cibil_score')?.kyc, false);
 assert.strictEqual(templateMetaId('self_employed_kyc'), '1143750884876894');
 assert.strictEqual(liveTemplateKey('tpl:vehicle_refinance_kyc:1:ab', 'Namaste fyy ji'), 'vehicle_refinance_kyc');
 assert.strictEqual(liveTemplateKey('tpl:vehicle_refinance_kyc:1:ab', 'Namaste fyy ji,\n\nfull'), '');
