@@ -7,7 +7,8 @@ import { createHmac } from 'crypto';
 import { graphMessageBody, isGraphTimeout, isRetryableWhatsappSend, plainWhatsappSendError } from '../src/whatsapp/whatsapp-graph';
 import { ADMIN_WA_TEMPLATES, adminBubbleText, buildAdminTemplateSend, findAdminWaTemplate, liveTemplateKey, normalizeMetaTemplates, pickApprovedTemplate, templateCanBeSent, templateMetaId, templatePersonName } from '../src/whatsapp/whatsapp-admin-templates';
 import { whatsappHubChallenge, whatsappSignatureOk } from '../src/whatsapp/whatsapp-verify';
-import { adminTargetPhone, canonicalWhatsappPhone, extractDeliveryUpdates, extractInboundMessages, shouldApplyDelivery } from '../src/whatsapp/whatsapp-inbound';
+import { adminTargetPhone, canonicalWhatsappPhone, extractDeliveryUpdates, extractInboundMessages, phoneLookupKeys, shouldApplyDelivery } from '../src/whatsapp/whatsapp-inbound';
+import { SerialQueue } from '../src/whatsapp/whatsapp-serial-queue';
 import { decryptSettingsJson, encryptSettingsJson } from '../src/whatsapp/settings-crypto';
 import { adminCustomerName, asChat, unreadCustomerCount } from '../src/whatsapp/whatsapp-chat';
 import { kycBodyName, kycChatText, kycGraphPayload, kycProductName, kycTemplateAlreadySent, KYC_START_BTN, KYC_TEMPLATE, KYC_TEMPLATE_LANG } from '../src/whatsapp/whatsapp-kyc';
@@ -116,6 +117,30 @@ assert.strictEqual(inbound[0].text, 'Hello');
 assert.strictEqual(inbound[0].buttonId, '');
 assert.strictEqual(inbound[0].profileName, 'Riya');
 assert.strictEqual(inbound[0].phoneNumberId, '');
+const inboundLid = extractInboundMessages({
+  object: 'whatsapp_business_account',
+  entry: [
+    {
+      changes: [
+        {
+          value: {
+            contacts: [{ profile: { name: 'Riya' }, wa_id: '919876543210' }],
+            messages: [
+              {
+                from: '123456789012345@lid',
+                id: 'wamid.lid1',
+                type: 'text',
+                text: { body: 'Hi' },
+              },
+            ],
+          },
+        },
+      ],
+    },
+  ],
+});
+assert.strictEqual(inboundLid[0]?.phone, '919876543210');
+assert.strictEqual(inboundLid[0]?.text, 'Hi');
 assert.deepStrictEqual(extractInboundMessages({ object: 'whatsapp_business_account', entry: [{ changes: [{ value: { statuses: [{ id: '1' }] } }] }] }), []);
 assert.deepStrictEqual(
   extractDeliveryUpdates({
@@ -662,4 +687,35 @@ const withButtons = asChat({
 });
 assert.deepStrictEqual(withButtons.messages[0].buttons, ['Complete KYC']);
 
-console.log('test-whatsapp-webhook: all asserts passed');
+const lookup = phoneLookupKeys('9876543210');
+assert.ok(lookup.includes('919876543210'));
+assert.ok(lookup.includes('9876543210'));
+assert.ok(lookup.includes('+919876543210'));
+assert.deepStrictEqual(phoneLookupKeys('919876543210').sort(), lookup.sort());
+
+void (async () => {
+  const queue = new SerialQueue();
+  const order: number[] = [];
+  await Promise.all([
+    queue.enqueue('a', async () => {
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      order.push(1);
+    }),
+    queue.enqueue('a', async () => {
+      order.push(2);
+    }),
+  ]);
+  assert.deepStrictEqual(order, [1, 2]);
+  let failed = false;
+  await queue.enqueue('b', async () => {
+    throw new Error('boom');
+  }).catch(() => {
+    failed = true;
+  });
+  assert.strictEqual(failed, true);
+  await queue.enqueue('b', async () => {
+    order.push(3);
+  });
+  assert.ok(order.includes(3));
+  console.log('test-whatsapp-webhook: all asserts passed');
+})();

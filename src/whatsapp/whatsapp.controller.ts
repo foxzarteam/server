@@ -10,7 +10,9 @@ import { whatsappHubChallenge } from './whatsapp-verify';
 
 function webhookRawBody(req: RawBodyRequest<Request>): Buffer {
   if (Buffer.isBuffer(req.rawBody)) return req.rawBody;
+  if (typeof req.rawBody === 'string' && req.rawBody) return Buffer.from(req.rawBody);
   if (Buffer.isBuffer(req.body)) return req.body;
+  if (typeof req.body === 'string' && req.body) return Buffer.from(req.body);
   return Buffer.from('');
 }
 

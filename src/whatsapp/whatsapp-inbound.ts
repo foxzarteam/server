@@ -133,9 +133,26 @@ function contactsText(msg: UnknownRecord): string {
 
 /** Same person, one key: 9876543210 and 919876543210 both become 919876543210. */
 export function canonicalWhatsappPhone(raw: string): string {
-  let phone = digits(raw).replace(/^0+/, '');
+  let phone = digits(String(raw ?? '').replace(/@lid$/i, '')).replace(/^0+/, '');
   if (phone.length === 10 && /^[6-9]/.test(phone)) phone = `91${phone}`;
   return phone;
+}
+
+/** DB rows may be 10-digit, 91…, or +91… — look up all of them. */
+export function phoneLookupKeys(phone: string): string[] {
+  const key = canonicalWhatsappPhone(phone);
+  const ten = key.startsWith('91') && key.length === 12 ? key.slice(2) : '';
+  return [...new Set([key, ten, ten ? `+91${ten}` : ''].filter((value) => value.length >= 10))];
+}
+
+function inboundPhone(msg: UnknownRecord, contacts: unknown[]): string {
+  const fromRaw = String(msg.from ?? '');
+  const fromPhone = canonicalWhatsappPhone(fromRaw);
+  const contactWa = contacts
+    .map((row) => canonicalWhatsappPhone(String(asRecord(row)?.wa_id ?? '')))
+    .find((value) => /^[0-9]{8,16}$/.test(value));
+  if (/lid/i.test(fromRaw) || fromPhone.length > 15) return contactWa || fromPhone;
+  return fromPhone || contactWa || '';
 }
 
 /** Admin start-chat: only a real Indian mobile, always stored as 91 + 10 digits. */
@@ -168,9 +185,9 @@ export function extractInboundMessages(body: unknown): InboundWhatsappMessage[] 
       for (const raw of messages) {
         const msg = asRecord(raw);
         if (!msg) continue;
-        const phone = canonicalWhatsappPhone(String(msg.from ?? ''));
+        const phone = inboundPhone(msg, contacts);
         const messageId = String(msg.id ?? '').trim();
-        if (!/^[0-9]{8,15}$/.test(phone) || !messageId || messageId.length > 200) continue;
+        if (!/^[0-9]{8,16}$/.test(phone) || !messageId || messageId.length > 200) continue;
 
         const type = String(msg.type ?? 'unknown').trim().toLowerCase().slice(0, 40);
         const unsupportedKind = String(asRecord(msg.unsupported)?.type ?? '').trim().toLowerCase();
@@ -186,8 +203,11 @@ export function extractInboundMessages(body: unknown): InboundWhatsappMessage[] 
           buttonId = String(asRecord(msg.button)?.payload ?? '').trim();
         } else if (type === 'interactive') {
           const interactive = asRecord(msg.interactive);
-          const reply = asRecord(interactive?.button_reply) || asRecord(interactive?.list_reply);
-          text = String(reply?.title ?? '').trim();
+          const reply =
+            asRecord(interactive?.button_reply) ||
+            asRecord(interactive?.list_reply) ||
+            asRecord(interactive?.nfm_reply);
+          text = String(reply?.title ?? reply?.name ?? reply?.body ?? '').trim();
           buttonId = String(reply?.id ?? '').trim();
         } else if (type === 'location') {
           text = locationText(msg);
@@ -204,6 +224,8 @@ export function extractInboundMessages(body: unknown): InboundWhatsappMessage[] 
             filename = pulled.filename;
             text = pulled.text;
             waType = pulled.waType;
+          } else {
+            text = String(asRecord(msg.text)?.body ?? '').trim();
           }
         }
 

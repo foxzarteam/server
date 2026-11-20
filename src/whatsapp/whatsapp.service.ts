@@ -15,10 +15,7 @@ import { allowRateLimitedAction } from '../security/rate-limit';
 import {
   adminCustomerName,
   asChat,
-  dropFalseMissingFileNotices,
-  placeKycBeforeClicks,
   emptyFlow,
-  MAX_MESSAGES,
   unreadCustomerCount,
   type ChatDoc,
   type ChatMessage,
@@ -56,10 +53,13 @@ import {
   canonicalWhatsappPhone,
   extractDeliveryUpdates,
   extractInboundMessages,
+  phoneLookupKeys,
   InboundWhatsappMessage,
   shouldApplyDelivery,
   WhatsappDeliveryUpdate,
 } from './whatsapp-inbound';
+import { WhatsappEnquiryStore } from './whatsapp-enquiry-store';
+import { SerialQueue } from './whatsapp-serial-queue';
 import {
   APPLY_CONFIRM_TEMPLATE_LANG,
   applyConfirmAlreadySent,
@@ -112,9 +112,8 @@ export class WhatsappService implements OnModuleInit {
   private mediaIdCache = new Map<string, { id: string; until: number }>();
   private mediaUploadInflight = new Map<string, Promise<string>>();
   private sentIds = new Set<string>();
-  private inflight = new Set<string>();
   private flowMem = new Map<string, FlowMem>();
-  private persistTail = new Map<string, Promise<void>>();
+  private persistQueue = new SerialQueue();
   private kycTemplateSent = new Set<string>();
   /** One KYC send in flight per number, including Meta retries. */
   private kycInflight = new Set<string>();
@@ -122,7 +121,8 @@ export class WhatsappService implements OnModuleInit {
   private rejectedSent = new Set<string>();
   /** Check Status already claimed for this phone, so a second tap does not wait or send again. */
   private statusFlight = new Set<string>();
-  private inboundTail = new Map<string, Promise<void>>();
+  private inboundQueue = new SerialQueue();
+  private enquiryStore: WhatsappEnquiryStore;
   /** One welcome, loan, or insurance send in flight per number. */
   private marketingFlight = new Set<string>();
   private adminTemplateCache = new Map<string, { until: number; template: MetaTemplateDefinition }>();
@@ -130,7 +130,9 @@ export class WhatsappService implements OnModuleInit {
   constructor(
     @Inject(SUPABASE_CLIENT) private readonly supabase: SupabaseClient,
     private readonly settings: WhatsappSettingsService,
-  ) {}
+  ) {
+    this.enquiryStore = new WhatsappEnquiryStore(supabase);
+  }
 
   private get table() {
     return this.supabase.from(TABLE_WP_ENQUIRIES);
@@ -204,6 +206,11 @@ export class WhatsappService implements OnModuleInit {
       return 'forbidden';
     }
     if (!whatsappSignatureOk(rawBody, signatureHeader, settings.appSecret)) {
+      console.error('WhatsappService.handleWebhook: signature rejected', {
+        hasSecret: Boolean(settings.appSecret.trim()),
+        rawBytes: rawBody.length,
+        hasHeader: Boolean(signatureHeader),
+      });
       return 'forbidden';
     }
 
@@ -212,12 +219,13 @@ export class WhatsappService implements OnModuleInit {
       try {
         payload = JSON.parse(rawBody.toString('utf8'));
       } catch {
+        console.error('WhatsappService.handleWebhook: body is not JSON');
         return 'ok';
       }
     }
 
     const inbound = extractInboundMessages(payload);
-    this.dispatchInbound(settings, inbound);
+    if (inbound.length) this.dispatchInbound(settings, inbound);
     const failed = extractDeliveryUpdates(payload);
     if (failed.length) {
       void this.applyDeliveryUpdates(failed).catch((error) => {
@@ -490,27 +498,14 @@ export class WhatsappService implements OnModuleInit {
     };
   }
 
-  private enqueueInbound(phone: string, fn: () => Promise<void>) {
-    const prev = this.inboundTail.get(phone) ?? Promise.resolve();
-    const next = prev.then(fn).catch((error) => {
-      console.error('WhatsappService.handleInbound', error);
-    });
-    this.inboundTail.set(phone, next);
-  }
-
   private handleInbound(settings: WhatsappSettings, message: InboundWhatsappMessage) {
     const assistantId = `ai:${message.messageId}`;
-    if (this.sentIds.has(assistantId) || this.inflight.has(message.messageId)) return;
-    this.inflight.add(message.messageId);
     const phone = canonicalWhatsappPhone(message.phone);
-    const run = async () => {
-      try {
-        await this.prepareInbound(settings, message, phone, assistantId);
-      } finally {
-        this.inflight.delete(message.messageId);
-      }
-    };
-    this.enqueueInbound(phone, run);
+    void this.inboundQueue.enqueue(
+      phone,
+      () => this.prepareInbound(settings, message, phone, assistantId),
+      (error) => console.error('WhatsappService.prepareInbound', message.messageId, error),
+    );
   }
 
   private async prepareInbound(
@@ -519,6 +514,13 @@ export class WhatsappService implements OnModuleInit {
     phone: string,
     assistantId: string,
   ) {
+    const userMessage = this.inboundUserMessage(message);
+    let stored = false;
+    await this.waitPersist(phone, async () => {
+      stored = await this.persistInbound(phone, message.profileName, userMessage, null, message.phoneNumberId);
+    });
+    if (stored) this.rememberIds(phone, [userMessage.id]);
+
     const kycClick = isKycStartClick(message.buttonId, message.text);
     const statusClick = isKycStatusClick(message.buttonId, message.text);
     if (kycClick || statusClick) this.seedKycFlow(phone);
@@ -531,14 +533,6 @@ export class WhatsappService implements OnModuleInit {
     }
 
     const seen = this.flowMem.get(phone)?.ids;
-    const userMessage = this.inboundUserMessage(message);
-    if (!seen?.has(message.messageId)) {
-      let stored = false;
-      await this.waitPersist(phone, async () => {
-        stored = await this.persistInbound(phone, message.profileName, userMessage, null, message.phoneNumberId);
-      });
-      if (stored) this.rememberIds(phone, [userMessage.id]);
-    }
     if (seen?.has(assistantId) || this.sentIds.has(assistantId)) {
       if (statusClick && !statusAlready) this.statusFlight.delete(phone);
       return;
@@ -593,31 +587,43 @@ export class WhatsappService implements OnModuleInit {
       await this.waitPersist(phone, async () => {
         await this.persistInbound(phone, message.profileName, userMessage, reply, message.phoneNumberId);
       });
-      try {
-        await this.deliverBotReply(settings, phone, reply, message.phoneNumberId);
-      } catch (error) {
-        reply.sent = false;
-        reply.sendError = error instanceof Error ? error.message : 'WhatsApp send failed';
-        this.releaseFailedReply(phone, reply);
-        console.error('WhatsappService.deliverBotReply', reply.sendError);
-      }
-      if (reply.sent) {
-        this.noteFlow(phone, reply);
-        if (reply.kind === 'welcome' || isProductOfferKind(reply.kind)) {
-          this.marketingFlight.delete(`${phone}:${reply.kind}`);
-        }
-        await this.waitPersist(phone, async () => {
-          await this.markSent(phone, reply.id, {
-            delivery: reply.delivery || 'sent',
-            ...(reply.waMessageId ? { waMessageId: reply.waMessageId } : {}),
-          } as ChatMessage);
-        });
-      } else if (reply.sendError) {
-        await this.waitPersist(phone, async () => {
-          await this.noteSendError(phone, reply.id, reply.sendError || 'WhatsApp send failed');
-        });
-      }
       this.rememberIds(phone, [reply.id]);
+      void this.finishBotReply(settings, phone, reply, message.phoneNumberId);
+    }
+  }
+
+  /** Graph send after the customer bubble is already saved, so the next inbound is not blocked. */
+  private async finishBotReply(
+    settings: WhatsappSettings,
+    phone: string,
+    reply: ChatMessage,
+    waPhoneNumberId: string,
+  ) {
+    try {
+      await this.deliverBotReply(settings, phone, reply, waPhoneNumberId);
+    } catch (error) {
+      reply.sent = false;
+      reply.sendError = error instanceof Error ? error.message : 'WhatsApp send failed';
+      this.releaseFailedReply(phone, reply);
+      console.error('WhatsappService.deliverBotReply', reply.sendError);
+    }
+    if (reply.sent) {
+      this.noteFlow(phone, reply);
+      if (reply.kind === 'welcome' || isProductOfferKind(reply.kind)) {
+        this.marketingFlight.delete(`${phone}:${reply.kind}`);
+      }
+      await this.waitPersist(phone, async () => {
+        await this.markSent(phone, reply.id, {
+          delivery: reply.delivery || 'sent',
+          ...(reply.waMessageId ? { waMessageId: reply.waMessageId } : {}),
+        } as ChatMessage);
+      });
+      return;
+    }
+    if (reply.sendError) {
+      await this.waitPersist(phone, async () => {
+        await this.noteSendError(phone, reply.id, reply.sendError || 'WhatsApp send failed');
+      });
     }
   }
 
@@ -806,23 +812,9 @@ export class WhatsappService implements OnModuleInit {
     this.flowMem.set(phone, prev);
   }
 
-  private queuePersist(phone: string, fn: () => Promise<void>) {
-    const prev = this.persistTail.get(phone) ?? Promise.resolve();
-    const next = prev.then(fn).catch((error) => {
-      console.error('WhatsappService.persistInbound', error);
-    });
-    this.persistTail.set(phone, next);
-  }
-
   private waitPersist(phone: string, fn: () => Promise<void>): Promise<void> {
-    return new Promise((resolve) => {
-      this.queuePersist(phone, async () => {
-        try {
-          await fn();
-        } finally {
-          resolve();
-        }
-      });
+    return this.persistQueue.enqueue(phone, fn, (error) => {
+      console.error('WhatsappService.persistInbound', error);
     });
   }
 
@@ -832,7 +824,7 @@ export class WhatsappService implements OnModuleInit {
     userMessage: ChatMessage,
     reply: ChatMessage | null,
     waPhoneNumberId: string,
-  ) {
+  ): Promise<boolean> {
     const incoming = reply ? [userMessage, reply] : [userMessage];
     for (let attempt = 0; attempt < 6; attempt += 1) {
       const saved = await this.appendMessages(phone, profileName, incoming, waPhoneNumberId);
@@ -1136,7 +1128,7 @@ export class WhatsappService implements OnModuleInit {
     const out = new Map<string, string>();
     const unique = [...new Set(phones.map((phone) => phone.trim()).filter(Boolean))];
     if (!unique.length) return out;
-    const numbers = [...new Set(unique.flatMap((phone) => this.phoneLookupKeys(phone)))];
+    const numbers = [...new Set(unique.flatMap((phone) => phoneLookupKeys(phone)))];
     if (!numbers.length) return out;
     const byNumber = new Map<string, string>();
     for (let i = 0; i < numbers.length; i += 100) {
@@ -1162,20 +1154,12 @@ export class WhatsappService implements OnModuleInit {
       }
     }
     for (const phone of unique) {
-      const name = this.phoneLookupKeys(phone)
+      const name = phoneLookupKeys(phone)
         .map((key) => byNumber.get(key))
         .find((value) => value);
       if (name) out.set(phone, name);
     }
     return out;
-  }
-
-  private phoneLookupKeys(phone: string): string[] {
-    const canonical = canonicalWhatsappPhone(phone);
-    const ten = canonical.startsWith('91') && canonical.length === 12 ? canonical.slice(2) : canonical;
-    const keys = [canonical, ten];
-    if (ten.length === 10) keys.push(`+91${ten}`, `+${canonical}`);
-    return [...new Set(keys.filter((value) => value.length >= 10))];
   }
 
   /** Leads lookup whenever a welcome, loan, or insurance reply is about to go out. */
@@ -1692,17 +1676,7 @@ export class WhatsappService implements OnModuleInit {
   }
 
   private async readByPhone(phone: string): Promise<EnquiryRow | null> {
-    const { data, error } = await this.table
-      .select('id, phone, chat, last_chat_at, created_at, updated_at')
-      .eq('phone', phone)
-      .maybeSingle();
-    if (error) {
-      console.error('WhatsappService.readByPhone', error.message);
-      return null;
-    }
-    if (!data) return null;
-    const row = data as EnquiryRow;
-    return { ...row, chat: asChat(row.chat) };
+    return this.enquiryStore.readByPhone(phone);
   }
 
   private async appendMessages(
@@ -1711,74 +1685,7 @@ export class WhatsappService implements OnModuleInit {
     incoming: ChatMessage[],
     waPhoneNumberId = '',
   ): Promise<{ row: EnquiryRow; added: boolean } | null> {
-    const key = canonicalWhatsappPhone(phone);
-    if (!/^[0-9]{8,15}$/.test(key) || incoming.length === 0) return null;
-    phone = key;
-
-    for (let attempt = 0; attempt < 6; attempt += 1) {
-      const current = await this.readByPhone(phone);
-      const existing = new Set((current?.chat.messages ?? []).map((item) => item.id));
-      const toAdd = incoming.filter((item) => !existing.has(item.id));
-      if (toAdd.length === 0) {
-        return current ? { row: current, added: false } : null;
-      }
-
-      const prior = current?.chat.messages ?? [];
-      const messages = placeKycBeforeClicks(dropFalseMissingFileNotices([...prior, ...toAdd])).slice(-MAX_MESSAGES);
-      if (
-        current &&
-        messages.length === prior.length &&
-        messages.every((item, index) => item.id === prior[index]?.id)
-      ) {
-        return { row: current, added: false };
-      }
-      let adminReadAt = current?.chat.adminReadAt;
-      if (!adminReadAt && toAdd.some((item) => item.role === 'user')) {
-        adminReadAt = prior[prior.length - 1]?.at || '1970-01-01T00:00:00.000Z';
-      }
-      const chat: ChatDoc = {
-        profileName: profileName.trim() || current?.chat.profileName || '',
-        waPhoneNumberId: (waPhoneNumberId || current?.chat.waPhoneNumberId || '').replace(/\D/g, '').slice(0, 30),
-        messages,
-        ...(current?.chat.leadNote !== undefined ? { leadNote: current.chat.leadNote } : {}),
-        ...(adminReadAt ? { adminReadAt } : {}),
-      };
-      const now = new Date().toISOString();
-      const lastChatAt = messages[messages.length - 1]?.at || now;
-
-      if (!current) {
-        const { data, error } = await this.table
-          .insert({
-            phone,
-            chat,
-            last_chat_at: lastChatAt,
-            updated_at: now,
-          })
-          .select('id, phone, chat, last_chat_at, created_at, updated_at')
-          .maybeSingle();
-        if (!error && data) {
-          const row = data as EnquiryRow;
-          return { row: { ...row, chat: asChat(row.chat) }, added: true };
-        }
-        if (error?.code === '23505') continue;
-        console.error('WhatsappService.appendMessage.insert', error?.message);
-        return null;
-      }
-
-      const { data, error } = await this.table
-        .update({ chat, last_chat_at: lastChatAt, updated_at: now })
-        .eq('id', current.id)
-        .eq('updated_at', current.updated_at)
-        .select('id, phone, chat, last_chat_at, created_at, updated_at')
-        .maybeSingle();
-
-      if (!error && data) {
-        const row = data as EnquiryRow;
-        return { row: { ...row, chat: asChat(row.chat) }, added: true };
-      }
-      if (error) console.error('WhatsappService.appendMessage.update', error.message);
-    }
-    return null;
+    return this.enquiryStore.appendMessages(phone, profileName, incoming, waPhoneNumberId);
   }
 
   /** Rewrite a chat whose stored order does not match the process order. One write, then polls match. */
