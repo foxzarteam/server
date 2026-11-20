@@ -339,7 +339,7 @@ export function extractDeliveryUpdates(body: unknown): WhatsappDeliveryUpdate[] 
         if (kind !== 'sent' && kind !== 'delivered' && kind !== 'read' && kind !== 'failed') continue;
         const phone = canonicalWhatsappPhone(String(status?.recipient_id ?? ''));
         const waMessageId = String(status?.id ?? '').trim().slice(0, 200);
-        if (!/^[0-9]{8,15}$/.test(phone) || waMessageId.length < 8) continue;
+        if (waMessageId.length < 8) continue;
         if (kind === 'failed') {
           const errors = Array.isArray(status?.errors) ? status.errors : [];
           const first = asRecord(errors[0]);

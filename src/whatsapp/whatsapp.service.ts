@@ -69,7 +69,7 @@ import {
   applyConfirmTemplateName,
   buildApplyConfirmSend,
 } from './whatsapp-apply-confirm';
-import { buildApplicationKycSend, kycChatText, kycGraphPayload, kycTemplateAlreadySent, KYC_START_BTN, KYC_STATUS_BTN, KYC_TEMPLATE, KYC_TEMPLATE_LANG } from './whatsapp-kyc';
+import { kycBodyName, kycChatText, kycGraphPayload, kycTemplateAlreadySent, KYC_TEMPLATE, KYC_TEMPLATE_LANG } from './whatsapp-kyc';
 import { WhatsappSettings, WhatsappSettingsService } from './whatsapp-settings.service';
 import { whatsappSignatureOk } from './whatsapp-verify';
 import {
@@ -232,31 +232,34 @@ export class WhatsappService implements OnModuleInit {
         console.error('WhatsappService.dispatchInbound', error);
       });
     }
-    const failed = extractDeliveryUpdates(payload);
-    if (failed.length) {
-      void this.applyDeliveryUpdates(failed).catch((error) => {
-        console.error('WhatsappService.applyDeliveryUpdates', error);
-      });
-    }
+    const receipts = extractDeliveryUpdates(payload);
+    if (receipts.length) await this.applyDeliveryUpdates(receipts);
     return 'ok';
   }
 
   /** A message Meta accepted can still fail on the phone. Show that on the same bubble. */
   private async applyDeliveryUpdates(updates: WhatsappDeliveryUpdate[]): Promise<void> {
     for (const update of updates) {
-      const phone = canonicalWhatsappPhone(update.phone);
-      for (let attempt = 0; attempt < 8; attempt += 1) {
+      for (let attempt = 0; attempt < 10; attempt += 1) {
+        const hinted = canonicalWhatsappPhone(update.phone);
+        const row =
+          (await this.enquiryStore.findByWaMessageId(update.waMessageId)) ??
+          (hinted ? await this.readByPhone(hinted) : null);
+        if (!row) {
+          await new Promise((resolve) => setTimeout(resolve, 300));
+          continue;
+        }
         let applied = false;
-        await this.waitPersist(phone, async () => {
-          const current = await this.readByPhone(phone);
+        await this.waitPersist(row.phone, async () => {
+          const current = await this.readByPhone(row.phone);
           const target = current?.chat.messages.find((item) => item.waMessageId === update.waMessageId);
-          if (!target) return;
+          if (!target || !current) return;
           applied = true;
           if (!shouldApplyDelivery(target.delivery, update.status)) return;
-          await this.noteDelivery(phone, target.id, update.status, update.error);
+          await this.noteDelivery(current.phone, target.id, update.status, update.error);
         });
         if (applied) break;
-        await new Promise((resolve) => setTimeout(resolve, 400));
+        await new Promise((resolve) => setTimeout(resolve, 300));
       }
     }
   }
@@ -1046,7 +1049,6 @@ export class WhatsappService implements OnModuleInit {
 
   private bubbleButtons(item: ChatMessage): { buttons: string[] } | Record<string, never> {
     if (item.buttons?.length) return { buttons: item.buttons };
-    if (item.kind === 'kyc' && item.id.startsWith('kyc:')) return { buttons: [KYC_START_BTN, KYC_STATUS_BTN] };
     if (item.kind === 'welcome') return { buttons: ['Loan', 'Insurance', 'Credit Card'] };
     return {};
   }
@@ -1495,14 +1497,16 @@ export class WhatsappService implements OnModuleInit {
       }
 
       const metaTemplate = await this.approvedAdminTemplate(token, KYC_TEMPLATE);
+      const person = kycBodyName(who);
       const built = metaTemplate
-        ? buildApplicationKycSend(phone, metaTemplate, who)
+        ? buildAdminTemplateSend(phone, metaTemplate, person)
         : { error: 'WhatsApp did not return this template text.' as const };
       if ('error' in built) {
         console.error('WhatsappService.dispatchKycTemplate', built.error, KYC_TEMPLATE, templateMetaId(KYC_TEMPLATE));
       }
       const bubbleText = 'text' in built ? built.text : kycChatText(who, cat, insType);
       const listedLang = metaTemplate?.language?.trim() || KYC_TEMPLATE_LANG;
+      const metaButtons = 'buttons' in built ? built.buttons : [];
 
       const prior = (opened?.chat.messages ?? []).filter((item) => item.id.startsWith('kyc:')).at(-1);
       const message: ChatMessage = {
@@ -1514,6 +1518,7 @@ export class WhatsappService implements OnModuleInit {
         replyBy: 'template',
         kind: 'kyc',
         waType: 'text',
+        ...(metaButtons.length ? { buttons: metaButtons } : {}),
       };
       this.noteFlow(phone, message);
       await this.waitPersist(phone, async () => {
@@ -1535,7 +1540,7 @@ export class WhatsappService implements OnModuleInit {
         for (const lang of languages) {
           const attemptSend =
             metaTemplate != null
-              ? buildApplicationKycSend(phone, metaTemplate, who, lang)
+              ? buildAdminTemplateSend(phone, { ...metaTemplate, language: lang }, person)
               : { payload: kycGraphPayload(phone, who, cat, lang, insType), text: bubbleText };
           if ('error' in attemptSend) break;
           sent = await postGraphMessage(token, fromId, attemptSend.payload);

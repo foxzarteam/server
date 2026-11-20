@@ -216,6 +216,22 @@ assert.deepStrictEqual(
     error: '131030: Recipient not in allowed list',
   }],
 );
+assert.strictEqual(
+  extractDeliveryUpdates({
+    entry: [{
+      changes: [{
+        value: {
+          statuses: [{
+            id: 'wamid.HBgDelivered12345',
+            status: 'delivered',
+            recipient_id: '123456789012345',
+          }],
+        },
+      }],
+    }],
+  })[0]?.status,
+  'delivered',
+);
 assert.strictEqual(shouldApplyDelivery('sent', 'delivered'), true);
 assert.strictEqual(shouldApplyDelivery('delivered', 'sent'), false);
 assert.strictEqual(shouldApplyDelivery('delivered', 'failed'), false);
