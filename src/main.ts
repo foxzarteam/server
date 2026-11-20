@@ -9,6 +9,7 @@ import compression from 'compression';
 import helmet from 'helmet';
 import { CORS_ALLOWED_HEADERS, resolveCorsOrigin } from './common/cors';
 import { ROOT_PAGE_HTML } from './root-landing';
+import { captureWhatsappWebhookRawBody } from './whatsapp/whatsapp-raw-body';
 
 // Graph and Supabase are IPv4. A stuck IPv6 attempt was holding WhatsApp replies for seconds.
 setDefaultResultOrder('ipv4first');
@@ -26,6 +27,7 @@ async function bootstrap() {
 
   const app = await NestFactory.create<NestExpressApplication>(AppModule, {
     rawBody: true,
+    bodyParser: false,
     bufferLogs: true,
     logger: process.env.NODE_ENV === 'production' ? ['error', 'warn', 'log'] : undefined,
   });
@@ -39,6 +41,7 @@ async function bootstrap() {
   });
 
   app.setGlobalPrefix(prefix);
+  app.use(captureWhatsappWebhookRawBody);
   app.use(
     helmet({
       contentSecurityPolicy: false,

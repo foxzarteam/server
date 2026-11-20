@@ -226,7 +226,12 @@ export class WhatsappService implements OnModuleInit {
     }
 
     const inbound = extractInboundMessages(payload);
-    if (inbound.length) await this.dispatchInbound(settings, inbound);
+    if (inbound.length) {
+      await this.stashInboundCustomers(inbound);
+      void this.dispatchInbound(settings, inbound).catch((error) => {
+        console.error('WhatsappService.dispatchInbound', error);
+      });
+    }
     const failed = extractDeliveryUpdates(payload);
     if (failed.length) {
       void this.applyDeliveryUpdates(failed).catch((error) => {
@@ -253,6 +258,21 @@ export class WhatsappService implements OnModuleInit {
         if (applied) break;
         await new Promise((resolve) => setTimeout(resolve, 400));
       }
+    }
+  }
+
+  /** Save the customer bubble before the HTTP 200. Bot replies can continue after. */
+  private async stashInboundCustomers(inbound: InboundWhatsappMessage[]): Promise<void> {
+    for (const message of inbound) {
+      const phone = await this.resolveInboundPhone(message);
+      if (!phone) {
+        console.error('WhatsappService.stashInbound: missing sender', message.messageId);
+        continue;
+      }
+      const userMessage = this.inboundUserMessage(message);
+      await this.waitPersist(phone, async () => {
+        await this.persistInbound(phone, message.profileName, userMessage, null, message.phoneNumberId);
+      });
     }
   }
 

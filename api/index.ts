@@ -9,6 +9,7 @@ import compression from 'compression';
 import helmet from 'helmet';
 import { CORS_ALLOWED_HEADERS, resolveCorsOrigin } from '../src/common/cors';
 import { ROOT_PAGE_HTML } from '../src/root-landing';
+import { captureWhatsappWebhookRawBody } from '../src/whatsapp/whatsapp-raw-body';
 
 function isRootGet(req: Request): boolean {
   if (req.method !== 'GET') return false;
@@ -44,9 +45,11 @@ async function createApp(): Promise<express.Express> {
   );
   expressApp.use(compression());
   expressApp.set('trust proxy', 1);
+  expressApp.use(captureWhatsappWebhookRawBody);
 
   const app = await NestFactory.create<NestExpressApplication>(AppModule, new ExpressAdapter(expressApp), {
     rawBody: true,
+    bodyParser: false,
     bufferLogs: true,
     logger: process.env.NODE_ENV === 'production' ? ['error', 'warn', 'log'] : undefined,
   });
