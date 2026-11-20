@@ -1,6 +1,6 @@
 /// <reference types="express" />
 import { NestFactory } from '@nestjs/core';
-import { ExpressAdapter } from '@nestjs/platform-express';
+import { ExpressAdapter, NestExpressApplication } from '@nestjs/platform-express';
 import { AppModule } from '../src/app.module';
 import { ValidationPipe } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -45,7 +45,7 @@ async function createApp(): Promise<express.Express> {
   expressApp.use(compression());
   expressApp.set('trust proxy', 1);
 
-  const app = await NestFactory.create(AppModule, new ExpressAdapter(expressApp), {
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, new ExpressAdapter(expressApp), {
     rawBody: true,
     bufferLogs: true,
     logger: process.env.NODE_ENV === 'production' ? ['error', 'warn', 'log'] : undefined,
@@ -54,6 +54,7 @@ async function createApp(): Promise<express.Express> {
   const prefix = config.get<string>('API_PREFIX', 'api');
 
   app.setGlobalPrefix(prefix);
+  app.useBodyParser('json', { limit: '300mb' });
 
   app.enableCors({
     origin: resolveCorsOrigin(),
@@ -98,3 +99,6 @@ export default async function handler(req: Request, res: Response) {
     });
   }
 }
+
+/** Keep the original Meta bytes so X-Hub-Signature-256 can be checked. */
+export const config = { api: { bodyParser: false } };

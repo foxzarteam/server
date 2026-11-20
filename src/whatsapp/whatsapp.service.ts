@@ -53,6 +53,7 @@ import {
   canonicalWhatsappPhone,
   extractDeliveryUpdates,
   extractInboundMessages,
+  looksLikeWhatsappMsisdn,
   phoneLookupKeys,
   InboundWhatsappMessage,
   shouldApplyDelivery,
@@ -68,7 +69,7 @@ import {
   applyConfirmTemplateName,
   buildApplyConfirmSend,
 } from './whatsapp-apply-confirm';
-import { kycChatText, kycGraphPayload, kycTemplateAlreadySent, KYC_START_BTN, KYC_STATUS_BTN, KYC_TEMPLATE, KYC_TEMPLATE_LANG } from './whatsapp-kyc';
+import { buildApplicationKycSend, kycChatText, kycGraphPayload, kycTemplateAlreadySent, KYC_START_BTN, KYC_STATUS_BTN, KYC_TEMPLATE, KYC_TEMPLATE_LANG } from './whatsapp-kyc';
 import { WhatsappSettings, WhatsappSettingsService } from './whatsapp-settings.service';
 import { whatsappSignatureOk } from './whatsapp-verify';
 import {
@@ -225,7 +226,7 @@ export class WhatsappService implements OnModuleInit {
     }
 
     const inbound = extractInboundMessages(payload);
-    if (inbound.length) this.dispatchInbound(settings, inbound);
+    if (inbound.length) await this.dispatchInbound(settings, inbound);
     const failed = extractDeliveryUpdates(payload);
     if (failed.length) {
       void this.applyDeliveryUpdates(failed).catch((error) => {
@@ -255,14 +256,8 @@ export class WhatsappService implements OnModuleInit {
     }
   }
 
-  private dispatchInbound(settings: WhatsappSettings, inbound: InboundWhatsappMessage[]) {
-    for (const message of inbound) {
-      try {
-        this.handleInbound(settings, message);
-      } catch (error) {
-        console.error('WhatsappService.handleInbound', message.messageId, error);
-      }
-    }
+  private async dispatchInbound(settings: WhatsappSettings, inbound: InboundWhatsappMessage[]) {
+    await Promise.all(inbound.map((message) => this.handleInbound(settings, message)));
   }
 
   async publicLink(): Promise<string | null> {
@@ -498,10 +493,31 @@ export class WhatsappService implements OnModuleInit {
     };
   }
 
-  private handleInbound(settings: WhatsappSettings, message: InboundWhatsappMessage) {
+  private async resolveInboundPhone(message: InboundWhatsappMessage): Promise<string> {
+    const aliases = message.aliases ?? [];
+    const direct = canonicalWhatsappPhone(message.phone);
+    if (looksLikeWhatsappMsisdn(direct)) {
+      const existing = await this.enquiryStore.readByPhone(direct, aliases);
+      return existing?.phone || direct;
+    }
+    const keyed = direct || aliases[0] || '';
+    const existing = keyed ? await this.enquiryStore.readByPhone(keyed, aliases) : null;
+    if (existing) return existing.phone;
+    if (message.contextId) {
+      const quoted = await this.enquiryStore.findByWaMessageId(message.contextId);
+      if (quoted) return quoted.phone;
+    }
+    return direct || canonicalWhatsappPhone(message.fromUserId || '');
+  }
+
+  private async handleInbound(settings: WhatsappSettings, message: InboundWhatsappMessage) {
     const assistantId = `ai:${message.messageId}`;
-    const phone = canonicalWhatsappPhone(message.phone);
-    void this.inboundQueue.enqueue(
+    const phone = await this.resolveInboundPhone(message);
+    if (!phone) {
+      console.error('WhatsappService.handleInbound: missing sender', message.messageId);
+      return;
+    }
+    await this.inboundQueue.enqueue(
       phone,
       () => this.prepareInbound(settings, message, phone, assistantId),
       (error) => console.error('WhatsappService.prepareInbound', message.messageId, error),
@@ -1458,11 +1474,21 @@ export class WhatsappService implements OnModuleInit {
         return;
       }
 
+      const metaTemplate = await this.approvedAdminTemplate(token, KYC_TEMPLATE);
+      const built = metaTemplate
+        ? buildApplicationKycSend(phone, metaTemplate, who)
+        : { error: 'WhatsApp did not return this template text.' as const };
+      if ('error' in built) {
+        console.error('WhatsappService.dispatchKycTemplate', built.error, KYC_TEMPLATE, templateMetaId(KYC_TEMPLATE));
+      }
+      const bubbleText = 'text' in built ? built.text : kycChatText(who, cat, insType);
+      const listedLang = metaTemplate?.language?.trim() || KYC_TEMPLATE_LANG;
+
       const prior = (opened?.chat.messages ?? []).filter((item) => item.id.startsWith('kyc:')).at(-1);
       const message: ChatMessage = {
         id: prior?.id || `kyc:${phone}`,
         role: 'assistant',
-        text: prior?.text || kycChatText(who, cat, insType),
+        text: prior?.text || bubbleText,
         at: prior?.at || new Date().toISOString(),
         sending: true,
         replyBy: 'template',
@@ -1474,7 +1500,7 @@ export class WhatsappService implements OnModuleInit {
         await this.appendMessage(phone, name, message);
       });
 
-      const languages = templateLanguageOrder(KYC_TEMPLATE, KYC_TEMPLATE_LANG);
+      const languages = templateLanguageOrder(KYC_TEMPLATE, listedLang);
       let lastError = 'Could not send this template.';
       for (let attempt = 0; attempt <= retryWaitMs.length; attempt += 1) {
         if (attempt > 0) {
@@ -1487,7 +1513,12 @@ export class WhatsappService implements OnModuleInit {
         }
         let sent: { ok: boolean; error?: string; messageId?: string } = { ok: false, error: lastError };
         for (const lang of languages) {
-          sent = await postGraphMessage(token, fromId, kycGraphPayload(phone, who, cat, lang, insType));
+          const attemptSend =
+            metaTemplate != null
+              ? buildApplicationKycSend(phone, metaTemplate, who, lang)
+              : { payload: kycGraphPayload(phone, who, cat, lang, insType), text: bubbleText };
+          if ('error' in attemptSend) break;
+          sent = await postGraphMessage(token, fromId, attemptSend.payload);
           if (sent.ok || !isTemplateLanguageMiss(sent.error)) break;
         }
         if (sent.ok) {

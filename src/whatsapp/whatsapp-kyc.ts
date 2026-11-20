@@ -1,7 +1,9 @@
 import { productLabel } from '../leads/lead-present';
+import type { MetaTemplateDefinition } from './whatsapp-admin-templates';
 
 export const KYC_TEMPLATE = 'application_kyc';
 export const KYC_TEMPLATE_LANG = 'en_GB';
+export const KYC_TEMPLATE_ID = '2014497809484610';
 
 /** The 2-button application KYC already reached Meta for this chat. */
 export function kycTemplateAlreadySent(
@@ -27,7 +29,67 @@ export const KYC_STATUS_BTN = 'Check Application Status';
 
 export function kycChatText(name: string, _category?: string, _insType?: string | null): string {
   const who = kycBodyName(name);
-  return `Dear ${who}. Your account application is in progress. KYC verification is pending. Complete it in just 2 mins`;
+  return [
+    `Dear ${who},`,
+    '',
+    'Please reply with these details to complete your KYC:',
+    '',
+    'Working Company Name:',
+    'Total Work Experience:',
+    'Company Address (with Pincode):',
+    'Current Residence Address (with Pincode):',
+    'Email ID:',
+    '',
+    'Team',
+    'Apni Zaroorat',
+  ].join('\n');
+}
+
+function fillPositional(text: string, values: string[]): string {
+  return text.replace(/\{\{\s*(\d+)\s*\}\}/g, (_, raw: string) => {
+    const index = Number(raw) - 1;
+    return values[index] ?? '';
+  });
+}
+
+/** Graph payload + inbox text from Meta template id 2014497809484610 (`application_kyc`). */
+export function buildApplicationKycSend(
+  phone: string,
+  template: MetaTemplateDefinition,
+  name: string,
+  languageOverride?: string,
+): { payload: Record<string, unknown>; text: string } | { error: string } {
+  const templateName = String(template.name ?? '').trim();
+  const language = String(languageOverride || template.language || KYC_TEMPLATE_LANG).trim();
+  if (!templateName || !language) return { error: 'WhatsApp did not return this template.' };
+  if (templateName !== KYC_TEMPLATE) {
+    return { error: `Expected template ${KYC_TEMPLATE}, got ${templateName}.` };
+  }
+  const components = Array.isArray(template.components) ? template.components : [];
+  const body = components.find((item) => String(item.type ?? '').toUpperCase() === 'BODY');
+  const bodyText = String(body?.text ?? '').trim();
+  if (!bodyText) return { error: 'This template has no message text.' };
+  const who = kycBodyName(name);
+  const text = fillPositional(bodyText, [who]).slice(0, 4000);
+  return {
+    text,
+    payload: {
+      messaging_product: 'whatsapp',
+      recipient_type: 'individual',
+      to: phone,
+      type: 'template',
+      template: {
+        name: templateName,
+        language: { code: language },
+        components: [
+          {
+            type: 'body',
+            parameters: [{ type: 'text', text: who }],
+          },
+        ],
+      },
+    },
+  };
 }
 
 export function kycGraphPayload(

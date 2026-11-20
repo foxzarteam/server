@@ -7,11 +7,11 @@ import { createHmac } from 'crypto';
 import { graphMessageBody, isGraphTimeout, isRetryableWhatsappSend, plainWhatsappSendError } from '../src/whatsapp/whatsapp-graph';
 import { ADMIN_WA_TEMPLATES, adminBubbleText, buildAdminTemplateSend, findAdminWaTemplate, liveTemplateKey, normalizeMetaTemplates, pickApprovedTemplate, templateCanBeSent, templateMetaId, templatePersonName } from '../src/whatsapp/whatsapp-admin-templates';
 import { whatsappHubChallenge, whatsappSignatureOk } from '../src/whatsapp/whatsapp-verify';
-import { adminTargetPhone, canonicalWhatsappPhone, extractDeliveryUpdates, extractInboundMessages, phoneLookupKeys, shouldApplyDelivery } from '../src/whatsapp/whatsapp-inbound';
+import { adminTargetPhone, canonicalWhatsappPhone, extractDeliveryUpdates, extractInboundMessages, looksLikeWhatsappMsisdn, phoneLookupKeys, shouldApplyDelivery } from '../src/whatsapp/whatsapp-inbound';
 import { SerialQueue } from '../src/whatsapp/whatsapp-serial-queue';
 import { decryptSettingsJson, encryptSettingsJson } from '../src/whatsapp/settings-crypto';
 import { adminCustomerName, asChat, unreadCustomerCount } from '../src/whatsapp/whatsapp-chat';
-import { kycBodyName, kycChatText, kycGraphPayload, kycProductName, kycTemplateAlreadySent, KYC_START_BTN, KYC_TEMPLATE, KYC_TEMPLATE_LANG } from '../src/whatsapp/whatsapp-kyc';
+import { buildApplicationKycSend, kycBodyName, kycChatText, kycGraphPayload, kycProductName, kycTemplateAlreadySent, KYC_START_BTN, KYC_TEMPLATE, KYC_TEMPLATE_ID, KYC_TEMPLATE_LANG } from '../src/whatsapp/whatsapp-kyc';
 import { isGreeting, pickBotReply } from '../src/whatsapp/whatsapp-bot-rules';
 import {
   alreadyAdminMessaged,
@@ -141,6 +141,58 @@ const inboundLid = extractInboundMessages({
 });
 assert.strictEqual(inboundLid[0]?.phone, '919876543210');
 assert.strictEqual(inboundLid[0]?.text, 'Hi');
+const inboundLidDigits = extractInboundMessages({
+  object: 'whatsapp_business_account',
+  entry: [
+    {
+      changes: [
+        {
+          value: {
+            contacts: [{ profile: { name: 'Riya' }, wa_id: '919876543210' }],
+            messages: [
+              {
+                from: '123456789012345',
+                id: 'wamid.lid2',
+                type: 'text',
+                text: { body: 'Client reply' },
+                context: { id: 'wamid.admin1' },
+              },
+            ],
+          },
+        },
+      ],
+    },
+  ],
+});
+assert.strictEqual(inboundLidDigits[0]?.phone, '919876543210');
+assert.strictEqual(inboundLidDigits[0]?.text, 'Client reply');
+assert.strictEqual(inboundLidDigits[0]?.contextId, 'wamid.admin1');
+const inboundNoFrom = extractInboundMessages({
+  object: 'whatsapp_business_account',
+  entry: [
+    {
+      changes: [
+        {
+          value: {
+            contacts: [{ profile: { name: 'Riya' }, wa_id: '919876543210', user_id: '555666777' }],
+            messages: [
+              {
+                from_user_id: '555666777',
+                id: 'wamid.nophone',
+                type: 'text',
+                text: { body: 'Hi from username' },
+              },
+            ],
+          },
+        },
+      ],
+    },
+  ],
+});
+assert.strictEqual(inboundNoFrom[0]?.phone, '919876543210');
+assert.strictEqual(inboundNoFrom[0]?.text, 'Hi from username');
+assert.strictEqual(looksLikeWhatsappMsisdn('123456789012345'), false);
+assert.strictEqual(looksLikeWhatsappMsisdn('919876543210'), true);
 assert.deepStrictEqual(extractInboundMessages({ object: 'whatsapp_business_account', entry: [{ changes: [{ value: { statuses: [{ id: '1' }] } }] }] }), []);
 assert.deepStrictEqual(
   extractDeliveryUpdates({
@@ -265,6 +317,32 @@ assert.strictEqual(KYC_TEMPLATE_LANG, 'en_GB');
 assert.strictEqual(kycPayload.template.language.code, KYC_TEMPLATE_LANG);
 assert.strictEqual(kycPayload.template.components[0].parameters.length, 1);
 assert.strictEqual(kycPayload.template.components[0].parameters[0].text, 'Raju Patel');
+assert.strictEqual(KYC_TEMPLATE_ID, '2014497809484610');
+assert.strictEqual(templateMetaId(KYC_TEMPLATE), KYC_TEMPLATE_ID);
+const kycBuilt = buildApplicationKycSend(
+  '919876543210',
+  {
+    name: 'application_kyc',
+    language: 'en_GB',
+    components: [
+      {
+        type: 'BODY',
+        text: 'Dear {{1}},\n\nPlease reply with these details to complete your KYC:\n\nWorking Company Name:',
+      },
+    ],
+  },
+  'Atul',
+);
+assert.ok(!('error' in kycBuilt));
+if (!('error' in kycBuilt)) {
+  assert.ok(kycBuilt.text.startsWith('Dear Atul,'));
+  assert.ok(kycBuilt.text.includes('Working Company Name:'));
+  const tpl = kycBuilt.payload.template as { name: string; language: { code: string }; components: { parameters: { text: string }[] }[] };
+  assert.strictEqual(tpl.name, 'application_kyc');
+  assert.strictEqual(tpl.language.code, 'en_GB');
+  assert.strictEqual(tpl.components[0].parameters[0].text, 'Atul');
+}
+assert.ok(kycChatText('Atul').includes('Please reply with these details to complete your KYC:'));
 assert.ok(alreadyKycStarted([{ role: 'assistant', kind: 'kyc' }]));
 assert.ok(!alreadyKycStarted([{ role: 'assistant', kind: 'kyc', sendError: 'timeout' }]));
 assert.ok(!alreadyKycStarted([{ role: 'assistant', kind: 'welcome' }]));
@@ -377,9 +455,9 @@ assert.ok(rejectedNote.includes('Thank you for applying with Apni Zaroorat. 🙏
 assert.ok(rejectedNote.includes('could not be approved'));
 assert.strictEqual(asChat({ messages: [{ id: 'docs:1', role: 'assistant', kind: 'kyc_docs', text: 'x' }] }).messages[0].kind, 'kyc_docs');
 const kycView = kycChatText('Atul', 'personal_loan');
-assert.ok(/Dear Atul\./.test(kycView));
-assert.ok(/application is in progress/.test(kycView));
-assert.ok(/KYC verification is pending/.test(kycView));
+assert.ok(/Dear Atul,/.test(kycView));
+assert.ok(/Please reply with these details to complete your KYC:/.test(kycView));
+assert.ok(/Working Company Name:/.test(kycView));
 assert.strictEqual(KYC_START_BTN, 'Complete KYC');
 
 const pdfIn = extractInboundMessages({

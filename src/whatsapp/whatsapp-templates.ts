@@ -180,7 +180,7 @@ export function alreadyKycStarted(messages: { role: string; kind?: string; text?
     if (item.kind === 'kyc' || item.kind === 'kyc_docs' || item.kind === 'under_review' || item.kind === 'rejected') {
       return true;
     }
-    return /kyc verification is pending|account application is in progress|complete your kyc|in just 2 mins|received your kyc/i.test(
+    return /kyc verification is pending|account application is in progress|complete your kyc|in just 2 mins|received your kyc|working company name/i.test(
       item.text || '',
     );
   });

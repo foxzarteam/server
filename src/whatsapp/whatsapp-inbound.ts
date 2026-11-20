@@ -7,6 +7,10 @@ export type InboundWhatsappMessage = {
   type: string;
   /** Meta phone number id that received this message. */
   phoneNumberId: string;
+  /** Quoted admin bubble (wamid) — used when Meta sends a LID instead of the mobile. */
+  contextId?: string;
+  fromUserId?: string;
+  aliases?: string[];
   waType?: 'image' | 'document' | 'audio' | 'video';
   mediaId?: string;
   mime?: string;
@@ -138,6 +142,19 @@ export function canonicalWhatsappPhone(raw: string): string {
   return phone;
 }
 
+/** Real mobile we can send to. LIDs are usually 15+ digits. */
+export function looksLikeWhatsappMsisdn(phone: string): boolean {
+  const key = canonicalWhatsappPhone(phone);
+  if (/^91[6-9]\d{9}$/.test(key)) return true;
+  return key.length >= 8 && key.length <= 13;
+}
+
+export function looksLikeWhatsappLid(raw: string, digitsOnly = ''): boolean {
+  if (/lid/i.test(raw)) return true;
+  const key = digitsOnly || canonicalWhatsappPhone(raw);
+  return key.length >= 15;
+}
+
 /** DB rows may be 10-digit, 91…, or +91… — look up all of them. */
 export function phoneLookupKeys(phone: string): string[] {
   const key = canonicalWhatsappPhone(phone);
@@ -145,14 +162,27 @@ export function phoneLookupKeys(phone: string): string[] {
   return [...new Set([key, ten, ten ? `+91${ten}` : ''].filter((value) => value.length >= 10))];
 }
 
-function inboundPhone(msg: UnknownRecord, contacts: unknown[]): string {
+function inboundIdentity(msg: UnknownRecord, contacts: unknown[]): {
+  phone: string;
+  fromUserId: string;
+  aliases: string[];
+} {
   const fromRaw = String(msg.from ?? '');
   const fromPhone = canonicalWhatsappPhone(fromRaw);
+  const fromUserId = digits(msg.from_user_id ?? '');
   const contactWa = contacts
     .map((row) => canonicalWhatsappPhone(String(asRecord(row)?.wa_id ?? '')))
-    .find((value) => /^[0-9]{8,16}$/.test(value));
-  if (/lid/i.test(fromRaw) || fromPhone.length > 15) return contactWa || fromPhone;
-  return fromPhone || contactWa || '';
+    .filter((value) => value.length >= 8);
+  const contactUsers = contacts.map((row) => digits(asRecord(row)?.user_id ?? '')).filter((value) => value.length >= 8);
+  const candidates = [...new Set([fromPhone, ...contactWa].filter(Boolean))];
+  const msisdn = candidates.find((value) => looksLikeWhatsappMsisdn(value)) || '';
+  const lidFallback =
+    candidates.find((value) => looksLikeWhatsappLid(fromRaw, value)) ||
+    candidates.find((value) => value.length >= 8) ||
+    '';
+  const phone = msisdn || lidFallback || fromUserId;
+  const aliases = [...new Set([...candidates, ...contactUsers, fromUserId].filter((value) => value.length >= 8))];
+  return { phone, fromUserId, aliases };
 }
 
 /** Admin start-chat: only a real Indian mobile, always stored as 91 + 10 digits. */
@@ -185,9 +215,12 @@ export function extractInboundMessages(body: unknown): InboundWhatsappMessage[] 
       for (const raw of messages) {
         const msg = asRecord(raw);
         if (!msg) continue;
-        const phone = inboundPhone(msg, contacts);
+        const identity = inboundIdentity(msg, contacts);
+        const phone = identity.phone;
         const messageId = String(msg.id ?? '').trim();
-        if (!/^[0-9]{8,16}$/.test(phone) || !messageId || messageId.length > 200) continue;
+        const contextId = String(asRecord(msg.context)?.id ?? '').trim().slice(0, 200);
+        if (!messageId || messageId.length > 200) continue;
+        if (!phone && !contextId && !identity.fromUserId) continue;
 
         const type = String(msg.type ?? 'unknown').trim().toLowerCase().slice(0, 40);
         const unsupportedKind = String(asRecord(msg.unsupported)?.type ?? '').trim().toLowerCase();
@@ -254,6 +287,9 @@ export function extractInboundMessages(body: unknown): InboundWhatsappMessage[] 
           profileName,
           type,
           phoneNumberId,
+          ...(contextId ? { contextId } : {}),
+          ...(identity.fromUserId ? { fromUserId: identity.fromUserId } : {}),
+          ...(identity.aliases.length ? { aliases: identity.aliases } : {}),
           ...(waType ? { waType } : {}),
           ...(mediaId ? { mediaId } : {}),
           ...(mime ? { mime } : {}),

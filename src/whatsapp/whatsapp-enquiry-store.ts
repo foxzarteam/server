@@ -20,8 +20,15 @@ export class WhatsappEnquiryStore {
     return this.supabase.from(TABLE_WP_ENQUIRIES);
   }
 
-  async readByPhone(phone: string): Promise<EnquiryRow | null> {
-    const alts = phoneLookupKeys(phone);
+  async readByPhone(phone: string, extraKeys: string[] = []): Promise<EnquiryRow | null> {
+    const alts = [
+      ...new Set(
+        [...phoneLookupKeys(phone), ...extraKeys.map((key) => canonicalWhatsappPhone(key))].filter(
+          (value) => value.length >= 8,
+        ),
+      ),
+    ];
+    if (!alts.length) return null;
     const { data, error } = await this.table
       .select(ENQUIRY_COLS)
       .in('phone', alts)
@@ -43,7 +50,7 @@ export class WhatsappEnquiryStore {
     waPhoneNumberId = '',
   ): Promise<{ row: EnquiryRow; added: boolean } | null> {
     const key = canonicalWhatsappPhone(phone);
-    if (!/^[0-9]{8,16}$/.test(key) || incoming.length === 0) return null;
+    if (!/^[0-9]{8,24}$/.test(key) || incoming.length === 0) return null;
 
     for (let attempt = 0; attempt < 6; attempt += 1) {
       const current = await this.readByPhone(key);
@@ -109,5 +116,23 @@ export class WhatsappEnquiryStore {
       if (error) console.error('WhatsappEnquiryStore.append.update', error.message);
     }
     return null;
+  }
+
+  /** Customer quoted an admin bubble: attach the inbound to that chat even if Meta sent a LID. */
+  async findByWaMessageId(waMessageId: string): Promise<EnquiryRow | null> {
+    const id = String(waMessageId ?? '').trim().slice(0, 200);
+    if (id.length < 8 || !/^[\w.+=/-]+$/.test(id)) return null;
+    const { data, error } = await this.table
+      .select(ENQUIRY_COLS)
+      .filter('chat->messages', 'cs', JSON.stringify([{ waMessageId: id }]))
+      .order('last_chat_at', { ascending: false, nullsFirst: false })
+      .limit(1);
+    if (error) {
+      console.error('WhatsappEnquiryStore.findByWaMessageId', error.message);
+      return null;
+    }
+    const row = (Array.isArray(data) ? data[0] : data) as EnquiryRow | undefined;
+    if (!row) return null;
+    return { ...row, chat: asChat(row.chat) };
   }
 }
