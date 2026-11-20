@@ -21,7 +21,12 @@ export function placeKycBeforeClicks(messages: ChatMessage[]): ChatMessage[] {
   const next = messages.slice();
   for (let i = next.length - 1; i >= 0; i -= 1) {
     const item = next[i];
-    if (item.role !== 'assistant' || !item.id.startsWith('kyc:')) continue;
+    if (
+      item.role !== 'assistant' ||
+      (!item.id.startsWith('kyc:') && !item.id.startsWith('tpl:application_kyc:'))
+    ) {
+      continue;
+    }
     let clickAt = -1;
     for (let j = 0; j < i; j += 1) {
       if (next[j].role === 'user' && KYC_BUTTON.test(next[j].text.trim())) {

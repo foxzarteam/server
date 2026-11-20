@@ -1205,7 +1205,7 @@ export class WhatsappService implements OnModuleInit {
     const mem = this.flowMem.get(phone);
     if (this.kycTemplateSent.has(phone) || mem?.kyc) return true;
     const history = mem?.ids;
-    if (history && [...history].some((id) => id.startsWith('kyc:'))) return true;
+    if (history && [...history].some((id) => id.startsWith('kyc:') || id.startsWith('tpl:application_kyc:'))) return true;
     const applied = await Promise.race([
       this.applicationOnPhone(phone),
       new Promise<null>((resolve) => setTimeout(() => resolve(null), 3_000)),
@@ -1508,11 +1508,13 @@ export class WhatsappService implements OnModuleInit {
       const listedLang = metaTemplate?.language?.trim() || KYC_TEMPLATE_LANG;
       const metaButtons = 'buttons' in built ? built.buttons : [];
 
-      const prior = (opened?.chat.messages ?? []).filter((item) => item.id.startsWith('kyc:')).at(-1);
+      const prior = (opened?.chat.messages ?? []).filter(
+        (item) => item.id.startsWith('kyc:') || item.id.startsWith('tpl:application_kyc:'),
+      ).at(-1);
       const message: ChatMessage = {
-        id: prior?.id || `kyc:${phone}`,
+        id: prior?.id || `tpl:application_kyc:${phone}`,
         role: 'assistant',
-        text: prior?.text || bubbleText,
+        text: bubbleText,
         at: prior?.at || new Date().toISOString(),
         sending: true,
         replyBy: 'template',

@@ -716,6 +716,29 @@ assert.strictEqual(templateMetaId('reject_template'), '2397652557726837');
 assert.strictEqual(templateMetaId('improve_cibil_score'), '2490611038136927');
 assert.strictEqual(findAdminWaTemplate('improve_cibil_score')?.kyc, false);
 assert.strictEqual(templateMetaId('self_employed_kyc'), '1143750884876894');
+assert.strictEqual(
+  liveTemplateKey(
+    'kyc:919352984119',
+    'Dear Pawan Menaria. Your account application is in progress. KYC verification is pending. Complete it in just 2 mins',
+  ),
+  'application_kyc',
+);
+assert.ok(
+  adminBubbleText(
+    'kyc:919352984119',
+    'Dear Pawan Menaria. Your account application is in progress. KYC verification is pending. Complete it in just 2 mins',
+    {
+      name: 'application_kyc',
+      language: 'en_GB',
+      components: [
+        {
+          type: 'BODY',
+          text: 'Dear {{1}},\n\nPlease reply with these details to complete your KYC:\n\nWorking Company Name:',
+        },
+      ],
+    },
+  ).includes('Working Company Name:'),
+);
 assert.strictEqual(liveTemplateKey('tpl:vehicle_refinance_kyc:1:ab', 'Namaste fyy ji'), 'vehicle_refinance_kyc');
 assert.strictEqual(liveTemplateKey('tpl:vehicle_refinance_kyc:1:ab', 'Namaste fyy ji,\n\nfull'), '');
 const expanded = adminBubbleText('tpl:vehicle_refinance_kyc:1:ab', 'Namaste fyy ji', {

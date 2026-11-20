@@ -10,7 +10,8 @@ export function kycTemplateAlreadySent(
   messages: { id?: string; sent?: boolean; sendError?: string; waMessageId?: string }[],
 ): boolean {
   return messages.some((item) => {
-    if (!String(item.id ?? '').startsWith('kyc:')) return false;
+    const id = String(item.id ?? '');
+    if (!id.startsWith('kyc:') && !id.startsWith('tpl:application_kyc:')) return false;
     if (item.sendError) return false;
     return item.sent === true || Boolean(item.waMessageId);
   });

@@ -124,19 +124,25 @@ export function pickApprovedTemplate(
 function nameFromShortTemplate(stored: string): string {
   const namaste = stored.match(/^Namaste\s+(.+?)\s+ji[,.]?$/i);
   if (namaste?.[1]) return namaste[1].trim();
-  const dear = stored.match(/^Dear\s+(.+?)\.?$/i);
-  if (dear?.[1]) return dear[1].trim();
-  return '';
+  const dearOnly = stored.match(/^Dear\s+(.+?)\.?$/i);
+  if (dearOnly?.[1]) return dearOnly[1].trim();
+  const dearLead = stored.match(/^Dear\s+([^,\n.]+)/i);
+  return dearLead?.[1]?.trim() ?? '';
 }
 
-/** Template name when this bubble is only the old one-line greeting and Meta can fill the rest. */
+const STALE_KYC_COPY =
+  /account application is in progress|kyc verification is pending|complete it in just 2 mins/i;
+
+/** Template name when this bubble should be filled from Meta (by template id). */
 export function liveTemplateKey(messageId: string, storedText: string): string {
-  const templateId = /^tpl:([a-z0-9_]+):/i.exec(messageId)?.[1] ?? '';
+  const id = String(messageId ?? '');
+  if (id.startsWith('kyc:') || id.startsWith('tpl:application_kyc:')) return 'application_kyc';
+  const templateId = /^tpl:([a-z0-9_]+):/i.exec(id)?.[1] ?? '';
   if (!templateId || !templateMetaId(templateId) || !nameFromShortTemplate(String(storedText ?? '').trim())) return '';
   return templateId;
 }
 
-/** Fill a short saved greeting with the body Meta returned for that template. */
+/** Fill a short / stale saved greeting with the body Meta returned for that template. */
 export function adminBubbleText(
   messageId: string,
   storedText: string,
@@ -148,8 +154,9 @@ export function adminBubbleText(
   const name = nameFromShortTemplate(stored.trim());
   if (!name) return stored;
   const built = buildAdminTemplateSend('1000000000', template, name);
-  if ('error' in built || stored.trim().length >= built.text.length) return stored;
-  return built.text;
+  if ('error' in built) return stored;
+  if (STALE_KYC_COPY.test(stored) || stored.trim().length < built.text.length) return built.text;
+  return stored;
 }
 
 export function templateLanguageOrder(metaName: string, listed?: string): string[] {
