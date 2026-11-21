@@ -14,10 +14,10 @@ export type AdminWaTemplateId = (typeof ADMIN_WA_TEMPLATES)[number]['id'];
 
 /** Meta template node id. Message text is read from this id, not stored in code. */
 const TEMPLATE_META_IDS: Record<
-  AdminWaTemplateId | 'application_kyc' | 'credit_card_application' | 'insurance_application',
+  AdminWaTemplateId | 'kyc_application' | 'credit_card_application' | 'insurance_application',
   string
 > = {
-  application_kyc: '2014497809484610',
+  kyc_application: '3762103050596977',
   vehicle_refinance_kyc: '1701000475154093',
   vehicle_purchase_kyc: '2020701738620974',
   personal_loan_kyc: '29218275084524752',
@@ -136,7 +136,9 @@ const STALE_KYC_COPY =
 /** Template name when this bubble should be filled from Meta (by template id). */
 export function liveTemplateKey(messageId: string, storedText: string): string {
   const id = String(messageId ?? '');
-  if (id.startsWith('kyc:') || id.startsWith('tpl:application_kyc:')) return 'application_kyc';
+  if (id.startsWith('kyc:') || id.startsWith('tpl:application_kyc:') || id.startsWith('tpl:kyc_application:')) {
+    return 'kyc_application';
+  }
   const templateId = /^tpl:([a-z0-9_]+):/i.exec(id)?.[1] ?? '';
   if (!templateId || !templateMetaId(templateId) || !nameFromShortTemplate(String(storedText ?? '').trim())) return '';
   return templateId;
@@ -160,7 +162,7 @@ export function adminBubbleText(
 }
 
 export function templateLanguageOrder(metaName: string, listed?: string): string[] {
-  const preferred = metaName === 'application_kyc' ? ['en_GB', 'en', 'en_US'] : ['en', 'en_US', 'en_GB', 'en_IN'];
+  const preferred = metaName === 'kyc_application' ? ['en_GB', 'en', 'en_US'] : ['en', 'en_US', 'en_GB', 'en_IN'];
   const first = String(listed ?? '').trim();
   return [...new Set(first ? [first, ...preferred] : preferred)];
 }

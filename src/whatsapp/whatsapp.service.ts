@@ -69,7 +69,7 @@ import {
   applyConfirmTemplateName,
   buildApplyConfirmSend,
 } from './whatsapp-apply-confirm';
-import { kycBodyName, kycChatText, kycGraphPayload, kycTemplateAlreadySent, KYC_TEMPLATE, KYC_TEMPLATE_LANG } from './whatsapp-kyc';
+import { isLoanKycMessageId, kycBodyName, kycTemplateAlreadySent, KYC_TEMPLATE, KYC_TEMPLATE_LANG } from './whatsapp-kyc';
 import { WhatsappSettings, WhatsappSettingsService } from './whatsapp-settings.service';
 import { whatsappSignatureOk } from './whatsapp-verify';
 import {
@@ -1205,7 +1205,7 @@ export class WhatsappService implements OnModuleInit {
     const mem = this.flowMem.get(phone);
     if (this.kycTemplateSent.has(phone) || mem?.kyc) return true;
     const history = mem?.ids;
-    if (history && [...history].some((id) => id.startsWith('kyc:') || id.startsWith('tpl:application_kyc:'))) return true;
+    if (history && [...history].some((id) => isLoanKycMessageId(id))) return true;
     const applied = await Promise.race([
       this.applicationOnPhone(phone),
       new Promise<null>((resolve) => setTimeout(() => resolve(null), 3_000)),
@@ -1470,11 +1470,10 @@ export class WhatsappService implements OnModuleInit {
   private async dispatchKycTemplate(
     phone: string,
     name: string,
-    category: string,
+    _category: string,
     _leadId = '',
-    insType?: string | null,
+    _insType?: string | null,
   ): Promise<void> {
-    const cat = normalizeStoredCategory(category);
     const who = name.trim();
     if (!who || who.toLowerCase() === LEAD_DRAFT_FULL_NAME.toLowerCase()) return;
     if (!/^[0-9]{8,15}$/.test(phone)) return;
@@ -1501,18 +1500,22 @@ export class WhatsappService implements OnModuleInit {
       const built = metaTemplate
         ? buildAdminTemplateSend(phone, metaTemplate, person)
         : { error: 'WhatsApp did not return this template text.' as const };
-      if ('error' in built) {
-        console.error('WhatsappService.dispatchKycTemplate', built.error, KYC_TEMPLATE, templateMetaId(KYC_TEMPLATE));
+      if (!metaTemplate || 'error' in built) {
+        console.error(
+          'WhatsappService.dispatchKycTemplate',
+          'error' in built ? built.error : 'missing template',
+          KYC_TEMPLATE,
+          templateMetaId(KYC_TEMPLATE),
+        );
+        return;
       }
-      const bubbleText = 'text' in built ? built.text : kycChatText(who, cat, insType);
-      const listedLang = metaTemplate?.language?.trim() || KYC_TEMPLATE_LANG;
-      const metaButtons = 'buttons' in built ? built.buttons : [];
+      const bubbleText = built.text;
+      const listedLang = metaTemplate.language?.trim() || KYC_TEMPLATE_LANG;
+      const metaButtons = built.buttons;
 
-      const prior = (opened?.chat.messages ?? []).filter(
-        (item) => item.id.startsWith('kyc:') || item.id.startsWith('tpl:application_kyc:'),
-      ).at(-1);
+      const prior = (opened?.chat.messages ?? []).filter((item) => isLoanKycMessageId(item.id)).at(-1);
       const message: ChatMessage = {
-        id: prior?.id || `tpl:application_kyc:${phone}`,
+        id: prior?.id || `tpl:${KYC_TEMPLATE}:${phone}`,
         role: 'assistant',
         text: bubbleText,
         at: prior?.at || new Date().toISOString(),
@@ -1540,10 +1543,7 @@ export class WhatsappService implements OnModuleInit {
         }
         let sent: { ok: boolean; error?: string; messageId?: string } = { ok: false, error: lastError };
         for (const lang of languages) {
-          const attemptSend =
-            metaTemplate != null
-              ? buildAdminTemplateSend(phone, { ...metaTemplate, language: lang }, person)
-              : { payload: kycGraphPayload(phone, who, cat, lang, insType), text: bubbleText };
+          const attemptSend = buildAdminTemplateSend(phone, { ...metaTemplate, language: lang }, person);
           if ('error' in attemptSend) break;
           sent = await postGraphMessage(token, fromId, attemptSend.payload);
           if (sent.ok || !isTemplateLanguageMiss(sent.error)) break;

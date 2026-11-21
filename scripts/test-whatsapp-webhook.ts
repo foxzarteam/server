@@ -321,8 +321,8 @@ assert.strictEqual(kycProductName('insurance', 'health_insurance'), 'Health Insu
 const kycPayload = kycGraphPayload('919876543210', 'Raju Patel', 'insurance', 'en_GB') as {
   template: { name: string; language: { code: string }; components: { parameters: { text: string }[] }[] };
 };
-assert.strictEqual(kycPayload.template.name, 'application_kyc');
-assert.strictEqual(KYC_TEMPLATE, 'application_kyc');
+assert.strictEqual(kycPayload.template.name, 'kyc_application');
+assert.strictEqual(KYC_TEMPLATE, 'kyc_application');
 assert.strictEqual(kycTemplateAlreadySent([{ id: 'kyc:919000000000', sent: true }]), true);
 assert.strictEqual(kycTemplateAlreadySent([{ id: 'kyc:919000000000', sendError: 'timeout' }]), false);
 assert.strictEqual(kycTemplateAlreadySent([{ id: 'tpl:personal_loan_kyc:1', sent: true }]), false);
@@ -333,12 +333,12 @@ assert.strictEqual(KYC_TEMPLATE_LANG, 'en_GB');
 assert.strictEqual(kycPayload.template.language.code, KYC_TEMPLATE_LANG);
 assert.strictEqual(kycPayload.template.components[0].parameters.length, 1);
 assert.strictEqual(kycPayload.template.components[0].parameters[0].text, 'Raju Patel');
-assert.strictEqual(KYC_TEMPLATE_ID, '2014497809484610');
+assert.strictEqual(KYC_TEMPLATE_ID, '3762103050596977');
 assert.strictEqual(templateMetaId(KYC_TEMPLATE), KYC_TEMPLATE_ID);
 const kycBuilt = buildApplicationKycSend(
   '919876543210',
   {
-    name: 'application_kyc',
+    name: 'kyc_application',
     language: 'en_GB',
     components: [
       {
@@ -354,11 +354,11 @@ if (!('error' in kycBuilt)) {
   assert.ok(kycBuilt.text.startsWith('Dear Atul,'));
   assert.ok(kycBuilt.text.includes('Working Company Name:'));
   const tpl = kycBuilt.payload.template as { name: string; language: { code: string }; components: { parameters: { text: string }[] }[] };
-  assert.strictEqual(tpl.name, 'application_kyc');
+  assert.strictEqual(tpl.name, 'kyc_application');
   assert.strictEqual(tpl.language.code, 'en_GB');
   assert.strictEqual(tpl.components[0].parameters[0].text, 'Atul');
 }
-assert.ok(kycChatText('Atul').includes('Please reply with these details to complete your KYC:'));
+assert.ok(kycChatText('Atul').startsWith('Dear Atul,'));
 assert.ok(alreadyKycStarted([{ role: 'assistant', kind: 'kyc' }]));
 assert.ok(!alreadyKycStarted([{ role: 'assistant', kind: 'kyc', sendError: 'timeout' }]));
 assert.ok(!alreadyKycStarted([{ role: 'assistant', kind: 'welcome' }]));
@@ -472,8 +472,8 @@ assert.ok(rejectedNote.includes('could not be approved'));
 assert.strictEqual(asChat({ messages: [{ id: 'docs:1', role: 'assistant', kind: 'kyc_docs', text: 'x' }] }).messages[0].kind, 'kyc_docs');
 const kycView = kycChatText('Atul', 'personal_loan');
 assert.ok(/Dear Atul,/.test(kycView));
-assert.ok(/Please reply with these details to complete your KYC:/.test(kycView));
-assert.ok(/Working Company Name:/.test(kycView));
+assert.ok(kycView.startsWith('Dear Atul,'));
+assert.ok(!/Working Company Name:/.test(kycView));
 assert.strictEqual(KYC_START_BTN, 'Complete KYC');
 
 const pdfIn = extractInboundMessages({
@@ -688,7 +688,7 @@ assert.strictEqual(findAdminWaTemplate('self_employed_kyc')?.label, 'Self employ
 assert.strictEqual(findAdminWaTemplate('self_employed_kyc')?.kyc, true);
 assert.strictEqual(findAdminWaTemplate('reject_template')?.label, 'Reject Application');
 assert.strictEqual(findAdminWaTemplate('reject_template')?.kyc, false);
-assert.strictEqual(findAdminWaTemplate('application_kyc'), null);
+assert.strictEqual(findAdminWaTemplate('kyc_application'), null);
 assert.strictEqual(findAdminWaTemplate('personal_loan_kyc')?.kyc, true);
 assert.strictEqual(findAdminWaTemplate('call_not_answered_followup')?.kyc, false);
 assert.strictEqual(findAdminWaTemplate('nope'), null);
@@ -709,7 +709,7 @@ const active = pickApprovedTemplate(
   'vehicle_purchase_kyc',
 );
 assert.strictEqual(active?.language, 'en');
-assert.strictEqual(templateMetaId('application_kyc'), '2014497809484610');
+assert.strictEqual(templateMetaId('kyc_application'), '3762103050596977');
 assert.strictEqual(templateMetaId('vehicle_purchase_kyc'), '2020701738620974');
 assert.strictEqual(templateMetaId('call_not_answered_followup'), '1429874262035888');
 assert.strictEqual(templateMetaId('reject_template'), '2397652557726837');
@@ -721,14 +721,14 @@ assert.strictEqual(
     'kyc:919352984119',
     'Dear Pawan Menaria. Your account application is in progress. KYC verification is pending. Complete it in just 2 mins',
   ),
-  'application_kyc',
+  'kyc_application',
 );
 assert.ok(
   adminBubbleText(
     'kyc:919352984119',
     'Dear Pawan Menaria. Your account application is in progress. KYC verification is pending. Complete it in just 2 mins',
     {
-      name: 'application_kyc',
+      name: 'kyc_application',
       language: 'en_GB',
       components: [
         {

@@ -1,4 +1,5 @@
 import type { ProductChoice } from './whatsapp-templates';
+import { isLoanKycMessageId } from './whatsapp-kyc';
 
 export const MAX_MESSAGES = 1000;
 const MISSING_FILE_NOTICE = 'This file did not come through. Ask the customer to send it again as a photo or PDF.';
@@ -23,7 +24,7 @@ export function placeKycBeforeClicks(messages: ChatMessage[]): ChatMessage[] {
     const item = next[i];
     if (
       item.role !== 'assistant' ||
-      (!item.id.startsWith('kyc:') && !item.id.startsWith('tpl:application_kyc:'))
+      !isLoanKycMessageId(item.id)
     ) {
       continue;
     }

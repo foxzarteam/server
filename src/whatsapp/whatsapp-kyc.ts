@@ -1,9 +1,18 @@
 import { productLabel } from '../leads/lead-present';
 import type { MetaTemplateDefinition } from './whatsapp-admin-templates';
 
-export const KYC_TEMPLATE = 'application_kyc';
+export const KYC_TEMPLATE = 'kyc_application';
 export const KYC_TEMPLATE_LANG = 'en_GB';
-export const KYC_TEMPLATE_ID = '2014497809484610';
+export const KYC_TEMPLATE_ID = '3762103050596977';
+
+export function isLoanKycMessageId(id: string): boolean {
+  const value = String(id ?? '');
+  return (
+    value.startsWith('kyc:') ||
+    value.startsWith('tpl:application_kyc:') ||
+    value.startsWith(`tpl:${KYC_TEMPLATE}:`)
+  );
+}
 
 /** The 2-button application KYC already reached Meta for this chat. */
 export function kycTemplateAlreadySent(
@@ -11,7 +20,7 @@ export function kycTemplateAlreadySent(
 ): boolean {
   return messages.some((item) => {
     const id = String(item.id ?? '');
-    if (!id.startsWith('kyc:') && !id.startsWith('tpl:application_kyc:')) return false;
+    if (!isLoanKycMessageId(id)) return false;
     if (item.sendError) return false;
     return item.sent === true || Boolean(item.waMessageId);
   });
@@ -29,21 +38,7 @@ export const KYC_START_BTN = 'Complete KYC';
 export const KYC_STATUS_BTN = 'Check Application Status';
 
 export function kycChatText(name: string, _category?: string, _insType?: string | null): string {
-  const who = kycBodyName(name);
-  return [
-    `Dear ${who},`,
-    '',
-    'Please reply with these details to complete your KYC:',
-    '',
-    'Working Company Name:',
-    'Total Work Experience:',
-    'Company Address (with Pincode):',
-    'Current Residence Address (with Pincode):',
-    'Email ID:',
-    '',
-    'Team',
-    'Apni Zaroorat',
-  ].join('\n');
+  return `Dear ${kycBodyName(name)},`;
 }
 
 function fillPositional(text: string, values: string[]): string {
@@ -53,7 +48,7 @@ function fillPositional(text: string, values: string[]): string {
   });
 }
 
-/** Graph payload + inbox text from Meta template id 2014497809484610 (`application_kyc`). */
+/** Graph payload + inbox text from Meta template id 3762103050596977 (`kyc_application`). */
 export function buildApplicationKycSend(
   phone: string,
   template: MetaTemplateDefinition,
