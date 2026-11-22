@@ -11,7 +11,8 @@ import {
 } from './partner.dto';
 import { normalizePartnerDocuments } from './partner-documents';
 
-const LOGO_PREFIX = 'aggregators/';
+const LOGO_PREFIX = 'cibil/';
+const LEGACY_LOGO_PREFIX = 'aggregators/';
 const LOGO_MAX_BYTES = 2 * 1024 * 1024;
 const LOGO_FILE_RE = /^[A-Za-z0-9._-]+\.(jpe?g|png|webp|gif)$/i;
 
@@ -40,8 +41,14 @@ export class PartnerService {
     if (!value) return '';
     if (/^\/images\/aggregators\/[A-Za-z0-9._-]+$/.test(value)) return value;
     if (value.startsWith(LOGO_PREFIX) && LOGO_FILE_RE.test(value.slice(LOGO_PREFIX.length))) return value;
+    if (value.startsWith(LEGACY_LOGO_PREFIX) && LOGO_FILE_RE.test(value.slice(LEGACY_LOGO_PREFIX.length))) {
+      return value;
+    }
     const publicBase = r2PublicBaseUrl();
-    if (publicBase && value.startsWith(`${publicBase}/${LOGO_PREFIX}`)) {
+    if (
+      publicBase &&
+      (value.startsWith(`${publicBase}/${LOGO_PREFIX}`) || value.startsWith(`${publicBase}/${LEGACY_LOGO_PREFIX}`))
+    ) {
       try {
         const url = new URL(value);
         if (url.protocol === 'https:') return value.slice(0, 500);
@@ -99,7 +106,9 @@ export class PartnerService {
   async getLogo(file: string): Promise<{ ok: true; body: Buffer; contentType: string } | { ok: false }> {
     const name = String(file ?? '').trim();
     if (!LOGO_FILE_RE.test(name)) return { ok: false };
-    return r2GetObject(`${LOGO_PREFIX}${name}`);
+    const fromCibil = await r2GetObject(`${LOGO_PREFIX}${name}`);
+    if (fromCibil.ok) return fromCibil;
+    return r2GetObject(`${LEGACY_LOGO_PREFIX}${name}`);
   }
 
   private async loadSortOrderTitleMap(): Promise<Map<number, string>> {

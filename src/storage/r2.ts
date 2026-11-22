@@ -1,7 +1,5 @@
+import './r2-aws-env';
 import { GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
-
-process.env.AWS_REQUEST_CHECKSUM_CALCULATION ??= 'WHEN_REQUIRED';
-process.env.AWS_RESPONSE_CHECKSUM_VALIDATION ??= 'WHEN_REQUIRED';
 
 type R2Settings = {
   endpoint: string;
@@ -12,11 +10,32 @@ type R2Settings = {
 
 let client: S3Client | null = null;
 
+function cleanEnv(raw: string | undefined): string {
+  let value = String(raw ?? '').trim();
+  if (
+    (value.startsWith('"') && value.endsWith('"')) ||
+    (value.startsWith("'") && value.endsWith("'"))
+  ) {
+    value = value.slice(1, -1).trim();
+  }
+  return value.replace(/\r|\n/g, '').trim();
+}
+
+function normalizeEndpoint(raw: string): string {
+  const value = cleanEnv(raw);
+  try {
+    const url = new URL(value);
+    return `${url.protocol}//${url.host}`;
+  } catch {
+    return value.replace(/\/+$/, '');
+  }
+}
+
 export function r2Settings(): R2Settings | null {
-  const endpoint = process.env.R2_ENDPOINT?.trim() ?? '';
-  const accessKeyId = process.env.R2_ACCESS_KEY_ID?.trim() ?? '';
-  const secretAccessKey = process.env.R2_SECRET_ACCESS_KEY?.trim() ?? '';
-  const bucket = process.env.R2_BUCKET?.trim() ?? '';
+  const endpoint = normalizeEndpoint(process.env.R2_ENDPOINT ?? '');
+  const accessKeyId = cleanEnv(process.env.R2_ACCESS_KEY_ID);
+  const secretAccessKey = cleanEnv(process.env.R2_SECRET_ACCESS_KEY);
+  const bucket = cleanEnv(process.env.R2_BUCKET);
   if (!endpoint || !accessKeyId || !secretAccessKey || !bucket) return null;
   return { endpoint, accessKeyId, secretAccessKey, bucket };
 }
@@ -30,10 +49,6 @@ function r2Client(settings: R2Settings): S3Client {
         accessKeyId: settings.accessKeyId,
         secretAccessKey: settings.secretAccessKey,
       },
-      forcePathStyle: true,
-      // AWS SDK v3 default CRC32 checksums fail on R2 PutObject.
-      requestChecksumCalculation: 'WHEN_REQUIRED',
-      responseChecksumValidation: 'WHEN_REQUIRED',
     });
   }
   return client;
@@ -70,9 +85,16 @@ export async function r2PutObject(params: {
   const settings = r2Settings();
   if (!settings) {
     const missing = ['R2_ENDPOINT', 'R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY', 'R2_BUCKET'].filter(
-      (key) => !(process.env[key] ?? '').trim(),
+      (key) => !cleanEnv(process.env[key]),
     );
     return { ok: false, error: `R2 not configured: missing ${missing.join(', ') || 'R2 settings'}` };
+  }
+  if (settings.secretAccessKey.startsWith('cfat_')) {
+    return {
+      ok: false,
+      error:
+        'R2_SECRET_ACCESS_KEY is a Cloudflare API token. Use the S3 Secret Access Key from R2 API tokens.',
+    };
   }
   try {
     await r2Client(settings).send(
@@ -112,5 +134,5 @@ export async function r2GetObject(
 }
 
 export function r2PublicBaseUrl(): string {
-  return (process.env.R2_PUBLIC_BASE_URL?.trim() ?? '').replace(/\/+$/, '');
+  return cleanEnv(process.env.R2_PUBLIC_BASE_URL).replace(/\/+$/, '');
 }
