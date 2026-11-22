@@ -54,9 +54,7 @@ export class PartnerController {
       mimetype: dto.mimeType,
       originalname: dto.filename,
     });
-    if (!result.ok) {
-      return { success: false, path: '', message: result.error, error: result.error };
-    }
+    if (!result.ok) throw new BadRequestException(result.error);
     return { success: true, path: result.path };
   }
 
