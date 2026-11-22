@@ -5,7 +5,10 @@ import {
   IsIn,
   IsNumber,
   Min,
+  IsArray,
+  MaxLength,
 } from 'class-validator';
+import { PARTNER_REQUIRED_DOCUMENTS } from './partner-documents';
 
 export class AdminCreatePartnerDto {
   @IsString()
@@ -23,6 +26,16 @@ export class AdminCreatePartnerDto {
   @IsNumber()
   @Min(0)
   commissionValue: number;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(20000)
+  policy?: string;
+
+  @IsOptional()
+  @IsArray()
+  @IsIn([...PARTNER_REQUIRED_DOCUMENTS], { each: true })
+  requiredDocuments?: string[];
 }
 
 export class AdminUpdatePartnerDto {
@@ -45,4 +58,14 @@ export class AdminUpdatePartnerDto {
   @IsNumber()
   @Min(0)
   commissionValue?: number;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(20000)
+  policy?: string;
+
+  @IsOptional()
+  @IsArray()
+  @IsIn([...PARTNER_REQUIRED_DOCUMENTS], { each: true })
+  requiredDocuments?: string[];
 }

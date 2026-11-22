@@ -7,6 +7,7 @@ import {
   AdminCreatePartnerDto,
   AdminUpdatePartnerDto,
 } from './partner.dto';
+import { normalizePartnerDocuments } from './partner-documents';
 
 @Injectable()
 export class PartnerService {
@@ -96,6 +97,8 @@ export class PartnerService {
       service_id: this.normalizeServiceId(dto.serviceId),
       payout_type: dto.payoutType,
       commission_value: dto.commissionValue,
+      policy: String(dto.policy ?? '').trim(),
+      required_documents: normalizePartnerDocuments(dto.requiredDocuments),
     };
 
     const { data, error } = await this.table.insert(payload).select().single();
@@ -117,6 +120,8 @@ export class PartnerService {
     if (dto.serviceId != null) payload.service_id = this.normalizeServiceId(dto.serviceId);
     if (dto.payoutType != null) payload.payout_type = dto.payoutType;
     if (dto.commissionValue != null) payload.commission_value = dto.commissionValue;
+    if (dto.policy != null) payload.policy = dto.policy.trim();
+    if (dto.requiredDocuments != null) payload.required_documents = normalizePartnerDocuments(dto.requiredDocuments);
 
     if (Object.keys(payload).length === 0) return null;
 
