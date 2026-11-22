@@ -64,22 +64,18 @@ export class PartnerController {
   @UseGuards(AdminCrmGuard)
   @HttpCode(HttpStatus.CREATED)
   async createForAdmin(@Body() dto: AdminCreatePartnerDto) {
-    const row = await this.partnerService.create(dto);
-    if (!row) {
-      throw new NotFoundException('Failed to create partner');
-    }
-    return { success: true, data: row };
+    const result = await this.partnerService.create(dto);
+    if (!result.ok) throw new BadRequestException(result.error);
+    return { success: true, data: result.data };
   }
 
   @Patch('admin/:id')
   @UseGuards(AdminCrmGuard)
   @HttpCode(HttpStatus.OK)
   async updateForAdmin(@Param('id') id: string, @Body() dto: AdminUpdatePartnerDto) {
-    const row = await this.partnerService.updateById(id, dto);
-    if (!row) {
-      throw new NotFoundException('Partner not found or update failed');
-    }
-    return { success: true, data: row };
+    const result = await this.partnerService.updateById(id, dto);
+    if (!result.ok) throw new BadRequestException(result.error);
+    return { success: true, data: result.data };
   }
 
   @Delete('admin/:id')

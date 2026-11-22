@@ -177,8 +177,24 @@ export class PartnerService {
     return this.enrichRows(rows);
   }
 
-  async create(dto: AdminCreatePartnerDto): Promise<Record<string, unknown> | null> {
-    const payload = {
+  private isMissingColumnError(error: { message?: string; code?: string } | null): boolean {
+    const message = String(error?.message ?? '');
+    const code = String(error?.code ?? '');
+    return (
+      code === 'PGRST204' ||
+      code === '42703' ||
+      /column .* does not exist|schema cache|Could not find the '?(utm_link|image_path)'? column/i.test(message)
+    );
+  }
+
+  private dbErrorText(error: { message?: string; code?: string } | null): string {
+    return [error?.code, error?.message].filter(Boolean).join(' ').trim() || 'Failed to save aggregator.';
+  }
+
+  async create(
+    dto: AdminCreatePartnerDto,
+  ): Promise<{ ok: true; data: Record<string, unknown> } | { ok: false; error: string }> {
+    const payload: Record<string, unknown> = {
       name: dto.name.trim(),
       service_id: this.normalizeServiceId(dto.serviceId),
       policy: String(dto.policy ?? '').trim(),
@@ -187,17 +203,28 @@ export class PartnerService {
       image_path: this.normalizeImagePath(dto.imagePath),
     };
 
-    const { data, error } = await this.table.insert(payload).select().single();
+    let { data, error } = await this.table.insert(payload).select().single();
+    if (error && this.isMissingColumnError(error)) {
+      const fallback = { ...payload };
+      delete fallback.utm_link;
+      delete fallback.image_path;
+      const retry = await this.table.insert(fallback).select().single();
+      data = retry.data;
+      error = retry.error;
+    }
 
     if (error) {
       console.error('PartnerService.create', error.message, error.code);
-      return null;
+      return { ok: false, error: this.dbErrorText(error) };
     }
 
-    return this.enrichRow(data as Record<string, unknown>);
+    return { ok: true, data: await this.enrichRow(data as Record<string, unknown>) };
   }
 
-  async updateById(id: string, dto: AdminUpdatePartnerDto): Promise<Record<string, unknown> | null> {
+  async updateById(
+    id: string,
+    dto: AdminUpdatePartnerDto,
+  ): Promise<{ ok: true; data: Record<string, unknown> } | { ok: false; error: string }> {
     const payload: Record<string, unknown> = {};
 
     if (dto.name != null) payload.name = dto.name.trim();
@@ -207,16 +234,27 @@ export class PartnerService {
     if (dto.utmLink != null) payload.utm_link = this.normalizeUtmLink(dto.utmLink);
     if (dto.imagePath != null) payload.image_path = this.normalizeImagePath(dto.imagePath);
 
-    if (Object.keys(payload).length === 0) return null;
+    if (Object.keys(payload).length === 0) return { ok: false, error: 'Nothing to update.' };
 
-    const { data, error } = await this.table.update(payload).eq('id', id).select().single();
+    let { data, error } = await this.table.update(payload).eq('id', id).select().single();
+    if (error && this.isMissingColumnError(error)) {
+      const fallback = { ...payload };
+      delete fallback.utm_link;
+      delete fallback.image_path;
+      if (Object.keys(fallback).length === 0) {
+        return { ok: false, error: this.dbErrorText(error) };
+      }
+      const retry = await this.table.update(fallback).eq('id', id).select().single();
+      data = retry.data;
+      error = retry.error;
+    }
 
     if (error) {
       console.error('PartnerService.updateById', error.message, error.code);
-      return null;
+      return { ok: false, error: this.dbErrorText(error) };
     }
 
-    return this.enrichRow(data as Record<string, unknown>);
+    return { ok: true, data: await this.enrichRow(data as Record<string, unknown>) };
   }
 
   async deleteById(id: string): Promise<boolean> {
