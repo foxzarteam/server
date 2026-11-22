@@ -1,13 +1,19 @@
+import { randomUUID } from 'crypto';
 import { Inject, Injectable } from '@nestjs/common';
 import { SupabaseClient } from '@supabase/supabase-js';
 import { TABLE_PARTNER, TABLE_PRODUCTS } from '../common/constants';
 import { SUPABASE_CLIENT } from '../config/supabase';
+import { r2GetObject, r2PublicBaseUrl, r2PutObject } from '../storage/r2';
 
 import {
   AdminCreatePartnerDto,
   AdminUpdatePartnerDto,
 } from './partner.dto';
 import { normalizePartnerDocuments } from './partner-documents';
+
+const LOGO_PREFIX = 'aggregators/';
+const LOGO_MAX_BYTES = 2 * 1024 * 1024;
+const LOGO_FILE_RE = /^[A-Za-z0-9._-]+\.(jpe?g|png|webp|gif)$/i;
 
 @Injectable()
 export class PartnerService {
@@ -32,7 +38,67 @@ export class PartnerService {
   private normalizeImagePath(raw: unknown): string {
     const value = String(raw ?? '').trim();
     if (!value) return '';
-    return /^\/images\/aggregators\/[A-Za-z0-9._-]+$/.test(value) ? value : '';
+    if (/^\/images\/aggregators\/[A-Za-z0-9._-]+$/.test(value)) return value;
+    if (value.startsWith(LOGO_PREFIX) && LOGO_FILE_RE.test(value.slice(LOGO_PREFIX.length))) return value;
+    const publicBase = r2PublicBaseUrl();
+    if (publicBase && value.startsWith(`${publicBase}/${LOGO_PREFIX}`)) {
+      try {
+        const url = new URL(value);
+        if (url.protocol === 'https:') return value.slice(0, 500);
+      } catch {
+        return '';
+      }
+    }
+    return '';
+  }
+
+  private logoExt(file: { mimetype?: string; originalname?: string; buffer?: Buffer }): string | null {
+    const mime = String(file.mimetype ?? '').toLowerCase();
+    if (mime === 'image/jpeg' || mime === 'image/jpg') return 'jpg';
+    if (mime === 'image/png') return 'png';
+    if (mime === 'image/webp') return 'webp';
+    if (mime === 'image/gif') return 'gif';
+    const name = String(file.originalname ?? '').toLowerCase();
+    if (/\.jpe?g$/.test(name)) return 'jpg';
+    if (name.endsWith('.png')) return 'png';
+    if (name.endsWith('.webp')) return 'webp';
+    if (name.endsWith('.gif')) return 'gif';
+    const buf = file.buffer;
+    if (!buf || buf.length < 12) return null;
+    if (buf[0] === 0xff && buf[1] === 0xd8) return 'jpg';
+    if (buf[0] === 0x89 && buf[1] === 0x50) return 'png';
+    if (buf[0] === 0x47 && buf[1] === 0x49) return 'gif';
+    if (buf.toString('ascii', 0, 4) === 'RIFF' && buf.toString('ascii', 8, 12) === 'WEBP') return 'webp';
+    return null;
+  }
+
+  async uploadLogo(file?: {
+    buffer?: Buffer;
+    mimetype?: string;
+    originalname?: string;
+    size?: number;
+  }): Promise<{ ok: true; path: string } | { ok: false; error: string }> {
+    if (!file?.buffer?.length) return { ok: false, error: 'Choose an image to upload.' };
+    if ((file.size ?? file.buffer.length) > LOGO_MAX_BYTES) {
+      return { ok: false, error: 'Image must be 2 MB or smaller.' };
+    }
+    const ext = this.logoExt(file);
+    if (!ext) return { ok: false, error: 'Use a JPG, PNG, WEBP, or GIF image.' };
+    const objectPath = `${LOGO_PREFIX}${randomUUID()}.${ext}`;
+    const contentType =
+      ext === 'jpg' ? 'image/jpeg' : ext === 'png' ? 'image/png' : ext === 'gif' ? 'image/gif' : 'image/webp';
+    const uploaded = await r2PutObject({ key: objectPath, body: file.buffer, contentType });
+    if (!uploaded.ok) return uploaded;
+    const publicBase = r2PublicBaseUrl();
+    const path = this.normalizeImagePath(publicBase ? `${publicBase}/${objectPath}` : objectPath);
+    if (!path) return { ok: false, error: 'Could not upload this image.' };
+    return { ok: true, path };
+  }
+
+  async getLogo(file: string): Promise<{ ok: true; body: Buffer; contentType: string } | { ok: false }> {
+    const name = String(file ?? '').trim();
+    if (!LOGO_FILE_RE.test(name)) return { ok: false };
+    return r2GetObject(`${LOGO_PREFIX}${name}`);
   }
 
   private async loadSortOrderTitleMap(): Promise<Map<number, string>> {

@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   Controller,
   Delete,
@@ -6,11 +7,16 @@ import {
   HttpCode,
   HttpStatus,
   NotFoundException,
+  Header,
   Param,
   Patch,
   Post,
+  StreamableFile,
+  UploadedFile,
   UseGuards,
+  UseInterceptors,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
 import { AdminCrmGuard, AdminOnlyGuard, AdminPanelGuard } from '../common/admin-crm.guard';
 import {
   AdminCreatePartnerDto,
@@ -28,6 +34,29 @@ export class PartnerController {
   async getAllForAdmin() {
     const data = await this.partnerService.getAll();
     return { success: true, data };
+  }
+
+  @Get('logo/:file')
+  @Header('Cache-Control', 'public, max-age=86400, immutable')
+  async getLogo(@Param('file') file: string) {
+    const result = await this.partnerService.getLogo(file);
+    if (!result.ok) throw new NotFoundException();
+    return new StreamableFile(result.body, {
+      type: result.contentType,
+      disposition: 'inline',
+    });
+  }
+
+  @Post('admin/image')
+  @UseGuards(AdminCrmGuard)
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 2 * 1024 * 1024 } }))
+  @HttpCode(HttpStatus.OK)
+  async uploadImage(
+    @UploadedFile() file?: { buffer: Buffer; originalname: string; mimetype: string; size: number },
+  ) {
+    const result = await this.partnerService.uploadLogo(file);
+    if (!result.ok) throw new BadRequestException(result.error);
+    return { success: true, path: result.path };
   }
 
   @Post('admin')
