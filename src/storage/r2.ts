@@ -1,5 +1,8 @@
 import { GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 
+process.env.AWS_REQUEST_CHECKSUM_CALCULATION ??= 'WHEN_REQUIRED';
+process.env.AWS_RESPONSE_CHECKSUM_VALIDATION ??= 'WHEN_REQUIRED';
+
 type R2Settings = {
   endpoint: string;
   accessKeyId: string;
@@ -37,7 +40,7 @@ function r2Client(settings: R2Settings): S3Client {
 }
 
 function r2ErrorText(err: unknown): string {
-  if (!err || typeof err !== 'object') return String(err ?? 'R2 upload failed');
+  if (!err || typeof err !== 'object') return `R2: ${String(err ?? 'upload failed')}`;
   const e = err as {
     name?: string;
     message?: string;
@@ -45,7 +48,7 @@ function r2ErrorText(err: unknown): string {
     code?: string;
     $metadata?: { httpStatusCode?: number };
   };
-  return [
+  const text = [
     e.name,
     e.Code || e.code,
     e.$metadata?.httpStatusCode != null ? `http ${e.$metadata.httpStatusCode}` : '',
@@ -53,8 +56,10 @@ function r2ErrorText(err: unknown): string {
   ]
     .map((part) => String(part ?? '').trim())
     .filter(Boolean)
-    .join(' — ')
-    .slice(0, 500) || 'R2 upload failed';
+    .join(' | ')
+    .replace(/[{}]/g, ' ')
+    .slice(0, 500);
+  return `R2: ${text || 'upload failed'}`;
 }
 
 export async function r2PutObject(params: {

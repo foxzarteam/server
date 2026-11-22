@@ -16,20 +16,26 @@ export class PublicExceptionFilter implements ExceptionFilter {
   private readonly logger = new Logger(PublicExceptionFilter.name);
 
   catch(exception: unknown, host: ArgumentsHost): void {
-    const res = host.switchToHttp().getResponse<Response>();
+    const ctx = host.switchToHttp();
+    const res = ctx.getResponse<Response>();
+    const req = ctx.getRequest<{ originalUrl?: string; url?: string }>();
     const parsed = this.parse(exception);
+    const path = String(req?.originalUrl || req?.url || '').split('?')[0];
+    const passRaw = /\/partners\/admin\/image\/?$/.test(path);
 
-    if (parsed.status >= 500) {
+    if (parsed.status >= 500 || passRaw) {
       this.logger.error(
         parsed.raw || 'Unhandled exception',
         exception instanceof Error ? exception.stack : undefined,
       );
     }
 
-    const message = toPublicErrorMessage(
-      parsed.status >= HttpStatus.INTERNAL_SERVER_ERROR ? '' : parsed.raw,
-      GENERIC,
-    );
+    const message = passRaw
+      ? (parsed.raw || GENERIC).slice(0, 800)
+      : toPublicErrorMessage(
+          parsed.status >= HttpStatus.INTERNAL_SERVER_ERROR ? '' : parsed.raw,
+          GENERIC,
+        );
 
     res.status(parsed.status).json({
       success: false,
