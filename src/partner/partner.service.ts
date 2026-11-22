@@ -25,6 +25,16 @@ export class PartnerService {
       .join(',');
   }
 
+  private normalizeUtmLink(raw: unknown): string {
+    return String(raw ?? '').trim().slice(0, 2000);
+  }
+
+  private normalizeImagePath(raw: unknown): string {
+    const value = String(raw ?? '').trim();
+    if (!value) return '';
+    return /^\/images\/aggregators\/[A-Za-z0-9._-]+$/.test(value) ? value : '';
+  }
+
   private async loadSortOrderTitleMap(): Promise<Map<number, string>> {
     const { data, error } = await this.supabase
       .from(TABLE_PRODUCTS)
@@ -97,6 +107,8 @@ export class PartnerService {
       service_id: this.normalizeServiceId(dto.serviceId),
       policy: String(dto.policy ?? '').trim(),
       required_documents: normalizePartnerDocuments(dto.requiredDocuments),
+      utm_link: this.normalizeUtmLink(dto.utmLink),
+      image_path: this.normalizeImagePath(dto.imagePath),
     };
 
     const { data, error } = await this.table.insert(payload).select().single();
@@ -118,6 +130,8 @@ export class PartnerService {
     if (dto.serviceId != null) payload.service_id = this.normalizeServiceId(dto.serviceId);
     if (dto.policy != null) payload.policy = dto.policy.trim();
     if (dto.requiredDocuments != null) payload.required_documents = normalizePartnerDocuments(dto.requiredDocuments);
+    if (dto.utmLink != null) payload.utm_link = this.normalizeUtmLink(dto.utmLink);
+    if (dto.imagePath != null) payload.image_path = this.normalizeImagePath(dto.imagePath);
 
     if (Object.keys(payload).length === 0) return null;
 

@@ -26,6 +26,16 @@ export class AdminCreatePartnerDto {
   @IsArray()
   @IsIn([...PARTNER_REQUIRED_DOCUMENTS], { each: true })
   requiredDocuments?: string[];
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  utmLink?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  imagePath?: string;
 }
 
 export class AdminUpdatePartnerDto {
@@ -48,4 +58,14 @@ export class AdminUpdatePartnerDto {
   @IsArray()
   @IsIn([...PARTNER_REQUIRED_DOCUMENTS], { each: true })
   requiredDocuments?: string[];
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(2000)
+  utmLink?: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  imagePath?: string;
 }
