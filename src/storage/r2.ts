@@ -28,6 +28,9 @@ function r2Client(settings: R2Settings): S3Client {
         secretAccessKey: settings.secretAccessKey,
       },
       forcePathStyle: true,
+      // AWS SDK v3 default CRC32 checksums fail on R2 PutObject.
+      requestChecksumCalculation: 'WHEN_REQUIRED',
+      responseChecksumValidation: 'WHEN_REQUIRED',
     });
   }
   return client;
@@ -75,7 +78,8 @@ export async function r2GetObject(
       body: Buffer.from(bytes),
       contentType: out.ContentType || 'application/octet-stream',
     };
-  } catch {
+  } catch (err) {
+    console.error('r2GetObject', err instanceof Error ? err.message : err);
     return { ok: false };
   }
 }

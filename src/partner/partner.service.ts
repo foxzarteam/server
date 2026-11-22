@@ -180,9 +180,7 @@ export class PartnerService {
     const { data, error } = await this.table.insert(payload).select().single();
 
     if (error) {
-      if (process.env.NODE_ENV !== 'production') {
-        console.error('PartnerService.create', error);
-      }
+      console.error('PartnerService.create', error.message, error.code);
       return null;
     }
 
@@ -204,9 +202,7 @@ export class PartnerService {
     const { data, error } = await this.table.update(payload).eq('id', id).select().single();
 
     if (error) {
-      if (process.env.NODE_ENV !== 'production') {
-        console.error('PartnerService.updateById', error);
-      }
+      console.error('PartnerService.updateById', error.message, error.code);
       return null;
     }
 

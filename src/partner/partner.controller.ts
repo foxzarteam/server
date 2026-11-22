@@ -12,15 +12,13 @@ import {
   Patch,
   Post,
   StreamableFile,
-  UploadedFile,
   UseGuards,
-  UseInterceptors,
 } from '@nestjs/common';
-import { FileInterceptor } from '@nestjs/platform-express';
 import { AdminCrmGuard, AdminOnlyGuard, AdminPanelGuard } from '../common/admin-crm.guard';
 import {
   AdminCreatePartnerDto,
   AdminUpdatePartnerDto,
+  AdminUploadPartnerImageDto,
 } from './partner.dto';
 import { PartnerService } from './partner.service';
 
@@ -49,12 +47,13 @@ export class PartnerController {
 
   @Post('admin/image')
   @UseGuards(AdminCrmGuard)
-  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 2 * 1024 * 1024 } }))
   @HttpCode(HttpStatus.OK)
-  async uploadImage(
-    @UploadedFile() file?: { buffer: Buffer; originalname: string; mimetype: string; size: number },
-  ) {
-    const result = await this.partnerService.uploadLogo(file);
+  async uploadImage(@Body() dto: AdminUploadPartnerImageDto) {
+    const result = await this.partnerService.uploadLogo({
+      buffer: Buffer.from(String(dto.contentBase64 ?? ''), 'base64'),
+      mimetype: dto.mimeType,
+      originalname: dto.filename,
+    });
     if (!result.ok) throw new BadRequestException(result.error);
     return { success: true, path: result.path };
   }

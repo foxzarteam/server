@@ -38,6 +38,23 @@ export class AdminCreatePartnerDto {
   imagePath?: string;
 }
 
+export class AdminUploadPartnerImageDto {
+  @IsString()
+  @MinLength(1)
+  @MaxLength(200)
+  filename: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  mimeType?: string;
+
+  @IsString()
+  @MinLength(1)
+  @MaxLength(3_000_000)
+  contentBase64: string;
+}
+
 export class AdminUpdatePartnerDto {
   @IsOptional()
   @IsString()
