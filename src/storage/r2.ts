@@ -36,6 +36,27 @@ function r2Client(settings: R2Settings): S3Client {
   return client;
 }
 
+function r2ErrorText(err: unknown): string {
+  if (!err || typeof err !== 'object') return String(err ?? 'R2 upload failed');
+  const e = err as {
+    name?: string;
+    message?: string;
+    Code?: string;
+    code?: string;
+    $metadata?: { httpStatusCode?: number };
+  };
+  return [
+    e.name,
+    e.Code || e.code,
+    e.$metadata?.httpStatusCode != null ? `http ${e.$metadata.httpStatusCode}` : '',
+    e.message,
+  ]
+    .map((part) => String(part ?? '').trim())
+    .filter(Boolean)
+    .join(' — ')
+    .slice(0, 500) || 'R2 upload failed';
+}
+
 export async function r2PutObject(params: {
   key: string;
   body: Buffer;
@@ -43,8 +64,10 @@ export async function r2PutObject(params: {
 }): Promise<{ ok: true } | { ok: false; error: string }> {
   const settings = r2Settings();
   if (!settings) {
-    console.error('r2PutObject missing R2_ENDPOINT / R2_ACCESS_KEY_ID / R2_SECRET_ACCESS_KEY / R2_BUCKET');
-    return { ok: false, error: 'Could not upload this image.' };
+    const missing = ['R2_ENDPOINT', 'R2_ACCESS_KEY_ID', 'R2_SECRET_ACCESS_KEY', 'R2_BUCKET'].filter(
+      (key) => !(process.env[key] ?? '').trim(),
+    );
+    return { ok: false, error: `R2 not configured: missing ${missing.join(', ') || 'R2 settings'}` };
   }
   try {
     await r2Client(settings).send(
@@ -57,8 +80,7 @@ export async function r2PutObject(params: {
     );
     return { ok: true };
   } catch (err) {
-    console.error('r2PutObject', err instanceof Error ? err.message : err);
-    return { ok: false, error: 'Could not upload this image.' };
+    return { ok: false, error: r2ErrorText(err) };
   }
 }
 

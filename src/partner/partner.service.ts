@@ -90,8 +90,9 @@ export class PartnerService {
     const uploaded = await r2PutObject({ key: objectPath, body: file.buffer, contentType });
     if (!uploaded.ok) return uploaded;
     const publicBase = r2PublicBaseUrl();
-    const path = this.normalizeImagePath(publicBase ? `${publicBase}/${objectPath}` : objectPath);
-    if (!path) return { ok: false, error: 'Could not upload this image.' };
+    const stored = publicBase ? `${publicBase}/${objectPath}` : objectPath;
+    const path = this.normalizeImagePath(stored);
+    if (!path) return { ok: false, error: `image path rejected: ${stored.slice(0, 200)}` };
     return { ok: true, path };
   }
 
