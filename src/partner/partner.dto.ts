@@ -3,8 +3,6 @@ import {
   IsString,
   MinLength,
   IsIn,
-  IsNumber,
-  Min,
   IsArray,
   MaxLength,
 } from 'class-validator';
@@ -18,14 +16,6 @@ export class AdminCreatePartnerDto {
   @IsString()
   @MinLength(1)
   serviceId: string;
-
-  @IsString()
-  @IsIn(['PERCENTAGE', 'FLAT'], { message: 'payoutType must be PERCENTAGE or FLAT' })
-  payoutType: string;
-
-  @IsNumber()
-  @Min(0)
-  commissionValue: number;
 
   @IsOptional()
   @IsString()
@@ -48,16 +38,6 @@ export class AdminUpdatePartnerDto {
   @IsString()
   @MinLength(1)
   serviceId?: string;
-
-  @IsOptional()
-  @IsString()
-  @IsIn(['PERCENTAGE', 'FLAT'], { message: 'payoutType must be PERCENTAGE or FLAT' })
-  payoutType?: string;
-
-  @IsOptional()
-  @IsNumber()
-  @Min(0)
-  commissionValue?: number;
 
   @IsOptional()
   @IsString()
