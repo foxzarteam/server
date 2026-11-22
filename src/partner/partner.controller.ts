@@ -11,7 +11,7 @@ import {
   Post,
   UseGuards,
 } from '@nestjs/common';
-import { AdminCrmGuard, AdminOnlyGuard } from '../common/admin-crm.guard';
+import { AdminCrmGuard, AdminOnlyGuard, AdminPanelGuard } from '../common/admin-crm.guard';
 import {
   AdminCreatePartnerDto,
   AdminUpdatePartnerDto,
@@ -23,7 +23,7 @@ export class PartnerController {
   constructor(private readonly partnerService: PartnerService) {}
 
   @Get('admin/all')
-  @UseGuards(AdminCrmGuard)
+  @UseGuards(AdminPanelGuard)
   @HttpCode(HttpStatus.OK)
   async getAllForAdmin() {
     const data = await this.partnerService.getAll();
