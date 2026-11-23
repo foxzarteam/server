@@ -21,7 +21,8 @@ export class PublicExceptionFilter implements ExceptionFilter {
     const req = ctx.getRequest<{ originalUrl?: string; url?: string }>();
     const parsed = this.parse(exception);
     const path = String(req?.originalUrl || req?.url || '').split('?')[0];
-    const passRaw = /\/partners\/admin(\/image)?(\/[^/]+)?\/?$/.test(path);
+    const passRaw =
+      /\/partners\/admin(\/image)?(\/[^/]+)?\/?$/.test(path) || /\/users\/agent\/kyc\/?$/.test(path);
 
     if (parsed.status >= 500 || passRaw) {
       this.logger.error(

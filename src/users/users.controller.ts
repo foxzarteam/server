@@ -5,6 +5,7 @@ import {
   Controller,
   Delete,
   Get,
+  Header,
   HttpCode,
   HttpStatus,
   NotFoundException,
@@ -12,11 +13,13 @@ import {
   Patch,
   Post,
   Req,
+  StreamableFile,
   UnauthorizedException,
   UseGuards,
 } from '@nestjs/common';
 import type { Request } from 'express';
-import { AdminCrmGuard, AdminOnlyGuard } from '../common/admin-crm.guard';
+import { AdminCrmGuard, AdminOnlyGuard, AdminPanelGuard } from '../common/admin-crm.guard';
+import type { AdminActor } from '../common/admin-actor';
 import { requestRateLimitIp } from '../common/client-ip';
 import { issuePartnerToken } from '../common/partner-session';
 import { allowRateLimitedAction } from '../security/rate-limit';
@@ -29,6 +32,7 @@ import {
   AgentLoginDto,
   AdminCreateUserDto,
   AdminUpdateUserDto,
+  SubmitPartnerKycDto,
 } from './users.dto';
 import { UsersService } from './users.service';
 
@@ -99,12 +103,60 @@ export class UsersController {
     return this.withPartnerToken(result.user);
   }
 
+  @Get('agent/kyc-status')
+  @UseGuards(AdminPanelGuard)
+  @HttpCode(HttpStatus.OK)
+  async agentKycStatus(@Req() req: Request & { adminActor?: AdminActor }) {
+    const userId = String(req.adminActor?.sub ?? '').trim();
+    if (!userId || String(req.adminActor?.role ?? '').toLowerCase() !== 'agent') {
+      throw new UnauthorizedException('Unauthorized');
+    }
+    const data = await this.usersService.getKycStatus(userId);
+    return { success: true, data };
+  }
+
+  @Post('agent/kyc')
+  @UseGuards(AdminPanelGuard)
+  @HttpCode(HttpStatus.OK)
+  async agentSubmitKyc(
+    @Req() req: Request & { adminActor?: AdminActor },
+    @Body() dto: SubmitPartnerKycDto,
+  ) {
+    const userId = String(req.adminActor?.sub ?? '').trim();
+    if (!userId || String(req.adminActor?.role ?? '').toLowerCase() !== 'agent') {
+      throw new UnauthorizedException('Unauthorized');
+    }
+    const result = await this.usersService.submitPartnerKyc(userId, dto);
+    if (!result.ok) throw new BadRequestException(result.error);
+    return { success: true, data: { kyc_status: result.kyc_status } };
+  }
+
   @Get('admin/all')
   @UseGuards(AdminCrmGuard)
   @HttpCode(HttpStatus.OK)
   async getAllForAdmin() {
     const users = await this.usersService.getAll();
     return { success: true, data: users };
+  }
+
+  @Get('admin/:id/kyc')
+  @UseGuards(AdminCrmGuard)
+  @HttpCode(HttpStatus.OK)
+  async adminGetKyc(@Param('id') id: string) {
+    const data = await this.usersService.getKycForAdmin(id);
+    return { success: true, data };
+  }
+
+  @Get('admin/:id/kyc-file/:kind')
+  @UseGuards(AdminCrmGuard)
+  @Header('Cache-Control', 'private, max-age=60')
+  async adminGetKycFile(@Param('id') id: string, @Param('kind') kind: string) {
+    const result = await this.usersService.getKycFile(id, kind);
+    if (!result.ok) throw new NotFoundException();
+    return new StreamableFile(result.body, {
+      type: result.contentType,
+      disposition: 'inline',
+    });
   }
 
   @Post('admin')
