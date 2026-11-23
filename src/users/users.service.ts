@@ -4,7 +4,7 @@ import { SupabaseClient } from '@supabase/supabase-js';
 import { hashMpin, mpinMatches, sanitizeUserPublic, storedMpinLooksBcrypt } from '../common/mpin';
 import { toPublicErrorMessage } from '../common/public-error';
 import { SUPABASE_CLIENT } from '../config/supabase';
-import { r2GetObject, r2PutObject } from '../storage/r2';
+import { r2DeleteObject, r2DeletePrefix, r2GetObject, r2PutObject } from '../storage/r2';
 import { TABLE_PARTNER_KYC, TABLE_USERS, TABLE_WALLET, getCurrentIsoTime } from '../common/constants';
 import {
   AdminCreateUserDto,
@@ -379,9 +379,51 @@ export class UsersService {
     return true;
   }
 
+  private kycObjectKey(stored: string): string {
+    return stored.replace(/^https?:\/\/[^/]+\//, '').replace(/^\/+/, '').trim();
+  }
+
+  /** Remove KYC files from R2 before the partner row is dropped. */
+  private async deleteKycFilesForUser(userId: string): Promise<void> {
+    const prefixResult = await r2DeletePrefix(`kyc/${userId}/`);
+    if (!prefixResult.ok && process.env.NODE_ENV !== 'production') {
+      console.error('UsersService.deleteKycFilesForUser prefix', prefixResult.error);
+    }
+
+    const { data, error } = await this.supabase
+      .from(TABLE_PARTNER_KYC)
+      .select('aadhaar_front_path, aadhaar_back_path, pan_card_path, selfie_path')
+      .eq('user_id', userId)
+      .maybeSingle();
+    if (error) {
+      if (process.env.NODE_ENV !== 'production') {
+        console.error('UsersService.deleteKycFilesForUser lookup', error);
+      }
+      return;
+    }
+    if (!data) return;
+    const row = data as Record<string, unknown>;
+    const keys = [
+      row.aadhaar_front_path,
+      row.aadhaar_back_path,
+      row.pan_card_path,
+      row.selfie_path,
+    ]
+      .map((value) => this.kycObjectKey(String(value ?? '')))
+      .filter((key) => key.startsWith('kyc/'));
+    for (const key of keys) {
+      const removed = await r2DeleteObject(key);
+      if (!removed.ok && process.env.NODE_ENV !== 'production') {
+        console.error('UsersService.deleteKycFilesForUser object', key, removed.error);
+      }
+    }
+  }
+
   async deleteById(id: string): Promise<boolean> {
     const uid = id.trim();
     if (!uid) return false;
+
+    await this.deleteKycFilesForUser(uid);
 
     // Clear wallet first so leftover earning cannot outlive the partner.
     const walletCleared = await this.deleteWalletForUser(uid);

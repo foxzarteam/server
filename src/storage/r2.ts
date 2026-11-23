@@ -1,5 +1,11 @@
 import './r2-aws-env';
-import { GetObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
+import {
+  DeleteObjectCommand,
+  GetObjectCommand,
+  ListObjectsV2Command,
+  PutObjectCommand,
+  S3Client,
+} from '@aws-sdk/client-s3';
 
 type R2Settings = {
   endpoint: string;
@@ -130,6 +136,62 @@ export async function r2GetObject(
   } catch (err) {
     console.error('r2GetObject', err instanceof Error ? err.message : err);
     return { ok: false };
+  }
+}
+
+export async function r2DeleteObject(key: string): Promise<{ ok: true } | { ok: false; error: string }> {
+  const settings = r2Settings();
+  if (!settings) return { ok: false, error: 'R2 not configured' };
+  const objectKey = key.replace(/^https?:\/\/[^/]+\//, '').replace(/^\/+/, '').trim();
+  if (!objectKey || objectKey.includes('..')) return { ok: false, error: 'Invalid R2 key' };
+  try {
+    await r2Client(settings).send(
+      new DeleteObjectCommand({ Bucket: settings.bucket, Key: objectKey }),
+    );
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: r2ErrorText(err) };
+  }
+}
+
+/** Delete every object under a prefix, e.g. `kyc/{userId}/`. */
+export async function r2DeletePrefix(
+  prefix: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  const settings = r2Settings();
+  if (!settings) return { ok: false, error: 'R2 not configured' };
+  if (settings.secretAccessKey.startsWith('cfat_')) {
+    return {
+      ok: false,
+      error:
+        'R2_SECRET_ACCESS_KEY is a Cloudflare API token. Use the S3 Secret Access Key from R2 API tokens.',
+    };
+  }
+  const safe = prefix.replace(/^\/+/, '').trim();
+  if (!safe.startsWith('kyc/') || !safe.endsWith('/') || safe.includes('..')) {
+    return { ok: false, error: 'Invalid KYC prefix' };
+  }
+  try {
+    let token: string | undefined;
+    do {
+      const listed = await r2Client(settings).send(
+        new ListObjectsV2Command({
+          Bucket: settings.bucket,
+          Prefix: safe,
+          ContinuationToken: token,
+        }),
+      );
+      for (const obj of listed.Contents ?? []) {
+        const key = String(obj.Key ?? '').trim();
+        if (!key.startsWith(safe)) continue;
+        const removed = await r2DeleteObject(key);
+        if (!removed.ok) return removed;
+      }
+      token = listed.IsTruncated ? listed.NextContinuationToken : undefined;
+    } while (token);
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, error: r2ErrorText(err) };
   }
 }
 
