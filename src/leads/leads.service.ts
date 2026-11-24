@@ -28,6 +28,9 @@ import {
   CODE_LOAN_AMOUNT_REQUIRED,
   leadLoanAmount,
   MSG_LOAN_AMOUNT_REQUIRED,
+  PERSONAL_LOAN_AMOUNT_MAX,
+  PERSONAL_LOAN_AMOUNT_MIN,
+  VEHICLE_LOAN_AMOUNT_MIN,
   isStoredLoanCategory,
   personalLoanAmountError,
   resolvePersonalLoanAmounts,
@@ -327,7 +330,10 @@ export class LeadsService {
       loanAmt: dto.loanAmt,
     });
     const bounds = await this.servicesService.amountBoundsBySlug(category.replace(/_/g, '-'));
-    const amtErr = personalLoanAmountError(amounts.requiredAmount, bounds ?? undefined);
+    const fallback = isVehicleLoanCategory(category)
+      ? { min: VEHICLE_LOAN_AMOUNT_MIN, max: PERSONAL_LOAN_AMOUNT_MAX }
+      : { min: PERSONAL_LOAN_AMOUNT_MIN, max: PERSONAL_LOAN_AMOUNT_MAX };
+    const amtErr = personalLoanAmountError(amounts.requiredAmount, bounds ?? fallback);
     if (amtErr) return { ok: false, message: amtErr };
     return { ok: true, amounts };
   }

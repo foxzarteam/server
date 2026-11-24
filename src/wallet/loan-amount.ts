@@ -1,6 +1,7 @@
 /** Personal-loan amount for commission: exact rupees, else midpoint of loan_amt range. */
 
-export const PERSONAL_LOAN_AMOUNT_MIN = 25_000;
+export const PERSONAL_LOAN_AMOUNT_MIN = 50_000;
+export const VEHICLE_LOAN_AMOUNT_MIN = 1_00_000;
 export const PERSONAL_LOAN_AMOUNT_MAX = 50_00_000;
 
 export const CODE_LOAN_AMOUNT_REQUIRED = 'LOAN_AMOUNT_REQUIRED';
