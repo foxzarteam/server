@@ -6,6 +6,7 @@ import assert from 'assert';
 import { createHmac } from 'crypto';
 import { graphMessageBody, isGraphTimeout, isRetryableWhatsappSend, plainWhatsappSendError } from '../src/whatsapp/whatsapp-graph';
 import { ADMIN_WA_TEMPLATES, adminBubbleText, buildAdminTemplateSend, findAdminWaTemplate, liveTemplateKey, normalizeMetaTemplates, pickApprovedTemplate, templateCanBeSent, templateMetaId, templatePersonName } from '../src/whatsapp/whatsapp-admin-templates';
+import { applyConfirmTemplateName, buildApplyConfirmSend, CREDIT_CARD_SUBMIT_TEMPLATE } from '../src/whatsapp/whatsapp-apply-confirm';
 import { whatsappHubChallenge, whatsappSignatureOk } from '../src/whatsapp/whatsapp-verify';
 import { adminTargetPhone, canonicalWhatsappPhone, extractDeliveryUpdates, extractInboundMessages, looksLikeWhatsappMsisdn, phoneLookupKeys, shouldApplyDelivery } from '../src/whatsapp/whatsapp-inbound';
 import { SerialQueue } from '../src/whatsapp/whatsapp-serial-queue';
@@ -683,9 +684,33 @@ assert.strictEqual(adminCustomerName('Jayu Patel', 'Jayu Kumar'), 'Jayu Kumar');
 assert.strictEqual(adminCustomerName('Jayu Patel', ''), 'Jayu Patel');
 assert.strictEqual(adminCustomerName('Jayu Patel', '   '), 'Jayu Patel');
 
-assert.strictEqual(ADMIN_WA_TEMPLATES.length, 9);
+assert.strictEqual(ADMIN_WA_TEMPLATES.length, 10);
 assert.strictEqual(findAdminWaTemplate('car_loan_150')?.metaName, 'car_loan_150');
 assert.strictEqual(templateMetaId('car_loan_150'), '1693681688820850');
+assert.strictEqual(CREDIT_CARD_SUBMIT_TEMPLATE, 'fd_credit_card_request');
+assert.strictEqual(applyConfirmTemplateName('credit_card'), 'fd_credit_card_request');
+assert.strictEqual(findAdminWaTemplate('fd_credit_card_request')?.metaName, 'fd_credit_card_request');
+assert.strictEqual(templateMetaId('fd_credit_card_request'), '2773659176470801');
+const fdCredit = buildApplyConfirmSend(
+  '919876543210',
+  {
+    name: 'fd_credit_card_request',
+    language: 'en',
+    components: [
+      {
+        type: 'BODY',
+        text: 'Hello {{1}} Ji, Your Credit Card application request has been received.',
+      },
+    ],
+  },
+  'credit_card',
+  'Priya Shah',
+);
+if ('error' in fdCredit) throw new Error(fdCredit.error);
+assert.ok(fdCredit.text.startsWith('Hello Priya Shah Ji,'));
+const fdCreditBody = (fdCredit.payload.template as { name?: string; components?: { parameters?: { text?: string }[] }[] });
+assert.strictEqual(fdCreditBody.name, 'fd_credit_card_request');
+assert.strictEqual(fdCreditBody.components?.[0]?.parameters?.[0]?.text, 'Priya Shah');
 const carLoan150 = buildAdminTemplateSend(
   '919876543210',
   {

@@ -3,7 +3,7 @@ import type { MetaTemplateDefinition } from './whatsapp-admin-templates';
 import { kycBodyName } from './whatsapp-kyc';
 
 /** Meta template names (must match WhatsApp Manager). Body is loaded by template id. */
-export const CREDIT_CARD_SUBMIT_TEMPLATE = 'credit_card_application';
+export const CREDIT_CARD_SUBMIT_TEMPLATE = 'fd_credit_card_request';
 export const INSURANCE_SUBMIT_TEMPLATE = 'insurance_application';
 export const APPLY_CONFIRM_TEMPLATE_LANG = 'en';
 
@@ -80,8 +80,8 @@ export function buildApplyConfirmSend(
 
   const count = bodyParamCount(bodyText);
   const values = applyConfirmBodyValues(category, name, insType);
-  if (category === 'credit_card' && count !== 1) {
-    return { error: 'Credit card template must have exactly 1 body variable.' };
+  if (category === 'credit_card' && count > 0) {
+    while (values.length < count) values.push(values[0] ?? kycBodyName(name));
   }
   if (category === 'insurance' && count !== 2) {
     return { error: 'Insurance template must have exactly 2 body variables.' };
@@ -100,7 +100,7 @@ export function buildApplyConfirmSend(
       template: {
         name: templateName,
         language: { code: language },
-        components: [{ type: 'body', parameters }],
+        ...(count > 0 ? { components: [{ type: 'body', parameters }] } : {}),
       },
     },
   };

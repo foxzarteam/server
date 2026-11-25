@@ -1,6 +1,7 @@
 /** Admin inbox menu. Same names are approved on Meta. Admin can send each one again. */
 export const ADMIN_WA_TEMPLATES = [
   { id: 'car_loan_150', label: 'Used Car Loan 150%', metaName: 'car_loan_150', kyc: false },
+  { id: 'fd_credit_card_request', label: 'Credit Card Request', metaName: 'fd_credit_card_request', kyc: false },
   { id: 'vehicle_refinance_kyc', label: 'Used vehicle (purchase) / Existing vehicle (refinanace)', metaName: 'vehicle_refinance_kyc', kyc: true },
   { id: 'vehicle_purchase_kyc', label: 'New vehicle loan (purchase)', metaName: 'vehicle_purchase_kyc', kyc: true },
   { id: 'personal_loan_kyc', label: 'Personal Loan (PL KYC)', metaName: 'personal_loan_kyc', kyc: true },
@@ -19,6 +20,7 @@ const TEMPLATE_META_IDS: Record<
   string
 > = {
   car_loan_150: '1693681688820850',
+  fd_credit_card_request: '2773659176470801',
   kyc_application: '3762103050596977',
   vehicle_refinance_kyc: '1701000475154093',
   vehicle_purchase_kyc: '2020701738620974',
