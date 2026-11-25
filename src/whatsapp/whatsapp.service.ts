@@ -166,10 +166,21 @@ export class WhatsappService implements OnModuleInit {
     name: string;
     category?: string;
     insType?: string | null;
+    vehicleCategory?: string | null;
   }): void {
     const category = normalizeStoredCategory(String(input.category ?? ''));
     /** KYC start WhatsApp is loan-only — never for insurance or credit card. */
     if (!isStoredLoanCategory(category)) return;
+    const vehicleCategory = String(input.vehicleCategory ?? '').trim().toLowerCase();
+    if (vehicleCategory === 'used_car') {
+      void this.dispatchUsedCarOffer(
+        canonicalWhatsappPhone(input.phone),
+        String(input.name ?? ''),
+      ).catch((error) => {
+        console.error('WhatsappService.dispatchUsedCarOffer', error);
+      });
+      return;
+    }
     void this.dispatchKycTemplate(
       canonicalWhatsappPhone(input.phone),
       String(input.name ?? ''),
@@ -1368,6 +1379,43 @@ export class WhatsappService implements OnModuleInit {
     await this.waitPersist(phone, async () => {
       await this.appendMessage(phone, name, message, existing?.chat.waPhoneNumberId || '');
     });
+  }
+
+  private usedCarOfferAlreadySent(
+    messages: { id?: string; sent?: boolean; sendError?: string; waMessageId?: string }[],
+  ): boolean {
+    return messages.some((item) => {
+      if (!String(item.id ?? '').startsWith('tpl:car_loan_150:')) return false;
+      if (item.sendError) return false;
+      return item.sent === true || Boolean(item.waMessageId);
+    });
+  }
+
+  /** Used-car form submit: car_loan_150 (not the generic KYC start). {{1}} = applicant name. */
+  private async dispatchUsedCarOffer(phone: string, name: string): Promise<void> {
+    const who = kycBodyName(name);
+    if (!who || who.toLowerCase() === LEAD_DRAFT_FULL_NAME.toLowerCase() || !/^[0-9]{8,15}$/.test(phone)) return;
+    const flightKey = `car_loan_150:${phone}`;
+    if (this.kycInflight.has(flightKey)) return;
+    this.kycInflight.add(flightKey);
+    try {
+      const option = findAdminWaTemplate('car_loan_150');
+      if (!option) return;
+      const existing = await this.readByPhone(phone);
+      if (this.usedCarOfferAlreadySent(existing?.chat.messages ?? [])) return;
+      const result = await this.deliverAdminTemplate(
+        option,
+        phone,
+        who,
+        existing?.chat.profileName || who,
+        existing?.chat.waPhoneNumberId || '',
+      );
+      if (!result.ok) {
+        console.error('WhatsappService.dispatchUsedCarOffer', result.error);
+      }
+    } finally {
+      this.kycInflight.delete(flightKey);
+    }
   }
 
   private rememberKycPhone(phone: string) {

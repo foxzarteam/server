@@ -184,6 +184,7 @@ export class LeadsService {
         name,
         category,
         insType,
+        vehicleCategory: String(lead.vehicle_category ?? lead.vehicleCategory ?? ''),
       });
       return;
     }

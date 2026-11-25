@@ -683,7 +683,28 @@ assert.strictEqual(adminCustomerName('Jayu Patel', 'Jayu Kumar'), 'Jayu Kumar');
 assert.strictEqual(adminCustomerName('Jayu Patel', ''), 'Jayu Patel');
 assert.strictEqual(adminCustomerName('Jayu Patel', '   '), 'Jayu Patel');
 
-assert.strictEqual(ADMIN_WA_TEMPLATES.length, 8);
+assert.strictEqual(ADMIN_WA_TEMPLATES.length, 9);
+assert.strictEqual(findAdminWaTemplate('car_loan_150')?.metaName, 'car_loan_150');
+assert.strictEqual(templateMetaId('car_loan_150'), '1693681688820850');
+const carLoan150 = buildAdminTemplateSend(
+  '919876543210',
+  {
+    name: 'car_loan_150',
+    language: 'en',
+    status: 'APPROVED',
+    components: [
+      {
+        type: 'BODY',
+        text: 'Hello {{1}} Ji, Your Car Loan application request has been received by Apni Zaroorat.',
+      },
+    ],
+  },
+  'Rahul Sharma',
+);
+if ('error' in carLoan150) throw new Error(carLoan150.error);
+assert.ok(carLoan150.text.startsWith('Hello Rahul Sharma Ji,'));
+const carLoanBody = (carLoan150.payload.template as { components?: { parameters?: { text?: string }[] }[] }).components?.[0];
+assert.strictEqual(carLoanBody?.parameters?.[0]?.text, 'Rahul Sharma');
 assert.strictEqual(findAdminWaTemplate('self_employed_kyc')?.label, 'Self employee KYC');
 assert.strictEqual(findAdminWaTemplate('self_employed_kyc')?.kyc, true);
 assert.strictEqual(findAdminWaTemplate('reject_template')?.label, 'Reject Application');
