@@ -149,9 +149,46 @@ export class CreateLeadDto {
   @Matches(VEHICLE_CATEGORY_SLUG, { message: 'Select vehicle category.' })
   vehicleCategory?: string;
 
-  @ValidateIf((o) => isStoredLoanCategory(o.category))
+  @ValidateIf(
+    (o) =>
+      isStoredLoanCategory(o.category) &&
+      String(o.vehicleCategory ?? '').trim().toLowerCase() !== 'used_car',
+  )
   @IsIn([...CIBIL_BANDS], { message: 'Select your CIBIL score.' })
   cibilBand?: string;
+
+  @ValidateIf(
+    (o) =>
+      isVehicleLoanCategory(o.category) &&
+      String(o.vehicleCategory ?? '').trim().toLowerCase() === 'used_car',
+  )
+  @IsString({ message: 'Enter car details.' })
+  @Length(2, 120, { message: 'Enter car details (2–120 characters).' })
+  carDetails?: string;
+
+  @ValidateIf(
+    (o) =>
+      isVehicleLoanCategory(o.category) &&
+      String(o.vehicleCategory ?? '').trim().toLowerCase() === 'used_car',
+  )
+  @IsString({ message: 'Enter vehicle RC number.' })
+  @Matches(/^[A-Za-z]{2}[0-9]{1,2}[A-Za-z]{1,3}[0-9]{4}$/, {
+    message: 'Enter a valid vehicle RC number (e.g. MH12AB1234).',
+  })
+  vehicleRc?: string;
+
+  @ValidateIf(
+    (o) =>
+      isVehicleLoanCategory(o.category) &&
+      String(o.vehicleCategory ?? '').trim().toLowerCase() === 'used_car',
+  )
+  @Transform(({ value }) => {
+    if (value === true || value === 'true') return true;
+    if (value === false || value === 'false') return false;
+    return value;
+  })
+  @IsBoolean({ message: 'Select existing car loan yes or no.' })
+  existingCarLoan?: boolean;
 
   @ValidateIf((o) => isStoredLoanCategory(o.category) && !isVehicleLoanCategory(o.category))
   @Transform(({ value }) => {
@@ -298,6 +335,29 @@ export class UpdateLeadDto {
   cibilBand?: string | null;
 
   @IsOptional()
+  @IsString()
+  @ValidateIf((o) => o.carDetails != null && o.carDetails !== '')
+  @Length(2, 120)
+  carDetails?: string | null;
+
+  @IsOptional()
+  @IsString()
+  @ValidateIf((o) => o.vehicleRc != null && o.vehicleRc !== '')
+  @Matches(/^[A-Za-z]{2}[0-9]{1,2}[A-Za-z]{1,3}[0-9]{4}$/, {
+    message: 'Enter a valid vehicle RC number (e.g. MH12AB1234).',
+  })
+  vehicleRc?: string | null;
+
+  @IsOptional()
+  @Transform(({ value }) => {
+    if (value === true || value === 'true') return true;
+    if (value === false || value === 'false') return false;
+    return value;
+  })
+  @IsBoolean()
+  existingCarLoan?: boolean | null;
+
+  @IsOptional()
   @Transform(({ value }) => {
     if (value === true || value === 'true') return true;
     if (value === false || value === 'false') return false;
@@ -408,9 +468,46 @@ export class AdminCreateLeadDto {
   @Matches(VEHICLE_CATEGORY_SLUG, { message: 'Select vehicle category.' })
   vehicleCategory?: string;
 
-  @ValidateIf((o) => isStoredLoanCategory(o.category))
+  @ValidateIf(
+    (o) =>
+      isStoredLoanCategory(o.category) &&
+      String(o.vehicleCategory ?? '').trim().toLowerCase() !== 'used_car',
+  )
   @IsIn([...CIBIL_BANDS], { message: 'Select your CIBIL score.' })
   cibilBand?: string;
+
+  @ValidateIf(
+    (o) =>
+      isVehicleLoanCategory(o.category) &&
+      String(o.vehicleCategory ?? '').trim().toLowerCase() === 'used_car',
+  )
+  @IsString({ message: 'Enter car details.' })
+  @Length(2, 120, { message: 'Enter car details (2–120 characters).' })
+  carDetails?: string;
+
+  @ValidateIf(
+    (o) =>
+      isVehicleLoanCategory(o.category) &&
+      String(o.vehicleCategory ?? '').trim().toLowerCase() === 'used_car',
+  )
+  @IsString({ message: 'Enter vehicle RC number.' })
+  @Matches(/^[A-Za-z]{2}[0-9]{1,2}[A-Za-z]{1,3}[0-9]{4}$/, {
+    message: 'Enter a valid vehicle RC number (e.g. MH12AB1234).',
+  })
+  vehicleRc?: string;
+
+  @ValidateIf(
+    (o) =>
+      isVehicleLoanCategory(o.category) &&
+      String(o.vehicleCategory ?? '').trim().toLowerCase() === 'used_car',
+  )
+  @Transform(({ value }) => {
+    if (value === true || value === 'true') return true;
+    if (value === false || value === 'false') return false;
+    return value;
+  })
+  @IsBoolean({ message: 'Select existing car loan yes or no.' })
+  existingCarLoan?: boolean;
 
   @ValidateIf((o) => isStoredLoanCategory(o.category) && !isVehicleLoanCategory(o.category))
   @Transform(({ value }) => {

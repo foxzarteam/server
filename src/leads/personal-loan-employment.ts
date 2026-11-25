@@ -83,10 +83,30 @@ export function kycEmploymentBucket(raw?: string | null): 'salaried' | 'self_emp
 /** CIBIL band and existing EMI. The report file itself is optional. */
 export function loanProfileError(dto: {
   category?: string | null;
+  vehicleCategory?: string | null;
   cibilBand?: string | null;
   hasExistingEmi?: boolean | null;
   totalMonthlyEmi?: number | null;
+  carDetails?: string | null;
+  vehicleRc?: string | null;
+  existingCarLoan?: boolean | null;
 }): string | null {
+  const usedCar =
+    isVehicleLoanCategory(dto.category) &&
+    String(dto.vehicleCategory ?? '').trim().toLowerCase() === 'used_car';
+  if (usedCar) {
+    if (!String(dto.carDetails ?? '').trim()) return 'Enter car details.';
+    const rc = String(dto.vehicleRc ?? '')
+      .toUpperCase()
+      .replace(/[^A-Z0-9]/g, '');
+    if (!/^[A-Z]{2}[0-9]{1,2}[A-Z]{1,3}[0-9]{4}$/.test(rc)) {
+      return 'Enter a valid vehicle RC number.';
+    }
+    if (dto.existingCarLoan !== true && dto.existingCarLoan !== false) {
+      return 'Select existing car loan yes or no.';
+    }
+    return null;
+  }
   const band = storedCibilBand(dto.cibilBand);
   if (!band) return 'Select your CIBIL score.';
   if (isVehicleLoanCategory(dto.category)) return null;

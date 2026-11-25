@@ -291,7 +291,10 @@ export class LeadsService {
       col === 'consent_accepted' ||
       col === 'cibil_band' ||
       col === 'has_existing_emi' ||
-      col === 'total_monthly_emi'
+      col === 'total_monthly_emi' ||
+      col === 'car_details' ||
+      col === 'vehicle_rc' ||
+      col === 'existing_car_loan'
     );
   }
 
@@ -301,17 +304,27 @@ export class LeadsService {
     cibilBand?: string | null;
     hasExistingEmi?: boolean | null;
     totalMonthlyEmi?: number | null;
+    carDetails?: string | null;
+    vehicleRc?: string | null;
+    existingCarLoan?: boolean | null;
   }): Record<string, unknown> {
     const vehicle = isVehicleLoanCategory(dto.category);
     const noEmi = vehicle || dto.hasExistingEmi === false;
     const vehicleCategory = String(dto.vehicleCategory ?? '')
       .trim()
       .toLowerCase();
+    const usedCar = vehicle && vehicleCategory === 'used_car';
+    const rc = String(dto.vehicleRc ?? '')
+      .toUpperCase()
+      .replace(/[^A-Z0-9]/g, '');
     return {
-      cibil_band: storedCibilBand(dto.cibilBand),
+      cibil_band: usedCar ? null : storedCibilBand(dto.cibilBand),
       has_existing_emi: vehicle ? false : dto.hasExistingEmi === true,
       total_monthly_emi: noEmi ? 0 : Math.round(Number(dto.totalMonthlyEmi)),
       vehicle_category: vehicle && vehicleCategory ? vehicleCategory : null,
+      car_details: usedCar ? String(dto.carDetails ?? '').trim() || null : null,
+      vehicle_rc: usedCar && rc ? rc : null,
+      existing_car_loan: usedCar ? dto.existingCarLoan === true : null,
     };
   }
 
@@ -1550,6 +1563,14 @@ export class LeadsService {
       payload.employment_type = storedEmploymentType(dto.employmentType);
     }
     if (dto.cibilBand !== undefined) payload.cibil_band = storedCibilBand(dto.cibilBand);
+    if (dto.carDetails !== undefined) payload.car_details = dto.carDetails?.trim() || null;
+    if (dto.vehicleRc !== undefined) {
+      const rc = String(dto.vehicleRc ?? '')
+        .toUpperCase()
+        .replace(/[^A-Z0-9]/g, '');
+      payload.vehicle_rc = rc || null;
+    }
+    if (dto.existingCarLoan !== undefined) payload.existing_car_loan = dto.existingCarLoan === true;
     if (dto.vehicleCategory !== undefined) {
       payload.vehicle_category = dto.vehicleCategory
         ? String(dto.vehicleCategory).trim().toLowerCase()
