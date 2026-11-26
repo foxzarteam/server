@@ -312,6 +312,19 @@ assert.strictEqual(
   null,
 );
 assert.ok(creditCardProfileError({ category: 'credit_card', creditCardKind: 'fd', fdAmount: 0 }));
+assert.ok(creditCardProfileError({ category: 'credit_card', creditCardKind: 'fd', fdAmount: 4999 }));
+assert.strictEqual(
+  creditCardProfileError({
+    category: 'credit_card',
+    creditCardKind: 'fd',
+    fdAmount: 5000,
+    employmentType: 'salaried_bank',
+    netMonthlyIncome: 25000,
+    hasExistingEmi: false,
+    totalMonthlyEmi: 0,
+  }),
+  null,
+);
 assert.ok(creditCardProfileError({ category: 'credit_card', creditCardKind: 'normal' }));
 assert.strictEqual(
   creditCardProfileError({

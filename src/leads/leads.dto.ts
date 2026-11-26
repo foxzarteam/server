@@ -22,7 +22,7 @@ import {
   LEAD_FULL_NAME_REGEX,
   STORED_EMPLOYMENT_TYPES,
 } from './personal-loan-employment';
-import { CREDIT_CARD_KINDS } from './credit-card-profile';
+import { CREDIT_CARD_KINDS, FD_AMOUNT_MIN_ERROR, MIN_FD_CREDIT_AMOUNT } from './credit-card-profile';
 import { incomeFloor, incomeMinMessage, isVehicleLoanCategory } from './loan-rules';
 import { isStoredLoanCategory } from '../wallet/loan-amount';
 
@@ -187,7 +187,7 @@ export class CreateLeadDto {
 
   @ValidateIf((o) => isCreditCardFd(o))
   @IsNumber({}, { message: 'Enter FD amount.' })
-  @Min(1, { message: 'Enter FD amount.' })
+  @Min(MIN_FD_CREDIT_AMOUNT, { message: FD_AMOUNT_MIN_ERROR })
   fdAmount?: number;
 
   @ValidateIf(
@@ -375,7 +375,7 @@ export class UpdateLeadDto {
   @IsOptional()
   @IsNumber()
   @ValidateIf((o) => o.fdAmount != null)
-  @Min(1, { message: 'Enter FD amount.' })
+  @Min(MIN_FD_CREDIT_AMOUNT, { message: FD_AMOUNT_MIN_ERROR })
   fdAmount?: number | null;
 
   @IsOptional()
@@ -522,7 +522,7 @@ export class AdminCreateLeadDto {
 
   @ValidateIf((o) => isCreditCardFd(o))
   @IsNumber({}, { message: 'Enter FD amount.' })
-  @Min(1, { message: 'Enter FD amount.' })
+  @Min(MIN_FD_CREDIT_AMOUNT, { message: FD_AMOUNT_MIN_ERROR })
   fdAmount?: number;
 
   @ValidateIf(

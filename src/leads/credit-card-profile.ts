@@ -3,6 +3,8 @@ import { storedEmploymentType } from './personal-loan-employment';
 
 export const CREDIT_CARD_KINDS = ['fd', 'normal'] as const;
 export type CreditCardKind = (typeof CREDIT_CARD_KINDS)[number];
+export const MIN_FD_CREDIT_AMOUNT = 5000;
+export const FD_AMOUNT_MIN_ERROR = 'FD amount must be at least ₹5,000.';
 
 export function storedCreditCardKind(raw?: string | null): CreditCardKind | null {
   const value = String(raw ?? '')
@@ -34,6 +36,7 @@ export function creditCardProfileError(dto: {
   if (kind === 'fd') {
     const amount = Number(dto.fdAmount);
     if (!Number.isFinite(amount) || amount < 1) return 'Enter FD amount.';
+    if (amount < MIN_FD_CREDIT_AMOUNT) return FD_AMOUNT_MIN_ERROR;
   } else if (!storedCibilBand(dto.cibilBand)) {
     return 'Select your CIBIL score.';
   }
@@ -86,7 +89,8 @@ export function creditCardLeadColumns(dto: {
   const amount = Number(dto.fdAmount);
   return {
     credit_card_kind: kind,
-    fd_amount: kind === 'fd' && Number.isFinite(amount) && amount >= 1 ? Math.round(amount) : null,
+    fd_amount:
+      kind === 'fd' && Number.isFinite(amount) && amount >= MIN_FD_CREDIT_AMOUNT ? Math.round(amount) : null,
     cibil_band: kind === 'normal' ? storedCibilBand(dto.cibilBand) : null,
   };
 }
