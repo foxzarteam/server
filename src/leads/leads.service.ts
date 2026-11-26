@@ -66,7 +66,12 @@ import {
   storedCibilBand,
   storedEmploymentType,
 } from './personal-loan-employment';
-import { creditCardLeadColumns, creditCardProfileError } from './credit-card-profile';
+import {
+  creditCardLeadColumns,
+  creditCardProfileError,
+  creditCardWorkColumns,
+  storedCreditCardKind,
+} from './credit-card-profile';
 import { isVehicleLoanCategory } from './loan-rules';
 import { LEAD_DRAFT_PAN } from './lead-draft';
 import {
@@ -189,13 +194,24 @@ export class LeadsService {
       });
       return;
     }
-    if (category === 'credit_card' || category === 'insurance') {
+    if (category === 'credit_card') {
+      const kind = storedCreditCardKind(String(lead.credit_card_kind ?? lead.creditCardKind ?? ''));
+      if (!String(lead.id ?? '').trim() || !kind) return;
       this.whatsapp.notifyApplyConfirm({
         phone,
         name,
         category,
         insType,
-        creditCardKind: String(lead.credit_card_kind ?? lead.creditCardKind ?? ''),
+        creditCardKind: kind,
+      });
+      return;
+    }
+    if (category === 'insurance') {
+      this.whatsapp.notifyApplyConfirm({
+        phone,
+        name,
+        category,
+        insType,
       });
     }
   }
@@ -935,7 +951,7 @@ export class LeadsService {
       payload.required_amount = null;
       payload.loan_amt = null;
       payload.ins_type = null;
-      Object.assign(payload, creditCardLeadColumns(dto));
+      Object.assign(payload, creditCardLeadColumns(dto), creditCardWorkColumns(dto));
     }
 
     // Upgrade OTP/start draft for this category only — never overwrite another product.
@@ -963,15 +979,31 @@ export class LeadsService {
           insType: category === 'insurance' ? ins : null,
           creditCardKind: category === 'credit_card' ? dto.creditCardKind : undefined,
           fdAmount: category === 'credit_card' ? dto.fdAmount : undefined,
-          netMonthlyIncome: loanAmounts ? dto.netMonthlyIncome ?? null : null,
-          employmentType: loanAmounts ? dto.employmentType : undefined,
+          netMonthlyIncome: loanAmounts
+            ? dto.netMonthlyIncome ?? null
+            : category === 'credit_card'
+              ? dto.netMonthlyIncome ?? null
+              : null,
+          employmentType: loanAmounts
+            ? dto.employmentType
+            : category === 'credit_card'
+              ? dto.employmentType
+              : undefined,
           cibilBand: loanAmounts
             ? dto.cibilBand
             : category === 'credit_card'
               ? dto.cibilBand
               : undefined,
-          hasExistingEmi: loanAmounts ? dto.hasExistingEmi : undefined,
-          totalMonthlyEmi: loanAmounts ? dto.totalMonthlyEmi : undefined,
+          hasExistingEmi: loanAmounts
+            ? dto.hasExistingEmi
+            : category === 'credit_card'
+              ? dto.hasExistingEmi
+              : undefined,
+          totalMonthlyEmi: loanAmounts
+            ? dto.totalMonthlyEmi
+            : category === 'credit_card'
+              ? dto.totalMonthlyEmi
+              : undefined,
           vehicleCategory: loanAmounts ? dto.vehicleCategory : null,
           clientIp: meta?.clientIp ?? undefined,
           agentId: !byMobile.agent_id && agentId ? agentId : undefined,
@@ -1217,7 +1249,7 @@ export class LeadsService {
         const cardErr = creditCardProfileError(dto);
         if (cardErr) throw new LeadRuleError(cardErr);
       }
-      Object.assign(payload, creditCardLeadColumns(dto));
+      Object.assign(payload, creditCardLeadColumns(dto), creditCardWorkColumns(dto));
     }
 
     const { data, errorMessage } = await this.insertLead(payload, 'LeadsService.create');

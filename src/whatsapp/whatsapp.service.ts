@@ -6,6 +6,7 @@ import { TABLE_LEADS, TABLE_WP_ENQUIRIES } from '../common/constants';
 import { LEAD_DRAFT_FULL_NAME } from '../leads/lead-draft';
 import { isDraftLead } from '../leads/lead-present';
 import { kycEmploymentBucket } from '../leads/personal-loan-employment';
+import { storedCreditCardKind } from '../leads/credit-card-profile';
 import { isVehicleLoanCategory } from '../leads/loan-rules';
 import { normalizeStoredCategory } from '../leads/lead-present';
 import { isStoredLoanCategory } from '../wallet/loan-amount';
@@ -202,6 +203,7 @@ export class WhatsappService implements OnModuleInit {
   }): void {
     const category = normalizeStoredCategory(String(input.category ?? ''));
     if (category !== 'credit_card' && category !== 'insurance') return;
+    if (category === 'credit_card' && !storedCreditCardKind(input.creditCardKind)) return;
     void this.dispatchApplyConfirm(
       canonicalWhatsappPhone(input.phone),
       String(input.name ?? ''),
@@ -1437,6 +1439,7 @@ export class WhatsappService implements OnModuleInit {
     const who = name.trim();
     if (!who || who.toLowerCase() === LEAD_DRAFT_FULL_NAME.toLowerCase()) return;
     if (!/^[0-9]{8,15}$/.test(phone)) return;
+    if (category === 'credit_card' && !storedCreditCardKind(creditCardKind)) return;
     const flightKey = `apply_confirm:${category}:${phone}`;
     if (this.kycInflight.has(flightKey)) return;
     this.kycInflight.add(flightKey);
@@ -1462,7 +1465,7 @@ export class WhatsappService implements OnModuleInit {
         console.error('WhatsappService.dispatchApplyConfirm', built.error, templateName);
       }
       const bubbleText =
-        'text' in built ? built.text : applyConfirmFallbackText(category, who, insType);
+        'text' in built ? built.text : applyConfirmFallbackText(category, who, insType, creditCardKind);
       const listedLang = metaTemplate?.language?.trim() || APPLY_CONFIRM_TEMPLATE_LANG;
 
       const message: ChatMessage = {

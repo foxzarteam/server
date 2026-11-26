@@ -690,7 +690,7 @@ assert.strictEqual(templateMetaId('car_loan_150'), '1693681688820850');
 assert.strictEqual(CREDIT_CARD_SUBMIT_TEMPLATE, 'fd_credit_card_request');
 assert.strictEqual(applyConfirmTemplateName('credit_card'), 'fd_credit_card_request');
 assert.strictEqual(applyConfirmTemplateName('credit_card', 'fd'), 'fd_credit_card_request');
-assert.strictEqual(applyConfirmTemplateName('credit_card', 'normal'), 'credit_card_application');
+assert.strictEqual(applyConfirmTemplateName('credit_card', 'normal'), 'fd_credit_card_request');
 assert.strictEqual(findAdminWaTemplate('fd_credit_card_request')?.metaName, 'fd_credit_card_request');
 assert.strictEqual(templateMetaId('fd_credit_card_request'), '2773659176470801');
 const fdCredit = buildApplyConfirmSend(
@@ -701,18 +701,43 @@ const fdCredit = buildApplyConfirmSend(
     components: [
       {
         type: 'BODY',
-        text: 'Hello {{1}} Ji, Your Credit Card application request has been received.',
+        text: 'Hello {{1}} Ji,\n\nYour {{2}} application request has been received by Apni Zaroorat.',
       },
     ],
   },
   'credit_card',
   'Priya Shah',
+  undefined,
+  undefined,
+  'fd',
 );
 if ('error' in fdCredit) throw new Error(fdCredit.error);
 assert.ok(fdCredit.text.startsWith('Hello Priya Shah Ji,'));
+assert.ok(fdCredit.text.includes('Your FD Credit Card application request'));
 const fdCreditBody = (fdCredit.payload.template as { name?: string; components?: { parameters?: { text?: string }[] }[] });
 assert.strictEqual(fdCreditBody.name, 'fd_credit_card_request');
 assert.strictEqual(fdCreditBody.components?.[0]?.parameters?.[0]?.text, 'Priya Shah');
+assert.strictEqual(fdCreditBody.components?.[0]?.parameters?.[1]?.text, 'FD Credit Card');
+const normalCredit = buildApplyConfirmSend(
+  '919876543210',
+  {
+    name: 'fd_credit_card_request',
+    language: 'en',
+    components: [
+      {
+        type: 'BODY',
+        text: 'Hello {{1}} Ji,\n\nYour {{2}} application request has been received by Apni Zaroorat.',
+      },
+    ],
+  },
+  'credit_card',
+  'Amit',
+  undefined,
+  undefined,
+  'normal',
+);
+if ('error' in normalCredit) throw new Error(normalCredit.error);
+assert.ok(normalCredit.text.includes('Your Normal Credit Card application request'));
 const carLoan150 = buildAdminTemplateSend(
   '919876543210',
   {

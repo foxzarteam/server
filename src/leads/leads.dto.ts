@@ -42,6 +42,17 @@ function needsCibilBand(o: { category?: string; vehicleCategory?: string; credit
   );
 }
 
+function needsEmployment(o: { category?: string }): boolean {
+  return isStoredLoanCategory(o.category) || o.category === 'credit_card';
+}
+
+function needsExistingEmi(o: { category?: string }): boolean {
+  return (
+    (isStoredLoanCategory(o.category) && !isVehicleLoanCategory(o.category)) ||
+    o.category === 'credit_card'
+  );
+}
+
 /** Matches active service slugs stored as lead category (e.g. personal-loan → personal_loan). */
 export const LEAD_CATEGORY_PATTERN = /^[a-z][a-z0-9_]{0,63}$/;
 export { INS_TYPE_SLUG_PATTERN };
@@ -149,14 +160,14 @@ export class CreateLeadDto {
   @Matches(INS_TYPE_SLUG_PATTERN, { message: 'Invalid insurance type' })
   insType?: string;
 
-  /** Required on personal, home, business, and vehicle loans. */
-  @ValidateIf((o) => isStoredLoanCategory(o.category))
+  /** Required on personal, home, business, vehicle loans, and credit cards. */
+  @ValidateIf((o) => needsEmployment(o))
   @IsIn([...STORED_EMPLOYMENT_TYPES], {
     message: 'Select salaried or self employee / business.',
   })
   employmentType?: string | null;
 
-  @ValidateIf((o) => isStoredLoanCategory(o.category))
+  @ValidateIf((o) => needsEmployment(o))
   @IsNumber({}, { message: 'Net monthly income is required' })
   @MinNetMonthlyIncome()
   netMonthlyIncome?: number;
@@ -212,7 +223,7 @@ export class CreateLeadDto {
   @IsBoolean({ message: 'Select existing car loan yes or no.' })
   existingCarLoan?: boolean;
 
-  @ValidateIf((o) => isStoredLoanCategory(o.category) && !isVehicleLoanCategory(o.category))
+  @ValidateIf((o) => needsExistingEmi(o))
   @Transform(({ value }) => {
     if (value === true || value === 'true') return true;
     if (value === false || value === 'false') return false;
@@ -221,7 +232,7 @@ export class CreateLeadDto {
   @IsBoolean({ message: 'Tell us if a loan EMI is already running.' })
   hasExistingEmi?: boolean;
 
-  @ValidateIf((o) => isStoredLoanCategory(o.category) && !isVehicleLoanCategory(o.category))
+  @ValidateIf((o) => needsExistingEmi(o))
   @IsNumber({}, { message: 'Enter the total monthly EMI you pay.' })
   @Min(0, { message: 'Total monthly EMI cannot be negative.' })
   totalMonthlyEmi?: number;

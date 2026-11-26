@@ -1,4 +1,4 @@
-import { storedCreditCardKind } from '../leads/credit-card-profile';
+import { creditCardKindLabel } from '../leads/credit-card-profile';
 import { insTypeLabel } from '../leads/lead-present';
 import type { MetaTemplateDefinition } from './whatsapp-admin-templates';
 import { kycBodyName } from './whatsapp-kyc';
@@ -27,22 +27,24 @@ export function applyConfirmAlreadySent(
 
 export function applyConfirmTemplateName(
   category: 'credit_card' | 'insurance',
-  creditCardKind?: string | null,
+  _creditCardKind?: string | null,
 ): string {
   if (category === 'insurance') return INSURANCE_SUBMIT_TEMPLATE;
-  return storedCreditCardKind(creditCardKind) === 'normal'
-    ? 'credit_card_application'
-    : CREDIT_CARD_SUBMIT_TEMPLATE;
+  return CREDIT_CARD_SUBMIT_TEMPLATE;
 }
 
-/** Positional body values: credit card → {{1}}=name; insurance → {{1}}=name, {{2}}=insurance type. */
+/** Credit card → {{1}}=name, {{2}}=FD Credit Card | Normal Credit Card. Insurance → {{1}}=name, {{2}}=type. */
 export function applyConfirmBodyValues(
   category: 'credit_card' | 'insurance',
   name: string,
   insType?: string | null,
+  creditCardKind?: string | null,
 ): string[] {
   const who = kycBodyName(name);
-  if (category === 'credit_card') return [who];
+  if (category === 'credit_card') {
+    const card = creditCardKindLabel(creditCardKind) || 'Credit Card';
+    return [who, card];
+  }
   const product = insTypeLabel(insType).replace(/[\r\n\t]+/g, ' ').replace(/\s+/g, ' ').slice(0, 200);
   return [who, product || 'Insurance'];
 }
@@ -87,9 +89,9 @@ export function buildApplyConfirmSend(
   if (!bodyText) return { error: 'This template has no message text.' };
 
   const count = bodyParamCount(bodyText);
-  const values = applyConfirmBodyValues(category, name, insType);
-  if (category === 'credit_card' && count > 0) {
-    while (values.length < count) values.push(values[0] ?? kycBodyName(name));
+  const values = applyConfirmBodyValues(category, name, insType, creditCardKind);
+  if (category === 'credit_card' && count !== 2) {
+    return { error: 'Credit card template must have exactly 2 body variables (name and card type).' };
   }
   if (category === 'insurance' && count !== 2) {
     return { error: 'Insurance template must have exactly 2 body variables.' };
@@ -119,17 +121,23 @@ export function applyConfirmFallbackText(
   category: 'credit_card' | 'insurance',
   name: string,
   insType?: string | null,
+  creditCardKind?: string | null,
 ): string {
-  const [who, product] = applyConfirmBodyValues(category, name, insType);
+  const [who, product] = applyConfirmBodyValues(category, name, insType, creditCardKind);
   if (category === 'credit_card') {
     return [
-      `🎉 Hello ${who} Ji`,
+      `Hello ${who} Ji,`,
       '',
-      '✅ Your Credit Card application has been successfully submitted.',
+      `Your ${product} application request has been received by Apni Zaroorat.`,
       '',
-      '📩 Our team will update you regarding the next steps shortly.',
+      'To proceed with your application, please share clear photos of:',
       '',
-      '🙏 Thank you for choosing Apni Zaroorat! 😊',
+      '1. PAN Card',
+      '2. Aadhaar Card',
+      '',
+      'We will contact you shortly.',
+      '',
+      'Team Apni Zaroorat',
     ].join('\n');
   }
   return [

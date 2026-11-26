@@ -300,13 +300,29 @@ async function assertAdminVehicleDto() {
 }
 
 assert.strictEqual(
-  creditCardProfileError({ category: 'credit_card', creditCardKind: 'fd', fdAmount: 50000 }),
+  creditCardProfileError({
+    category: 'credit_card',
+    creditCardKind: 'fd',
+    fdAmount: 50000,
+    employmentType: 'salaried_bank',
+    netMonthlyIncome: 25000,
+    hasExistingEmi: false,
+    totalMonthlyEmi: 0,
+  }),
   null,
 );
 assert.ok(creditCardProfileError({ category: 'credit_card', creditCardKind: 'fd', fdAmount: 0 }));
 assert.ok(creditCardProfileError({ category: 'credit_card', creditCardKind: 'normal' }));
 assert.strictEqual(
-  creditCardProfileError({ category: 'credit_card', creditCardKind: 'normal', cibilBand: 'above_680' }),
+  creditCardProfileError({
+    category: 'credit_card',
+    creditCardKind: 'normal',
+    cibilBand: 'above_680',
+    employmentType: 'salaried_bank',
+    netMonthlyIncome: 25000,
+    hasExistingEmi: false,
+    totalMonthlyEmi: 0,
+  }),
   null,
 );
 assert.deepStrictEqual(creditCardLeadColumns({ creditCardKind: 'fd', fdAmount: 25000, cibilBand: 'above_680' }), {
