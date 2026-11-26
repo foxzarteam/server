@@ -155,7 +155,7 @@ export class UsersController {
     if (!result.ok) throw new NotFoundException();
     return new StreamableFile(result.body, {
       type: result.contentType,
-      disposition: 'inline',
+      disposition: `attachment; filename="${result.filename}"`,
     });
   }
 

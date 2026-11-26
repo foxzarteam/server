@@ -19,6 +19,28 @@ const KYC_MAX_BYTES = 2 * 1024 * 1024;
 const KYC_FILE_KINDS = ['aadhaarFront', 'aadhaarBack', 'panCard', 'selfie'] as const;
 type KycFileKind = (typeof KYC_FILE_KINDS)[number];
 
+function kycDownloadFilename(kind: string, contentType: string): string {
+  const base =
+    kind === 'aadhaarFront'
+      ? 'aadhaar-front'
+      : kind === 'aadhaarBack'
+        ? 'aadhaar-back'
+        : kind === 'panCard'
+          ? 'pan-card'
+          : 'selfie';
+  const mime = contentType.toLowerCase();
+  const ext = mime.includes('pdf')
+    ? 'pdf'
+    : mime.includes('png')
+      ? 'png'
+      : mime.includes('webp')
+        ? 'webp'
+        : mime.includes('jpeg') || mime.includes('jpg')
+          ? 'jpg'
+          : 'bin';
+  return `${base}.${ext}`;
+}
+
 function isMissingColumn(message: string, column: string): boolean {
   const text = message.toLowerCase();
   return text.includes(column.toLowerCase()) && (text.includes('does not exist') || text.includes('schema cache') || text.includes('could not find'));
@@ -493,7 +515,9 @@ export class UsersService {
   async getKycFile(
     userId: string,
     kind: string,
-  ): Promise<{ ok: true; body: Buffer; contentType: string } | { ok: false }> {
+  ): Promise<
+    { ok: true; body: Buffer; contentType: string; filename: string } | { ok: false }
+  > {
     if (!(KYC_FILE_KINDS as readonly string[]).includes(kind)) return { ok: false };
     const { data, error } = await this.supabase
       .from(TABLE_PARTNER_KYC)
@@ -511,7 +535,14 @@ export class UsersService {
     const stored = pathMap[kind as KycFileKind].trim();
     if (!stored) return { ok: false };
     const key = stored.replace(/^https?:\/\/[^/]+\//, '').replace(/^\/+/, '');
-    return r2GetObject(key);
+    const file = await r2GetObject(key);
+    if (!file.ok) return { ok: false };
+    return {
+      ok: true,
+      body: file.body,
+      contentType: file.contentType,
+      filename: kycDownloadFilename(kind, file.contentType),
+    };
   }
 
   async submitPartnerKyc(
