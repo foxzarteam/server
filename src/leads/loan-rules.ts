@@ -7,17 +7,27 @@
 export const MIN_NET_MONTHLY_INCOME = 18000;
 export const MIN_VEHICLE_NET_MONTHLY_INCOME = 10000;
 
-export const CIBIL_BANDS = ['above_680', 'below_680', 'unknown', 'above_650', 'below_650', 'above_600', 'below_600'] as const;
+export const CIBIL_BANDS = [
+  'above_700',
+  'below_700',
+  'above_680',
+  'below_680',
+  'unknown',
+  'above_650',
+  'below_650',
+  'above_600',
+  'below_600',
+] as const;
 export type CibilBand = (typeof CIBIL_BANDS)[number];
 
-/** Bands the public and staff forms may select. Vehicle uses the 650 set. */
-export const SELECTABLE_CIBIL_BANDS = ['above_680', 'below_680', 'unknown'] as const;
+/** Personal loan / credit card: only 700. Vehicle keeps the 650 set. */
+export const SELECTABLE_CIBIL_BANDS = ['above_700', 'below_700'] as const;
 export const SELECTABLE_VEHICLE_CIBIL_BANDS = ['above_650', 'below_650', 'unknown'] as const;
 
 export const MSG_NET_INCOME_MIN = 'Net monthly income must be at least ₹18,000';
 export const MSG_VEHICLE_NET_INCOME_MIN = 'Net monthly income must be at least ₹10,000';
 export const MSG_CIBIL_BELOW =
-  'Sorry, you are not eligible for this loan. A CIBIL score below 680 does not meet the current criteria.';
+  'Sorry, you are not eligible. A CIBIL score below 700 does not match the current eligibility criteria.';
 export const MSG_CIBIL_BELOW_650 =
   'Sorry, you are not eligible for this loan. A CIBIL score below 650 does not meet the current criteria.';
 export const MSG_EMI_HALF =
@@ -33,21 +43,36 @@ export function isVehicleLoanCategory(category?: string | null): boolean {
   return value === 'vehicle_loan' || value === 'car_loan';
 }
 
+export function isCreditCardCategory(category?: string | null): boolean {
+  return (
+    String(category ?? '')
+      .trim()
+      .toLowerCase()
+      .replace(/-/g, '_') === 'credit_card'
+  );
+}
+
 export function selectableCibilBands(category?: string | null): readonly CibilBand[] {
   return isVehicleLoanCategory(category) ? SELECTABLE_VEHICLE_CIBIL_BANDS : SELECTABLE_CIBIL_BANDS;
 }
 
 export function incomeFloor(category?: string | null): number {
-  return isVehicleLoanCategory(category) ? MIN_VEHICLE_NET_MONTHLY_INCOME : MIN_NET_MONTHLY_INCOME;
+  return isVehicleLoanCategory(category) || isCreditCardCategory(category)
+    ? MIN_VEHICLE_NET_MONTHLY_INCOME
+    : MIN_NET_MONTHLY_INCOME;
 }
 
 export function incomeMinMessage(category?: string | null): string {
-  return isVehicleLoanCategory(category) ? MSG_VEHICLE_NET_INCOME_MIN : MSG_NET_INCOME_MIN;
+  return isVehicleLoanCategory(category) || isCreditCardCategory(category)
+    ? MSG_VEHICLE_NET_INCOME_MIN
+    : MSG_NET_INCOME_MIN;
 }
 
 export function storedCibilBand(raw?: string | null): CibilBand | null {
   const v = String(raw ?? '').trim().toLowerCase();
   if (
+    v === 'above_700' ||
+    v === 'below_700' ||
     v === 'above_680' ||
     v === 'below_680' ||
     v === 'unknown' ||
@@ -59,6 +84,20 @@ export function storedCibilBand(raw?: string | null): CibilBand | null {
     return v;
   }
   return null;
+}
+
+function cibilFailsEligibility(band: CibilBand | null, category?: string | null): boolean {
+  if (!band) return false;
+  if (isVehicleLoanCategory(category)) {
+    return band === 'below_650' || band === 'below_600';
+  }
+  return (
+    band === 'below_700' ||
+    band === 'below_680' ||
+    band === 'below_650' ||
+    band === 'below_600' ||
+    band === 'unknown'
+  );
 }
 
 export function netMonthlyIncomeTooLow(income: number | null | undefined, category?: string | null): boolean {
@@ -87,10 +126,10 @@ export function loanNotEligibleMessage(dto: {
   if (!Number.isFinite(income) || income <= 0) return null;
   const band = storedCibilBand(dto.cibilBand);
   if (isVehicleLoanCategory(dto.category)) {
-    if (band === 'below_650' || band === 'below_600') return MSG_CIBIL_BELOW_650;
+    if (cibilFailsEligibility(band, dto.category)) return MSG_CIBIL_BELOW_650;
     return null;
   }
-  if (band === 'below_680' || band === 'below_650' || band === 'below_600') return MSG_CIBIL_BELOW;
+  if (cibilFailsEligibility(band, dto.category)) return MSG_CIBIL_BELOW;
   const emi = Number(dto.totalMonthlyEmi);
   if (dto.hasExistingEmi === true && Number.isFinite(emi) && emi * 2 >= income) return MSG_EMI_HALF;
   return null;

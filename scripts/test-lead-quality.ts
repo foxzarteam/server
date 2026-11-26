@@ -111,12 +111,20 @@ assert.strictEqual(
   null,
 );
 assert.strictEqual(
-  loanNotEligibleMessage({ netMonthlyIncome: 50000, cibilBand: 'below_680', hasExistingEmi: false, totalMonthlyEmi: 0 }),
-  'Sorry, you are not eligible for this loan. A CIBIL score below 680 does not meet the current criteria.',
+  loanNotEligibleMessage({ netMonthlyIncome: 50000, cibilBand: 'below_700', hasExistingEmi: false, totalMonthlyEmi: 0 }),
+  'Sorry, you are not eligible. A CIBIL score below 700 does not match the current eligibility criteria.',
 );
 assert.strictEqual(
-  loanNotEligibleMessage({ netMonthlyIncome: 50000, cibilBand: 'above_680', hasExistingEmi: false, totalMonthlyEmi: 0 }),
+  loanNotEligibleMessage({ netMonthlyIncome: 50000, cibilBand: 'below_680', hasExistingEmi: false, totalMonthlyEmi: 0 }),
+  'Sorry, you are not eligible. A CIBIL score below 700 does not match the current eligibility criteria.',
+);
+assert.strictEqual(
+  loanNotEligibleMessage({ netMonthlyIncome: 50000, cibilBand: 'above_700', hasExistingEmi: false, totalMonthlyEmi: 0 }),
   null,
+);
+assert.strictEqual(
+  loanNotEligibleMessage({ netMonthlyIncome: 50000, cibilBand: 'unknown', hasExistingEmi: false, totalMonthlyEmi: 0 }),
+  'Sorry, you are not eligible. A CIBIL score below 700 does not match the current eligibility criteria.',
 );
 assert.ok(
   loanNotEligibleMessage({
@@ -320,6 +328,29 @@ assert.strictEqual(
     fdAmount: 5000,
     employmentType: 'salaried_bank',
     netMonthlyIncome: 25000,
+    hasExistingEmi: false,
+    totalMonthlyEmi: 0,
+  }),
+  null,
+);
+assert.ok(
+  creditCardProfileError({
+    category: 'credit_card',
+    creditCardKind: 'fd',
+    fdAmount: 5000,
+    employmentType: 'salaried_bank',
+    netMonthlyIncome: 9999,
+    hasExistingEmi: false,
+    totalMonthlyEmi: 0,
+  })?.includes('10,000'),
+);
+assert.strictEqual(
+  creditCardProfileError({
+    category: 'credit_card',
+    creditCardKind: 'fd',
+    fdAmount: 5000,
+    employmentType: 'salaried_bank',
+    netMonthlyIncome: 10000,
     hasExistingEmi: false,
     totalMonthlyEmi: 0,
   }),

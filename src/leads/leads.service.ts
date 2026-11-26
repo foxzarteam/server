@@ -948,6 +948,8 @@ export class LeadsService {
     } else if (category === 'credit_card') {
       const cardErr = creditCardProfileError(dto);
       if (cardErr) return { ok: false, message: cardErr };
+      const notEligible = loanNotEligibleMessage(dto);
+      if (notEligible) return { ok: false, message: notEligible, code: 'LOAN_NOT_ELIGIBLE' };
       payload.required_amount = null;
       payload.loan_amt = null;
       payload.ins_type = null;
@@ -1129,6 +1131,12 @@ export class LeadsService {
     if (category === 'insurance' && !normalizeStoredInsType(category, dto.insType)) {
       return { ok: false, message: 'Please select insurance type.' };
     }
+    if (category === 'credit_card') {
+      const cardErr = creditCardProfileError(dto);
+      if (cardErr) return { ok: false, message: cardErr };
+      const notEligible = loanNotEligibleMessage(dto);
+      if (notEligible) return { ok: false, message: notEligible, code: 'LOAN_NOT_ELIGIBLE' };
+    }
 
     const pin = String(dto.pincode ?? '').replace(/\D/g, '');
     if (!/^[1-9][0-9]{5}$/.test(pin)) {
@@ -1248,6 +1256,8 @@ export class LeadsService {
       if (dto.creditCardKind) {
         const cardErr = creditCardProfileError(dto);
         if (cardErr) throw new LeadRuleError(cardErr);
+        const notEligible = loanNotEligibleMessage(dto);
+        if (notEligible) throw new LeadRuleError(notEligible, 'LOAN_NOT_ELIGIBLE');
       }
       Object.assign(payload, creditCardLeadColumns(dto), creditCardWorkColumns(dto));
     }

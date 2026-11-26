@@ -1,4 +1,4 @@
-import { netMonthlyIncomeTooLow, storedCibilBand } from './loan-rules';
+import { incomeMinMessage, netMonthlyIncomeTooLow, storedCibilBand } from './loan-rules';
 import { storedEmploymentType } from './personal-loan-employment';
 
 export const CREDIT_CARD_KINDS = ['fd', 'normal'] as const;
@@ -43,8 +43,8 @@ export function creditCardProfileError(dto: {
   if (!storedEmploymentType(dto.employmentType)) {
     return 'Select salaried or self employee / business.';
   }
-  if (netMonthlyIncomeTooLow(dto.netMonthlyIncome, 'personal_loan')) {
-    return 'Net monthly income must be at least ₹18,000';
+  if (netMonthlyIncomeTooLow(dto.netMonthlyIncome, 'credit_card')) {
+    return incomeMinMessage('credit_card');
   }
   if (dto.hasExistingEmi !== true && dto.hasExistingEmi !== false) {
     return 'Tell us if a loan EMI is already running.';

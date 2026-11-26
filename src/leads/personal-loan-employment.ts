@@ -110,7 +110,9 @@ export function loanProfileError(dto: {
   const band = storedCibilBand(dto.cibilBand);
   if (!band) return 'Select your CIBIL score.';
   if (isVehicleLoanCategory(dto.category)) return null;
-  if (!selectableCibilBands(dto.category).includes(band)) {
+  const allowed = selectableCibilBands(dto.category) as readonly string[];
+  const legacy = band === 'above_680' || band === 'below_680' || band === 'unknown';
+  if (!allowed.includes(band) && !legacy) {
     return 'Select your CIBIL score.';
   }
   if (dto.hasExistingEmi !== true && dto.hasExistingEmi !== false) {
