@@ -198,6 +198,7 @@ export class WhatsappService implements OnModuleInit {
     name: string;
     category: string;
     insType?: string | null;
+    creditCardKind?: string | null;
   }): void {
     const category = normalizeStoredCategory(String(input.category ?? ''));
     if (category !== 'credit_card' && category !== 'insurance') return;
@@ -206,6 +207,7 @@ export class WhatsappService implements OnModuleInit {
       String(input.name ?? ''),
       category,
       input.insType,
+      input.creditCardKind,
     ).catch((error) => {
       console.error('WhatsappService.notifyApplyConfirm', error);
     });
@@ -1430,6 +1432,7 @@ export class WhatsappService implements OnModuleInit {
     name: string,
     category: 'credit_card' | 'insurance',
     insType?: string | null,
+    creditCardKind?: string | null,
   ): Promise<void> {
     const who = name.trim();
     if (!who || who.toLowerCase() === LEAD_DRAFT_FULL_NAME.toLowerCase()) return;
@@ -1439,7 +1442,7 @@ export class WhatsappService implements OnModuleInit {
     this.kycInflight.add(flightKey);
 
     const retryWaitMs = [4_000, 8_000, 20_000];
-    const templateName = applyConfirmTemplateName(category);
+    const templateName = applyConfirmTemplateName(category, creditCardKind);
     try {
       const settings = this.settings.peekEffective() ?? (await this.settings.getEffective());
       const token = settings.accessToken.trim().replace(/^bearer\s+/i, '').trim();
@@ -1453,7 +1456,7 @@ export class WhatsappService implements OnModuleInit {
 
       const metaTemplate = await this.approvedAdminTemplate(token, templateName);
       const built = metaTemplate
-        ? buildApplyConfirmSend(phone, metaTemplate, category, who, insType)
+        ? buildApplyConfirmSend(phone, metaTemplate, category, who, insType, undefined, creditCardKind)
         : { error: 'WhatsApp did not return this template text.' as const };
       if ('error' in built) {
         console.error('WhatsappService.dispatchApplyConfirm', built.error, templateName);
@@ -1488,7 +1491,7 @@ export class WhatsappService implements OnModuleInit {
         for (const lang of languages) {
           const attempt =
             metaTemplate != null
-              ? buildApplyConfirmSend(phone, metaTemplate, category, who, insType, lang)
+              ? buildApplyConfirmSend(phone, metaTemplate, category, who, insType, lang, creditCardKind)
               : { error: 'missing template' as const };
           if ('error' in attempt) break;
           sent = await postGraphMessage(token, fromId, attempt.payload);

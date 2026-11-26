@@ -1,3 +1,4 @@
+import { storedCreditCardKind } from '../leads/credit-card-profile';
 import { insTypeLabel } from '../leads/lead-present';
 import type { MetaTemplateDefinition } from './whatsapp-admin-templates';
 import { kycBodyName } from './whatsapp-kyc';
@@ -24,8 +25,14 @@ export function applyConfirmAlreadySent(
   });
 }
 
-export function applyConfirmTemplateName(category: 'credit_card' | 'insurance'): string {
-  return category === 'credit_card' ? CREDIT_CARD_SUBMIT_TEMPLATE : INSURANCE_SUBMIT_TEMPLATE;
+export function applyConfirmTemplateName(
+  category: 'credit_card' | 'insurance',
+  creditCardKind?: string | null,
+): string {
+  if (category === 'insurance') return INSURANCE_SUBMIT_TEMPLATE;
+  return storedCreditCardKind(creditCardKind) === 'normal'
+    ? 'credit_card_application'
+    : CREDIT_CARD_SUBMIT_TEMPLATE;
 }
 
 /** Positional body values: credit card → {{1}}=name; insurance → {{1}}=name, {{2}}=insurance type. */
@@ -63,12 +70,13 @@ export function buildApplyConfirmSend(
   name: string,
   insType?: string | null,
   languageOverride?: string,
+  creditCardKind?: string | null,
 ): { payload: Record<string, unknown>; text: string } | { error: string } {
   const templateName = String(template.name ?? '').trim();
   const language = String(languageOverride || template.language || APPLY_CONFIRM_TEMPLATE_LANG).trim();
   if (!templateName || !language) return { error: 'WhatsApp did not return this template.' };
 
-  const wantName = applyConfirmTemplateName(category);
+  const wantName = applyConfirmTemplateName(category, creditCardKind);
   if (templateName !== wantName) {
     return { error: `Expected template ${wantName}, got ${templateName}.` };
   }

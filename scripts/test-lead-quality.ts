@@ -10,6 +10,7 @@ import {
 } from '../src/common/ip-geo';
 import { mapLeadWriteError } from '../src/leads/lead-write-errors';
 import { LeadRuleError, leadRuleField } from '../src/leads/mobile-pan-limit';
+import { creditCardLeadColumns, creditCardProfileError } from '../src/leads/credit-card-profile';
 import { leadFullNameError, kycEmploymentBucket, loanNotEligibleMessage, loanProfileError, personalLoanEmploymentError } from '../src/leads/personal-loan-employment';
 import { isStoredLoanCategory, personalLoanAmountError } from '../src/wallet/loan-amount';
 import { sanitizePublicLead } from '../src/security/pan-crypto';
@@ -297,6 +298,27 @@ async function assertAdminVehicleDto() {
   assert.ok(personalFields.includes('hasExistingEmi'));
   assert.ok(personalFields.includes('totalMonthlyEmi'));
 }
+
+assert.strictEqual(
+  creditCardProfileError({ category: 'credit_card', creditCardKind: 'fd', fdAmount: 50000 }),
+  null,
+);
+assert.ok(creditCardProfileError({ category: 'credit_card', creditCardKind: 'fd', fdAmount: 0 }));
+assert.ok(creditCardProfileError({ category: 'credit_card', creditCardKind: 'normal' }));
+assert.strictEqual(
+  creditCardProfileError({ category: 'credit_card', creditCardKind: 'normal', cibilBand: 'above_680' }),
+  null,
+);
+assert.deepStrictEqual(creditCardLeadColumns({ creditCardKind: 'fd', fdAmount: 25000, cibilBand: 'above_680' }), {
+  credit_card_kind: 'fd',
+  fd_amount: 25000,
+  cibil_band: null,
+});
+assert.deepStrictEqual(creditCardLeadColumns({ creditCardKind: 'normal', fdAmount: 25000, cibilBand: 'above_680' }), {
+  credit_card_kind: 'normal',
+  fd_amount: null,
+  cibil_band: 'above_680',
+});
 
 assertAdminVehicleDto()
   .then(() => {

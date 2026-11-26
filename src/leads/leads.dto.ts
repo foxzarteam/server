@@ -22,8 +22,25 @@ import {
   LEAD_FULL_NAME_REGEX,
   STORED_EMPLOYMENT_TYPES,
 } from './personal-loan-employment';
+import { CREDIT_CARD_KINDS } from './credit-card-profile';
 import { incomeFloor, incomeMinMessage, isVehicleLoanCategory } from './loan-rules';
 import { isStoredLoanCategory } from '../wallet/loan-amount';
+
+function isCreditCardFd(o: { category?: string; creditCardKind?: string }): boolean {
+  return o.category === 'credit_card' && String(o.creditCardKind ?? '').trim().toLowerCase() === 'fd';
+}
+
+function isCreditCardNormal(o: { category?: string; creditCardKind?: string }): boolean {
+  return o.category === 'credit_card' && String(o.creditCardKind ?? '').trim().toLowerCase() === 'normal';
+}
+
+function needsCibilBand(o: { category?: string; vehicleCategory?: string; creditCardKind?: string }): boolean {
+  if (isCreditCardNormal(o)) return true;
+  return (
+    isStoredLoanCategory(o.category) &&
+    String(o.vehicleCategory ?? '').trim().toLowerCase() !== 'used_car'
+  );
+}
 
 /** Matches active service slugs stored as lead category (e.g. personal-loan → personal_loan). */
 export const LEAD_CATEGORY_PATTERN = /^[a-z][a-z0-9_]{0,63}$/;
@@ -149,13 +166,18 @@ export class CreateLeadDto {
   @Matches(VEHICLE_CATEGORY_SLUG, { message: 'Select vehicle category.' })
   vehicleCategory?: string;
 
-  @ValidateIf(
-    (o) =>
-      isStoredLoanCategory(o.category) &&
-      String(o.vehicleCategory ?? '').trim().toLowerCase() !== 'used_car',
-  )
+  @ValidateIf((o) => needsCibilBand(o))
   @IsIn([...CIBIL_BANDS], { message: 'Select your CIBIL score.' })
   cibilBand?: string;
+
+  @ValidateIf((o) => o.category === 'credit_card')
+  @IsIn([...CREDIT_CARD_KINDS], { message: 'Select FD Credit Card or Normal Credit Card.' })
+  creditCardKind?: string;
+
+  @ValidateIf((o) => isCreditCardFd(o))
+  @IsNumber({}, { message: 'Enter FD amount.' })
+  @Min(1, { message: 'Enter FD amount.' })
+  fdAmount?: number;
 
   @ValidateIf(
     (o) =>
@@ -335,6 +357,17 @@ export class UpdateLeadDto {
   cibilBand?: string | null;
 
   @IsOptional()
+  @ValidateIf((o) => o.creditCardKind != null && o.creditCardKind !== '')
+  @IsIn([...CREDIT_CARD_KINDS], { message: 'Select FD Credit Card or Normal Credit Card.' })
+  creditCardKind?: string | null;
+
+  @IsOptional()
+  @IsNumber()
+  @ValidateIf((o) => o.fdAmount != null)
+  @Min(1, { message: 'Enter FD amount.' })
+  fdAmount?: number | null;
+
+  @IsOptional()
   @IsString()
   @ValidateIf((o) => o.carDetails != null && o.carDetails !== '')
   @Length(2, 120)
@@ -468,13 +501,18 @@ export class AdminCreateLeadDto {
   @Matches(VEHICLE_CATEGORY_SLUG, { message: 'Select vehicle category.' })
   vehicleCategory?: string;
 
-  @ValidateIf(
-    (o) =>
-      isStoredLoanCategory(o.category) &&
-      String(o.vehicleCategory ?? '').trim().toLowerCase() !== 'used_car',
-  )
+  @ValidateIf((o) => needsCibilBand(o))
   @IsIn([...CIBIL_BANDS], { message: 'Select your CIBIL score.' })
   cibilBand?: string;
+
+  @ValidateIf((o) => o.creditCardKind != null && o.creditCardKind !== '')
+  @IsIn([...CREDIT_CARD_KINDS], { message: 'Select FD Credit Card or Normal Credit Card.' })
+  creditCardKind?: string;
+
+  @ValidateIf((o) => isCreditCardFd(o))
+  @IsNumber({}, { message: 'Enter FD amount.' })
+  @Min(1, { message: 'Enter FD amount.' })
+  fdAmount?: number;
 
   @ValidateIf(
     (o) =>

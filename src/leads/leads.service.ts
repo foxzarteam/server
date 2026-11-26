@@ -66,6 +66,7 @@ import {
   storedCibilBand,
   storedEmploymentType,
 } from './personal-loan-employment';
+import { creditCardLeadColumns, creditCardProfileError } from './credit-card-profile';
 import { isVehicleLoanCategory } from './loan-rules';
 import { LEAD_DRAFT_PAN } from './lead-draft';
 import {
@@ -194,6 +195,7 @@ export class LeadsService {
         name,
         category,
         insType,
+        creditCardKind: String(lead.credit_card_kind ?? lead.creditCardKind ?? ''),
       });
     }
   }
@@ -295,7 +297,9 @@ export class LeadsService {
       col === 'total_monthly_emi' ||
       col === 'car_details' ||
       col === 'vehicle_rc' ||
-      col === 'existing_car_loan'
+      col === 'existing_car_loan' ||
+      col === 'credit_card_kind' ||
+      col === 'fd_amount'
     );
   }
 
@@ -926,9 +930,12 @@ export class LeadsService {
       payload.loan_amt = null;
       payload.ins_type = ins;
     } else if (category === 'credit_card') {
+      const cardErr = creditCardProfileError(dto);
+      if (cardErr) return { ok: false, message: cardErr };
       payload.required_amount = null;
       payload.loan_amt = null;
       payload.ins_type = null;
+      Object.assign(payload, creditCardLeadColumns(dto));
     }
 
     // Upgrade OTP/start draft for this category only — never overwrite another product.
@@ -954,9 +961,15 @@ export class LeadsService {
                 ? loanAmounts.loanAmt
                 : undefined,
           insType: category === 'insurance' ? ins : null,
+          creditCardKind: category === 'credit_card' ? dto.creditCardKind : undefined,
+          fdAmount: category === 'credit_card' ? dto.fdAmount : undefined,
           netMonthlyIncome: loanAmounts ? dto.netMonthlyIncome ?? null : null,
           employmentType: loanAmounts ? dto.employmentType : undefined,
-          cibilBand: loanAmounts ? dto.cibilBand : undefined,
+          cibilBand: loanAmounts
+            ? dto.cibilBand
+            : category === 'credit_card'
+              ? dto.cibilBand
+              : undefined,
           hasExistingEmi: loanAmounts ? dto.hasExistingEmi : undefined,
           totalMonthlyEmi: loanAmounts ? dto.totalMonthlyEmi : undefined,
           vehicleCategory: loanAmounts ? dto.vehicleCategory : null,
@@ -1198,6 +1211,13 @@ export class LeadsService {
     }
     if (category === 'insurance' && (gates.insType || dto.insType)) {
       payload.ins_type = gates.insType || dto.insType;
+    }
+    if (category === 'credit_card') {
+      if (dto.creditCardKind) {
+        const cardErr = creditCardProfileError(dto);
+        if (cardErr) throw new LeadRuleError(cardErr);
+      }
+      Object.assign(payload, creditCardLeadColumns(dto));
     }
 
     const { data, errorMessage } = await this.insertLead(payload, 'LeadsService.create');
@@ -1564,6 +1584,20 @@ export class LeadsService {
       payload.employment_type = storedEmploymentType(dto.employmentType);
     }
     if (dto.cibilBand !== undefined) payload.cibil_band = storedCibilBand(dto.cibilBand);
+    if (dto.creditCardKind !== undefined || dto.fdAmount !== undefined) {
+      Object.assign(
+        payload,
+        creditCardLeadColumns({
+          creditCardKind:
+            dto.creditCardKind !== undefined
+              ? dto.creditCardKind
+              : String(existing.credit_card_kind ?? ''),
+          fdAmount: dto.fdAmount !== undefined ? dto.fdAmount : Number(existing.fd_amount),
+          cibilBand:
+            dto.cibilBand !== undefined ? dto.cibilBand : String(existing.cibil_band ?? ''),
+        }),
+      );
+    }
     if (dto.carDetails !== undefined) payload.car_details = dto.carDetails?.trim() || null;
     if (dto.vehicleRc !== undefined) {
       const rc = String(dto.vehicleRc ?? '')

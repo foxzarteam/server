@@ -689,6 +689,8 @@ assert.strictEqual(findAdminWaTemplate('car_loan_150')?.metaName, 'car_loan_150'
 assert.strictEqual(templateMetaId('car_loan_150'), '1693681688820850');
 assert.strictEqual(CREDIT_CARD_SUBMIT_TEMPLATE, 'fd_credit_card_request');
 assert.strictEqual(applyConfirmTemplateName('credit_card'), 'fd_credit_card_request');
+assert.strictEqual(applyConfirmTemplateName('credit_card', 'fd'), 'fd_credit_card_request');
+assert.strictEqual(applyConfirmTemplateName('credit_card', 'normal'), 'credit_card_application');
 assert.strictEqual(findAdminWaTemplate('fd_credit_card_request')?.metaName, 'fd_credit_card_request');
 assert.strictEqual(templateMetaId('fd_credit_card_request'), '2773659176470801');
 const fdCredit = buildApplyConfirmSend(
