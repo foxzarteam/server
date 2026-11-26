@@ -27,6 +27,7 @@ import {
   rejectedText,
   personalLoanText,
   productChoice,
+  productImageFilename,
   statusCheckText,
   withCachedProductImage,
   welcomeInteractive,
@@ -310,6 +311,12 @@ assert.strictEqual(loanBody.type, 'image');
 assert.ok(loanBody.image?.link?.endsWith('/images/whatsapp/wa_loa.jpg'));
 const insLinked = withCachedProductImage({ ...loanImage, kind: 'insurance', filename: 'wa_ins.jpg', text: insuranceText('Gaurav') }, '');
 assert.ok(insLinked.mediaUrl?.endsWith('/images/whatsapp/wa_ins.jpg'));
+const cardLinked = withCachedProductImage(
+  { ...loanImage, kind: 'credit_card', filename: 'creditcard.jpg', text: creditCardText('Gaurav') },
+  '',
+);
+assert.ok(cardLinked.mediaUrl?.endsWith('/images/whatsapp/creditcard.jpg'));
+assert.strictEqual(productImageFilename('credit_card'), 'creditcard.jpg');
 assert.ok(alreadyWelcomed([{ role: 'assistant', kind: 'welcome', text: welcomeText('Gaurav') }]));
 assert.ok(!alreadyWelcomed([{ role: 'assistant', kind: 'welcome', text: welcomeText('Gaurav'), sendError: 'timeout' }]));
 assert.ok(!alreadyWelcomed([{ role: 'user', text: 'Hi' }]));

@@ -1,6 +1,6 @@
 import { Inject, Injectable, OnModuleInit } from '@nestjs/common';
 import { existsSync, readFileSync } from 'fs';
-import { join } from 'path';
+import { basename, join } from 'path';
 import { SupabaseClient } from '@supabase/supabase-js';
 import { TABLE_LEADS, TABLE_WP_ENQUIRIES } from '../common/constants';
 import { LEAD_DRAFT_FULL_NAME } from '../leads/lead-draft';
@@ -443,6 +443,7 @@ export class WhatsappService implements OnModuleInit {
         ...(item.mediaId ||
         item.filename === 'wa_ins.jpg' ||
         item.filename === 'wa_loa.jpg' ||
+        item.filename === 'creditcard.jpg' ||
         item.filename === 'creditcard.png'
           ? { hasMedia: true }
           : {}),
@@ -464,11 +465,14 @@ export class WhatsappService implements OnModuleInit {
 
     if (
       !item.mediaId &&
-      (item.filename === 'wa_ins.jpg' || item.filename === 'wa_loa.jpg' || item.filename === 'creditcard.png')
+      (item.filename === 'wa_ins.jpg' ||
+        item.filename === 'wa_loa.jpg' ||
+        item.filename === 'creditcard.jpg' ||
+        item.filename === 'creditcard.png')
     ) {
       const path = this.templateImagePath(item.filename);
       if (!path) return null;
-      const mime = item.filename.endsWith('.png') ? 'image/png' : 'image/jpeg';
+      const mime = path.toLowerCase().endsWith('.png') ? 'image/png' : 'image/jpeg';
       return { buffer: readFileSync(path), mime, filename: item.filename };
     }
     if (!item.mediaId) return null;
@@ -1694,11 +1698,13 @@ export class WhatsappService implements OnModuleInit {
   }
 
   private templateImagePath(fileName: string): string {
-    const safe =
-      fileName === 'wa_ins.jpg' || fileName === 'wa_loa.jpg' || fileName === 'creditcard.png'
-        ? fileName
-        : '';
-    if (!safe) return '';
+    const names =
+      fileName === 'wa_ins.jpg' || fileName === 'wa_loa.jpg'
+        ? [fileName]
+        : fileName === 'creditcard.jpg' || fileName === 'creditcard.png'
+          ? ['creditcard.jpg', 'creditcard.png']
+          : [];
+    if (!names.length) return '';
     const bases = [
       join(__dirname, 'media'),
       join(__dirname, '..', 'whatsapp', 'media'),
@@ -1712,8 +1718,10 @@ export class WhatsappService implements OnModuleInit {
       join(process.cwd(), 'az_web', 'public', 'images', 'service'),
     ];
     for (const dir of bases) {
-      const path = join(dir, safe);
-      if (existsSync(path)) return path;
+      for (const name of names) {
+        const path = join(dir, name);
+        if (existsSync(path)) return path;
+      }
     }
     return '';
   }
@@ -1723,7 +1731,7 @@ export class WhatsappService implements OnModuleInit {
     if (!fromId || !settings.accessToken) return;
     void this.templateMediaId(settings, fromId, 'wa_loa.jpg');
     void this.templateMediaId(settings, fromId, 'wa_ins.jpg');
-    void this.templateMediaId(settings, fromId, 'creditcard.png');
+    void this.templateMediaId(settings, fromId, 'creditcard.jpg');
   }
 
   private async templateMediaId(settings: WhatsappSettings, fromId: string, fileName: string): Promise<string> {
@@ -1741,8 +1749,8 @@ export class WhatsappService implements OnModuleInit {
       }
       const uploaded = await this.uploadWhatsappMedia(settings, fromId, {
         buffer: readFileSync(path),
-        originalname: fileName,
-        mimetype: fileName.endsWith('.png') ? 'image/png' : 'image/jpeg',
+        originalname: basename(path),
+        mimetype: path.toLowerCase().endsWith('.png') ? 'image/png' : 'image/jpeg',
       });
       if (!uploaded.id) {
         console.error('WhatsappService.templateMediaId', uploaded.error);

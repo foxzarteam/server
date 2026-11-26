@@ -7,14 +7,14 @@ const CREDIT_CARD_URL = `${SITE}/products/credit-card/`;
 const STATUS_URL = `${SITE}/customer/login`;
 const LOAN_IMAGE = `${SITE}/images/whatsapp/wa_loa.jpg`;
 const INSURANCE_IMAGE = `${SITE}/images/whatsapp/wa_ins.jpg`;
-/** Same asset as the credit-card page hero (`public/images/service/creditcard.png`). */
-const CREDIT_CARD_IMAGE = `${SITE}/images/service/creditcard.png`;
+/** Same JPG folder as loan/insurance WhatsApp images. */
+const CREDIT_CARD_IMAGE = `${SITE}/images/whatsapp/creditcard.jpg`;
 const BTN_LOAN = 'personal_loan';
 const BTN_INSURANCE = 'insurance';
 const BTN_CREDIT_CARD = 'credit_card';
 
 export type ProductChoice = 'personal_loan' | 'insurance' | 'credit_card';
-export type ProductImageFile = 'wa_loa.jpg' | 'wa_ins.jpg' | 'creditcard.png' | '';
+export type ProductImageFile = 'wa_loa.jpg' | 'wa_ins.jpg' | 'creditcard.jpg' | 'creditcard.png' | '';
 
 function who(profileName: string): string {
   const name = profileName.trim();
@@ -47,7 +47,7 @@ export function productImageUrl(choice: ProductChoice): string {
 export function productImageFilename(choice: ProductChoice): ProductImageFile {
   if (choice === 'insurance') return 'wa_ins.jpg';
   if (choice === 'personal_loan') return 'wa_loa.jpg';
-  if (choice === 'credit_card') return 'creditcard.png';
+  if (choice === 'credit_card') return 'creditcard.jpg';
   return '';
 }
 
@@ -64,13 +64,14 @@ export function productImageFile(message: { filename?: string; kind?: string }):
   if (
     message.filename === 'wa_ins.jpg' ||
     message.filename === 'wa_loa.jpg' ||
+    message.filename === 'creditcard.jpg' ||
     message.filename === 'creditcard.png'
   ) {
     return message.filename;
   }
   if (message.kind === 'insurance') return 'wa_ins.jpg';
   if (message.kind === 'personal_loan') return 'wa_loa.jpg';
-  if (message.kind === 'credit_card') return 'creditcard.png';
+  if (message.kind === 'credit_card') return 'creditcard.jpg';
   return '';
 }
 
@@ -81,7 +82,7 @@ export function isProductOfferKind(kind: string | undefined | null): kind is Pro
 function productChoiceFromImageFile(fileName: ProductImageFile): ProductChoice | '' {
   if (fileName === 'wa_ins.jpg') return 'insurance';
   if (fileName === 'wa_loa.jpg') return 'personal_loan';
-  if (fileName === 'creditcard.png') return 'credit_card';
+  if (fileName === 'creditcard.jpg' || fileName === 'creditcard.png') return 'credit_card';
   return '';
 }
 
