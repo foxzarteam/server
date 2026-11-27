@@ -1,8 +1,8 @@
 /** Admin inbox menu. Same names are approved on Meta. Admin can send each one again. */
 export const ADMIN_WA_TEMPLATES = [
+  { id: 'eligibility_check', label: 'Eligibility Check', metaName: 'eligibility_check', kyc: false },
   { id: 'car_loan_150', label: 'Used Car Loan 150%', metaName: 'car_loan_150', kyc: false },
   { id: 'fd_credit_card_request', label: 'Credit Card Request', metaName: 'fd_credit_card_request', kyc: false },
-  { id: 'eligibility_check', label: 'Eligibility Check', metaName: 'eligibility_check', kyc: false },
   { id: 'vehicle_refinance_kyc', label: 'Used vehicle (purchase) / Existing vehicle (refinanace)', metaName: 'vehicle_refinance_kyc', kyc: true },
   { id: 'vehicle_purchase_kyc', label: 'New vehicle loan (purchase)', metaName: 'vehicle_purchase_kyc', kyc: true },
   { id: 'personal_loan_kyc', label: 'Personal Loan (PL KYC)', metaName: 'personal_loan_kyc', kyc: true },
