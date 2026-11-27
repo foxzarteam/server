@@ -691,7 +691,7 @@ assert.strictEqual(adminCustomerName('Jayu Patel', 'Jayu Kumar'), 'Jayu Kumar');
 assert.strictEqual(adminCustomerName('Jayu Patel', ''), 'Jayu Patel');
 assert.strictEqual(adminCustomerName('Jayu Patel', '   '), 'Jayu Patel');
 
-assert.strictEqual(ADMIN_WA_TEMPLATES.length, 10);
+assert.strictEqual(ADMIN_WA_TEMPLATES.length, 11);
 assert.strictEqual(findAdminWaTemplate('car_loan_150')?.metaName, 'car_loan_150');
 assert.strictEqual(templateMetaId('car_loan_150'), '1693681688820850');
 assert.strictEqual(CREDIT_CARD_SUBMIT_TEMPLATE, 'fd_credit_card_request');
@@ -700,6 +700,9 @@ assert.strictEqual(applyConfirmTemplateName('credit_card', 'fd'), 'fd_credit_car
 assert.strictEqual(applyConfirmTemplateName('credit_card', 'normal'), 'fd_credit_card_request');
 assert.strictEqual(findAdminWaTemplate('fd_credit_card_request')?.metaName, 'fd_credit_card_request');
 assert.strictEqual(templateMetaId('fd_credit_card_request'), '2773659176470801');
+assert.strictEqual(findAdminWaTemplate('eligibility_check')?.metaName, 'eligibility_check');
+assert.strictEqual(findAdminWaTemplate('eligibility_check')?.kyc, false);
+assert.strictEqual(templateMetaId('eligibility_check'), '2314483769400499');
 const fdCredit = buildApplyConfirmSend(
   '919876543210',
   {
